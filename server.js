@@ -14,6 +14,80 @@ const PORT = process.env.PORT || 3000;
 const PENDING_FILE = './pending.json';
 const TRAINING_FILE = './training_examples.json';
 
+// ─── AIRTABLE INTEGRATION ────────────────────────────────────────────────────
+
+const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'appDYFcKNxPmZw3P7';
+const AT_LEADS = 'tblfobqavxfv7hqC2';
+const AT_MESSAGES = 'tblNvqZEFcNaOwbnO';
+
+async function airtableRequest(method, endpoint, body) {
+  if (!AIRTABLE_PAT) return null;
+  try {
+    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${endpoint}`, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_PAT}`,
+        'Content-Type': 'application/json'
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(8000)
+    });
+    return await res.json();
+  } catch (e) {
+    console.error('[AIRTABLE] Request error:', e.message);
+    return null;
+  }
+}
+
+async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, status, lastMessage) {
+  if (!AIRTABLE_PAT) return;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const existing = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const today = new Date().toISOString().split('T')[0];
+    const fields = {
+      'Lead Name': leadName || '',
+      'LinkedIn URL': linkedinUrl || '',
+      'Campaign': campaign || '',
+      'Channel': channel || 'linkedin',
+      'Status': status || 'New',
+      'Last Message': (lastMessage || '').substring(0, 500),
+      'Last Activity': today
+    };
+    if (existing?.records?.length > 0) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${existing.records[0].id}`, { fields });
+      console.log(`[AIRTABLE] Lead updated: ${leadName}`);
+    } else {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields }] });
+      console.log(`[AIRTABLE] Lead created: ${leadName}`);
+    }
+  } catch (e) {
+    console.error('[AIRTABLE] upsertLead error:', e.message);
+  }
+}
+
+async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text, draft, sent) {
+  if (!AIRTABLE_PAT) return;
+  try {
+    const fields = {
+      'Message ID': `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      'Lead Name': leadName || '',
+      'LinkedIn URL': linkedinUrl || '',
+      'Direction': direction || 'inbound',
+      'Intent': intent || 'neutral',
+      'Text': (text || '').substring(0, 5000),
+      'Draft Reply': (draft || '').substring(0, 5000),
+      'Sent': sent || false,
+      'Timestamp': new Date().toISOString()
+    };
+    await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }] });
+    console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}`);
+  } catch (e) {
+    console.error('[AIRTABLE] logMessage error:', e.message);
+  }
+}
+
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
 
 function loadPending() {
@@ -135,6 +209,16 @@ async function executeSend(id, item) {
     }
     deletePending(id);
     console.log(`[QUEUE] Sent & removed: ${leadData.firstName} ${leadData.lastName} (${channel})`);
+    // Log sent message to Airtable
+    airtableLogMessage(
+      `${leadData.firstName} ${leadData.lastName}`,
+      leadData.linkedinUrl, 'outbound', null, null, draft, true
+    ).catch(() => {});
+    airtableUpsertLead(
+      leadData.linkedinUrl,
+      `${leadData.firstName} ${leadData.lastName}`,
+      leadData.company || '', channel, 'Replied', draft
+    ).catch(() => {});
   } catch (err) {
     console.error(`[QUEUE] Send failed for ${id}:`, err.message);
     // Leave in pending so we can retry or investigate
@@ -520,13 +604,21 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
   const trainingContext = buildTrainingContext();
 
   let prompt;
+  const enrichmentContext = [
+    leadData.title && `Title: ${leadData.title}`,
+    leadData.company && `Company: ${leadData.company}`,
+    leadData.industry && `Industry: ${leadData.industry}`,
+    leadData.employees && `Company size: ${leadData.employees} employees`,
+    leadData.seniority && `Seniority: ${leadData.seniority}`
+  ].filter(Boolean).join('\n');
+
   if (hasRealMessage) {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
-Company: ${leadData.company}
+${enrichmentContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation and moves toward a Calendly booking.`;
+Write a reply that naturally continues the conversation, references their specific context if relevant, and moves toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1228,6 +1320,30 @@ app.get('/dismiss/:id', (req, res) => {
 
 app.get('/ping', (req, res) => res.send('pong'));
 
+// Debug: test full reply pipeline without scheduling
+app.post('/test-reply', async (req, res) => {
+  const { message, name, linkedinUrl } = req.body;
+  if (!message) return res.json({ error: 'message required' });
+  try {
+    const intent = await classifyIntent(message);
+    const leadData = {
+      firstName: (name || 'Test').split(' ')[0],
+      lastName: (name || '').split(' ').slice(1).join(' '),
+      company: '', linkedinUrl: linkedinUrl || '', title: '',
+      industry: '', employees: '', seniority: ''
+    };
+    let draft;
+    if (intent === 'negative') {
+      draft = `Razumem, hvala za odgovor ${leadData.firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+    } else {
+      draft = await generateReply('linkedin', leadData, message, true);
+    }
+    res.json({ ok: true, intent, draft, anthropicKeySet: !!process.env.ANTHROPIC_API_KEY });
+  } catch(e) {
+    res.json({ ok: false, error: e.message, anthropicKeySet: !!process.env.ANTHROPIC_API_KEY });
+  }
+});
+
 // ─── STATUS ───────────────────────────────────────────────────────────────────
 
 app.get('/status', (req, res) => {
@@ -1559,6 +1675,74 @@ app.post('/poll-linkedin', async (req, res) => {
   }
 });
 
+// ─── APOLLO ENRICHMENT ───────────────────────────────────────────────────────
+
+async function enrichLeadWithApollo(linkedinUrl) {
+  const apiKey = process.env.APOLLO_API_KEY;
+  if (!apiKey) { console.log('[APOLLO] No API key set'); return null; }
+  try {
+    const res = await fetch('https://api.apollo.io/api/v1/people/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+      body: JSON.stringify({ linkedin_url: linkedinUrl, reveal_personal_emails: false, reveal_phone_number: false })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.log(`[APOLLO] API error ${res.status}:`, JSON.stringify(data).substring(0, 200));
+      return null;
+    }
+    const p = data.person;
+    if (!p) {
+      console.log('[APOLLO] No person returned for:', linkedinUrl, '| error:', data.error_code || data.message || 'none');
+      return null;
+    }
+    return {
+      title: p.title || '',
+      seniority: p.seniority || '',
+      companyName: p.organization?.name || '',
+      industry: p.organization?.industry || '',
+      employees: p.organization?.estimated_num_employees || '',
+      city: p.city || '',
+      country: p.country || ''
+    };
+  } catch (e) {
+    console.log('[APOLLO] Enrichment failed:', e.message);
+    return null;
+  }
+}
+
+// Debug endpoint - test Apollo enrichment directly
+app.get('/test-apollo', async (req, res) => {
+  const url = req.query.url || 'https://www.linkedin.com/in/zan-bagaric';
+  const apiKey = process.env.APOLLO_API_KEY;
+  if (!apiKey) return res.json({ error: 'APOLLO_API_KEY not set' });
+  try {
+    const r = await fetch('https://api.apollo.io/api/v1/people/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+      body: JSON.stringify({ linkedin_url: url, reveal_personal_emails: false })
+    });
+    const raw = await r.json();
+    res.json({
+      url,
+      status: r.status,
+      hasKey: !!apiKey,
+      error_code: raw.error_code || null,
+      message: raw.message || null,
+      person: raw.person ? {
+        name: raw.person.name,
+        title: raw.person.title,
+        seniority: raw.person.seniority,
+        company: raw.person.organization?.name,
+        industry: raw.person.organization?.industry,
+        employees: raw.person.organization?.estimated_num_employees
+      } : null
+    });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 // ─── OUTFLO WEBHOOK ───────────────────────────────────────────────────────────
 
 app.post('/webhook/outflo', async (req, res) => {
@@ -1586,46 +1770,77 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    console.log(`[WEBHOOK] ${eventType} from ${leadFullName}: "${messageText.substring(0, 80)}"`);
+    // Detect if this is a Vesna campaign (campaign name contains "vesna")
+    const campaignName = payload.campaign?.name || '';
+    const isVesna = campaignName.toLowerCase().includes('vesna');
+    const senderLabel = isVesna ? 'VESNA' : 'WEBHOOK';
+
+    console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
 
     // Classify intent
     const intent = await classifyIntent(messageText);
-    console.log(`[WEBHOOK] Intent: ${intent}`);
+    console.log(`[${senderLabel}] Intent: ${intent}`);
 
     // Parse name
     const nameParts = leadFullName.trim().split(' ');
     const firstName = nameParts[0] || 'Lead';
     const lastName = nameParts.slice(1).join(' ') || '';
 
+    // Apollo enrichment (1 credit per call)
+    const apolloData = await enrichLeadWithApollo(leadProfileUrl);
+    if (apolloData) {
+      console.log(`[APOLLO] ${apolloData.companyName} | ${apolloData.employees} emp | ${apolloData.industry}`);
+    }
+
     const leadData = {
       firstName,
       lastName,
-      company: payload.campaign?.name || '',
-      linkedinUrl: leadProfileUrl
+      company: apolloData?.companyName || campaignName || '',
+      linkedinUrl: leadProfileUrl,
+      title: apolloData?.title || '',
+      industry: apolloData?.industry || '',
+      employees: apolloData?.employees || '',
+      seniority: apolloData?.seniority || ''
     };
 
     let draft;
+    const channel = isVesna ? 'vesna' : 'linkedin';
+
     if (intent === 'negative') {
-      // Short polite closing for rejections
-      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+      const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
+      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
+    } else if (isVesna) {
+      // Vesna style: warm, hands off to Žan, no Calendly, no email
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        system: VESNA_STYLE_GUIDE,
+        messages: [{
+          role: 'user',
+          content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name.`
+        }]
+      });
+      draft = response.content[0].text.trim();
     } else {
       draft = await generateReply('linkedin', leadData, messageText, true);
     }
 
-    console.log(`[WEBHOOK] Generated reply: "${draft}"`);
+    console.log(`[${senderLabel}] Generated reply: "${draft}"`);
 
-    // Schedule send via existing queue
+    // Schedule send
     const id = uuidv4();
     const sendAt = getSendAt('linkedin');
-    storePending(id, {
-      channel: 'linkedin',
-      leadData,
-      draft,
-      source: 'outflo-webhook'
-    });
+    storePending(id, { channel, leadData, draft, source: 'outflo-webhook' });
     markScheduled(id, draft, sendAt);
 
-    console.log(`[WEBHOOK] Scheduled reply to ${leadFullName} at ${formatSendTime(sendAt)}`);
+    console.log(`[${senderLabel}] Scheduled reply to ${leadFullName} at ${formatSendTime(sendAt)}`);
+
+    // Log to Airtable (non-blocking)
+    airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText).catch(() => {});
+    airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', intent, messageText, null, false).catch(() => {});
+    airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false).catch(() => {});
+
   } catch (err) {
     console.error('[WEBHOOK] Error:', err.message);
   }
