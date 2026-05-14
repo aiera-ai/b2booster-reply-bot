@@ -6,7 +6,25 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
+// ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err.message);
+});
+
 const app = express();
+
+// CORS - allow file:// and all origins (healthcheck, local tools)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -279,8 +297,6 @@ function buildTrainingContext() {
 // ─── STYLE GUIDE ──────────────────────────────────────────────────────────────
 
 const CALENDLY_LINK = process.env.CALENDLY_LINK || '[CALENDLY LINK]';
-const UNIPILE_API_KEY = process.env.UNIPILE_API_KEY || '';
-const UNIPILE_API_URL = process.env.UNIPILE_API_URL || 'https://api33.unipile.com:16331';
 const VESNA_LINKEDIN_URL = process.env.VESNA_LINKEDIN_URL || 'https://www.linkedin.com/in/vesna-pevec-2110b8b4/';
 
 const STYLE_GUIDE = `
@@ -717,23 +733,6 @@ async function sendViaOutflo(receiverLinkedInUrl, text, senderUrl = null) {
   return data;
 }
 
-// ─── SEND VIA UNIPILE (LinkedIn) ─────────────────────────────────────────────
-
-async function sendViaUnipile(chatId, accountId, text) {
-  const res = await fetch(`${UNIPILE_API_URL}/api/v1/chats/${chatId}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-KEY': UNIPILE_API_KEY,
-      'accept': 'application/json'
-    },
-    body: JSON.stringify({ text, account_id: accountId })
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Unipile error: ${JSON.stringify(data)}`);
-  return data;
-}
-
 // ─── SEND VIA INSTANTLY (Email) ───────────────────────────────────────────────
 
 async function sendViaInstantly(replyToUuid, emailBody, subject) {
@@ -1010,83 +1009,6 @@ app.post('/webhook/linkedin', async (req, res) => {
   }
 });
 
-// ─── WEBHOOK: UNIPILE (LinkedIn real-time) ────────────────────────────────────
-
-// Dedup: track recently seen message IDs to prevent double-processing on retries
-const recentlyProcessed = new Set();
-
-app.post('/webhook/unipile', async (req, res) => {
-  res.sendStatus(200);
-  try {
-    const payload = req.body;
-    console.log('[UNIPILE] Received:', JSON.stringify(payload).substring(0, 300));
-
-    const data = payload.data || payload;
-    const event = payload.event || data.event || '';
-
-    if (event && !['message_created', 'new_message', 'MESSAGE_CREATED'].includes(event)) {
-      console.log('[UNIPILE] Skipping event:', event);
-      return;
-    }
-
-    // Skip outbound messages (bot-sent replies trigger this webhook too)
-    if (data.from_me === true || data.is_sender === true) {
-      console.log('[UNIPILE] Skipping outbound message');
-      return;
-    }
-
-    const message = data.text || data.body || data.content || '';
-    const chatId = data.chat_id;
-    const accountId = data.account_id;
-    const messageId = data.id || data.message_id || '';
-
-    if (!chatId || !accountId) {
-      console.warn('[UNIPILE] Missing chatId or accountId - skipping');
-      return;
-    }
-
-    if (!message || message.trim().length < 2) {
-      console.log('[UNIPILE] Empty message - skipping');
-      return;
-    }
-
-    // Dedup: skip if we already processed this message ID (Unipile retry protection)
-    const dedupKey = messageId || `${chatId}:${message.substring(0, 50)}`;
-    if (recentlyProcessed.has(dedupKey)) {
-      console.log('[UNIPILE] Duplicate - skipping:', dedupKey);
-      return;
-    }
-    recentlyProcessed.add(dedupKey);
-    setTimeout(() => recentlyProcessed.delete(dedupKey), 10 * 60 * 1000); // forget after 10 min
-
-    const sender = data.sender || data.attendee || {};
-    const senderName = sender.name || sender.display_name || data.sender_name || 'Unknown';
-    const nameParts = senderName.trim().split(' ');
-    const firstName = nameParts[0] || 'Unknown';
-    const lastName = nameParts.slice(1).join(' ');
-
-    const leadData = {
-      firstName,
-      lastName,
-      company: 'LinkedIn',
-      theirMessage: message,
-      chatId,
-      accountId,
-      notificationType: 'messaged'
-    };
-
-    console.log(`[UNIPILE] From: ${firstName} ${lastName} | hour: ${getCETHour()}h CET`);
-
-    const draft = await generateReply('linkedin', leadData, message, true);
-    const id = uuidv4();
-    storePending(id, { channel: 'unipile', leadData, draft });
-    await sendApprovalEmail(id, leadData, draft, 'linkedin');
-    console.log(`[UNIPILE] Queued: ${firstName} ${lastName}`);
-  } catch (err) {
-    console.error('[UNIPILE] Error:', err.message);
-  }
-});
-
 // ─── WEBHOOK: VESNA (LinkedIn cold outreach replies) ─────────────────────────
 // Vesna sends cold outreach, leads reply, bot responds in her name with handoff to Žan.
 // Make.com scenario: Vesna's Gmail LinkedIn notifications → POST /webhook/vesna
@@ -1319,6 +1241,54 @@ app.get('/dismiss/:id', (req, res) => {
 // ─── PING (keep-alive for UptimeRobot) ───────────────────────────────────────
 
 app.get('/ping', (req, res) => res.send('pong'));
+
+// ─── HEALTHCHECK (all-in-one server-side test) ────────────────────────────────
+
+app.get('/healthcheck', async (req, res) => {
+  const report = { timestamp: new Date().toISOString(), checks: {} };
+
+  // 1. Claude API
+  try {
+    const intent = await classifyIntent('Zanima me vaša ponudba');
+    report.checks.claude = { ok: true, detail: `Intent: ${intent}` };
+  } catch(e) {
+    report.checks.claude = { ok: false, detail: e.message };
+  }
+
+  // 2. Queue
+  try {
+    const all = loadPending();
+    const entries = Object.values(all);
+    const scheduled = entries.filter(v => v.status === 'scheduled').length;
+    report.checks.queue = { ok: true, detail: `${entries.length} total, ${scheduled} scheduled` };
+  } catch(e) {
+    report.checks.queue = { ok: false, detail: e.message };
+  }
+
+  // 3. Env vars
+  const envKeys = { anthropic: 'ANTHROPIC_API_KEY', apollo: 'APOLLO_API_KEY', airtable: 'AIRTABLE_PAT', outflo: 'OUTFLO_API_KEY', calendly: 'CALENDLY_LINK' };
+  report.checks.env = { ok: true, detail: {} };
+  for (const [name, key] of Object.entries(envKeys)) {
+    report.checks.env.detail[name] = !!process.env[key];
+    if (!process.env[key] && ['anthropic', 'outflo'].includes(name)) report.checks.env.ok = false;
+  }
+
+  // 4. Airtable connectivity
+  if (process.env.AIRTABLE_PAT) {
+    try {
+      const r = await airtableRequest('GET', `${AT_LEADS}?maxRecords=1`);
+      report.checks.airtable = { ok: !r?.error, detail: r?.error ? r.error : `Connected, ${r?.records?.length ?? 0} records fetched` };
+    } catch(e) {
+      report.checks.airtable = { ok: false, detail: e.message };
+    }
+  } else {
+    report.checks.airtable = { ok: false, detail: 'AIRTABLE_PAT not set' };
+  }
+
+  const allOk = Object.values(report.checks).every(c => c.ok);
+  report.ok = allOk;
+  res.json(report);
+});
 
 // Debug: test full reply pipeline without scheduling
 app.post('/test-reply', async (req, res) => {
@@ -1761,12 +1731,19 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    const messageText = payload.message?.text;
-    const leadProfileUrl = payload.lead?.profile_url;
-    const leadFullName = payload.lead?.full_name || 'Lead';
+    // Log full payload for debugging
+    console.log('[OUTFLO] Raw payload:', JSON.stringify(payload).substring(0, 600));
 
-    if (!messageText || !leadProfileUrl) {
-      console.log('[WEBHOOK] Missing message text or lead profile URL, skipping');
+    const messageText = payload.message?.text || payload.message?.body || payload.text || '';
+    const leadProfileUrl = payload.lead?.profile_url || payload.lead?.linkedin_url || payload.profile_url || payload.linkedin_url || '';
+    const leadFullName = payload.lead?.full_name || payload.lead?.name || payload.full_name || 'Lead';
+
+    if (!messageText) {
+      console.log('[OUTFLO] Missing message text - payload keys:', Object.keys(payload));
+      return;
+    }
+    if (!leadProfileUrl) {
+      console.log('[OUTFLO] Missing lead profile URL - lead obj:', JSON.stringify(payload.lead));
       return;
     }
 
@@ -1813,7 +1790,7 @@ app.post('/webhook/outflo', async (req, res) => {
       // Vesna style: warm, hands off to Žan, no Calendly, no email
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-sonnet-4-6',
         max_tokens: 150,
         system: VESNA_STYLE_GUIDE,
         messages: [{
@@ -1828,13 +1805,12 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] Generated reply: "${draft}"`);
 
-    // Schedule send
+    // Send approval email (do not auto-send)
     const id = uuidv4();
-    const sendAt = getSendAt('linkedin');
     storePending(id, { channel, leadData, draft, source: 'outflo-webhook' });
-    markScheduled(id, draft, sendAt);
+    await sendApprovalEmail(id, leadData, draft, channel === 'vesna' ? 'linkedin' : 'linkedin');
 
-    console.log(`[${senderLabel}] Scheduled reply to ${leadFullName} at ${formatSendTime(sendAt)}`);
+    console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
     // Log to Airtable (non-blocking)
     airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText).catch(() => {});
@@ -1861,4 +1837,15 @@ app.listen(PORT, () => {
   // Poll Instantly after warmup, then every 15 min
   setTimeout(pollInstantlyReplies, 30 * 1000);
   setInterval(pollInstantlyReplies, 15 * 60 * 1000);
+
+  // Self-ping every 14 min to prevent Render free tier spin-down
+  const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
+  setInterval(async () => {
+    try {
+      await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) });
+      console.log('[KEEPALIVE] Self-ping OK');
+    } catch(e) {
+      console.error('[KEEPALIVE] Self-ping failed:', e.message);
+    }
+  }, 14 * 60 * 1000);
 });
