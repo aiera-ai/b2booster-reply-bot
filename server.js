@@ -2508,10 +2508,17 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    // Detect if this is a Vesna account (payload.account is OUR account in Outflo)
+    // Detect which OUR account received the reply. Only Žan and Vesna are wired to the bot.
+    // Mojca (and any other account) is handled manually - skip.
     const campaignName = payload.campaign?.name || acct.full_name || '';
-    const acctFirst = (acct.first_name || '').toLowerCase();
-    const isVesna = acctFirst === 'vesna' || campaignName.toLowerCase().includes('vesna');
+    const acctFirst = (acct.first_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+    const acctName = (acct.full_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+    const isVesna = acctFirst === 'vesna' || acctName.includes('vesna') || campaignName.toLowerCase().includes('vesna');
+    const isZan = acctFirst === 'zan' || acctName.includes('zan bagaric') || campaignName.toLowerCase().includes('zan');
+    if (!isVesna && !isZan) {
+      console.log(`[OUTFLO] Skipping - account "${acct.full_name || acctFirst}" is not Žan or Vesna (bot handles only those two)`);
+      return;
+    }
     const senderLabel = isVesna ? 'VESNA' : 'WEBHOOK';
 
     console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
