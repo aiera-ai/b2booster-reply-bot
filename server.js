@@ -1710,7 +1710,12 @@ app.post('/webhook/linkedin', async (req, res) => {
       console.log(`[LINKEDIN] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
 
       if (intent === 'negative') {
-        console.log(`[LINKEDIN] Skipping - negative response from ${leadData.firstName}`);
+        // Polite closeout - same pattern as /webhook/outflo (don't silently drop)
+        const draft = `Razumem, hvala za odgovor ${leadData.firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+        const id = uuidv4();
+        storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
+        await sendApprovalEmail(id, leadData, draft, 'linkedin');
+        console.log(`[LINKEDIN] Negative closeout queued for ${leadData.firstName} ${leadData.lastName}`);
         return;
       }
 
@@ -2473,19 +2478,70 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    // Log full payload for debugging
-    console.log('[OUTFLO] Raw payload:', JSON.stringify(payload).substring(0, 600));
+    // Log full payload for debugging (no truncation, walk top-level keys too)
+    const rawJson = JSON.stringify(payload);
+    console.log('[OUTFLO] Top-level keys:', Object.keys(payload).join(','));
+    console.log('[OUTFLO] Raw payload (full):', rawJson.length > 5000 ? rawJson.substring(0, 5000) + '...[truncated]' : rawJson);
 
-    const messageText = payload.message?.text || payload.message?.body || payload.text || '';
-    const leadProfileUrl = payload.lead?.profile_url || payload.lead?.linkedin_url || payload.profile_url || payload.linkedin_url || '';
-    const leadFullName = payload.lead?.full_name || payload.lead?.name || payload.full_name || 'Lead';
+    // Try every plausible path Outflo might use
+    const messageText =
+      payload.message?.text ||
+      payload.message?.body ||
+      payload.message?.content ||
+      payload.message_text ||
+      payload.text ||
+      payload.body ||
+      payload.reply?.text ||
+      payload.reply?.body ||
+      payload.conversation?.last_message?.text ||
+      payload.data?.message?.text ||
+      payload.data?.text ||
+      '';
+
+    const leadProfileUrl =
+      payload.lead?.profile_url ||
+      payload.lead?.linkedin_url ||
+      payload.lead?.linkedinUrl ||
+      payload.lead?.url ||
+      payload.profile_url ||
+      payload.linkedin_url ||
+      payload.linkedinUrl ||
+      payload.prospect?.profile_url ||
+      payload.prospect?.linkedin_url ||
+      payload.contact?.profile_url ||
+      payload.contact?.linkedin_url ||
+      payload.from?.profile_url ||
+      payload.from?.linkedin_url ||
+      payload.data?.lead?.profile_url ||
+      payload.data?.lead?.linkedin_url ||
+      payload.conversation?.lead?.profile_url ||
+      payload.conversation?.lead?.linkedin_url ||
+      '';
+
+    const leadFullName =
+      payload.lead?.full_name ||
+      payload.lead?.name ||
+      payload.lead?.fullName ||
+      [payload.lead?.first_name, payload.lead?.last_name].filter(Boolean).join(' ') ||
+      [payload.lead?.firstName, payload.lead?.lastName].filter(Boolean).join(' ') ||
+      payload.prospect?.full_name ||
+      payload.prospect?.name ||
+      payload.contact?.full_name ||
+      payload.contact?.name ||
+      payload.from?.name ||
+      payload.full_name ||
+      payload.name ||
+      payload.data?.lead?.full_name ||
+      payload.data?.lead?.name ||
+      payload.conversation?.lead?.full_name ||
+      'Lead';
 
     if (!messageText) {
-      console.log('[OUTFLO] Missing message text - payload keys:', Object.keys(payload));
+      console.log('[OUTFLO] Missing message text - payload keys:', Object.keys(payload).join(','));
       return;
     }
     if (!leadProfileUrl) {
-      console.log('[OUTFLO] Missing lead profile URL - lead obj:', JSON.stringify(payload.lead));
+      console.log('[OUTFLO] Missing lead profile URL - lead obj:', JSON.stringify(payload.lead || payload.prospect || payload.contact || payload.from || {}));
       return;
     }
 
