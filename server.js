@@ -1491,9 +1491,10 @@ async function airtableFindLeadsForFollowup() {
   if (!AIRTABLE_PAT) return [];
   try {
     const cutoff = new Date(Date.now() - FOLLOWUP_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    // Status = "Offer Sent (Email)" AND Email Sent At <= cutoff AND no Followup Sent At
+    // Status = "Offer Sent (Email)" AND Email Sent At <= cutoff AND no Followup Sent At AND not Meeting Booked
+    // (Meeting Booked is set by Calendly webhook - skip followup if lead already booked a call.)
     const formula = encodeURIComponent(
-      `AND({Status}="Offer Sent (Email)", IS_BEFORE({Email Sent At}, "${cutoff}"), {Followup Sent At}=BLANK())`
+      `AND({Status}="Offer Sent (Email)", IS_BEFORE({Email Sent At}, "${cutoff}"), {Followup Sent At}=BLANK(), {Booked At}=BLANK())`
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=20`);
     if (!r?.records) return [];
@@ -1979,6 +1980,32 @@ app.get('/dismiss/:id', (req, res) => {
       <p style="color:#999">${pending.leadData.firstName} ${pending.leadData.lastName}</p>
     </div>
   `));
+});
+
+// ─── FORCE SEND (bypass send window for testing) ──────────────────────────────
+
+app.get('/force-send/:id', async (req, res) => {
+  let pending = getPending(req.params.id);
+  if (!pending && req.query.d) {
+    try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
+    catch (e) { console.warn('[FORCE-SEND] Bad d param:', e.message); }
+  }
+  if (!pending) return res.status(404).send(page('Ni najdeno', '<p>Approval ne obstaja.</p>'));
+
+  try {
+    await executeSend(req.params.id, pending);
+    res.send(page('Poslano!', `
+      <div style="text-align:center;padding:40px 0">
+        <div style="font-size:48px;margin-bottom:16px">✅</div>
+        <h2 style="color:#16a34a;margin:0 0 8px">Sporočilo poslano takoj</h2>
+        <p style="color:#666;margin:0 0 4px">${pending.leadData.firstName} ${pending.leadData.lastName}</p>
+        <p style="color:#999;font-size:13px">Kanal: ${pending.channel}</p>
+      </div>
+    `));
+  } catch (err) {
+    console.error('[FORCE-SEND] Failed:', err.message);
+    res.status(500).send(page('Napaka', `<p>Send failed: ${err.message}</p>`));
+  }
 });
 
 // ─── PING (keep-alive for UptimeRobot) ───────────────────────────────────────
@@ -2597,6 +2624,251 @@ app.post('/webhook/outflo', async (req, res) => {
   }
 });
 
+// ─── CALENDLY WEBHOOK ─────────────────────────────────────────────────────────
+// When a lead books a Calendly call we flip Airtable Status to "Meeting Booked"
+// and store Booked At + Meeting Time. The followup cron then skips them.
+// Setup: set env vars CALENDLY_PAT, CALENDLY_WEBHOOK_SIGNING_KEY (optional but recommended).
+// The server auto-creates the webhook subscription on startup if missing.
+
+const CALENDLY_API = 'https://api.calendly.com';
+const CALENDLY_PAT = process.env.CALENDLY_PAT;
+const CALENDLY_WEBHOOK_SIGNING_KEY = process.env.CALENDLY_WEBHOOK_SIGNING_KEY;
+
+function verifyCalendlySignature(rawBody, signatureHeader) {
+  if (!CALENDLY_WEBHOOK_SIGNING_KEY) return true; // skip verification if no key configured
+  if (!signatureHeader) return false;
+  try {
+    const parts = Object.fromEntries(
+      signatureHeader.split(',').map(kv => kv.split('=').map(s => s.trim()))
+    );
+    const t = parts.t;
+    const v1 = parts.v1;
+    if (!t || !v1) return false;
+    const expected = crypto
+      .createHmac('sha256', CALENDLY_WEBHOOK_SIGNING_KEY)
+      .update(`${t}.${rawBody}`)
+      .digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(v1, 'hex'));
+  } catch (e) {
+    console.error('[CALENDLY] Signature verify error:', e.message);
+    return false;
+  }
+}
+
+async function airtableFindLeadByEmail(email) {
+  if (!AIRTABLE_PAT || !email) return null;
+  try {
+    const filter = encodeURIComponent(`LOWER({Email})="${email.toLowerCase()}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    if (!r?.records?.length) return null;
+    return { id: r.records[0].id, fields: r.records[0].fields };
+  } catch (e) {
+    console.error('[AIRTABLE] findByEmail error:', e.message);
+    return null;
+  }
+}
+
+async function airtableFindLeadByEventUri(uri) {
+  if (!AIRTABLE_PAT || !uri) return null;
+  try {
+    const filter = encodeURIComponent(`{Calendly Event URI}="${uri}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    if (!r?.records?.length) return null;
+    return { id: r.records[0].id, fields: r.records[0].fields };
+  } catch (e) {
+    console.error('[AIRTABLE] findByEventUri error:', e.message);
+    return null;
+  }
+}
+
+async function airtableMarkMeetingBooked({ email, leadName, eventUri, startTime }) {
+  if (!AIRTABLE_PAT) return null;
+  try {
+    let lead = email ? await airtableFindLeadByEmail(email) : null;
+
+    const fields = {
+      'Status': 'Meeting Booked',
+      'Booked At': new Date().toISOString(),
+      'Meeting Time': startTime || null,
+      'Calendly Event URI': eventUri || '',
+      'Last Activity': new Date().toISOString().split('T')[0]
+    };
+    if (email) fields['Email'] = email;
+
+    if (lead) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${lead.id}`, { fields });
+      console.log(`[CALENDLY] Marked Meeting Booked: ${lead.fields['Lead Name'] || email}`);
+      return lead.id;
+    }
+    // No matching lead found - create a fresh record so the booking is still tracked
+    const created = await airtableRequest('POST', AT_LEADS, {
+      records: [{ fields: { 'Lead Name': leadName || email, 'Channel': 'calendly', ...fields } }]
+    });
+    console.log(`[CALENDLY] Created new lead from booking: ${leadName || email}`);
+    return created?.records?.[0]?.id || null;
+  } catch (e) {
+    console.error('[CALENDLY] markMeetingBooked error:', e.message);
+    return null;
+  }
+}
+
+async function airtableMarkMeetingCanceled({ eventUri, email }) {
+  if (!AIRTABLE_PAT) return;
+  try {
+    let lead = eventUri ? await airtableFindLeadByEventUri(eventUri) : null;
+    if (!lead && email) lead = await airtableFindLeadByEmail(email);
+    if (!lead) {
+      console.log(`[CALENDLY] Cancel: no lead matched for ${eventUri || email}`);
+      return;
+    }
+    // Revert to Offer Sent (Email) so followup can re-engage them
+    const fields = {
+      'Status': 'Offer Sent (Email)',
+      'Booked At': null,
+      'Meeting Time': null,
+      'Last Activity': new Date().toISOString().split('T')[0]
+    };
+    await airtableRequest('PATCH', `${AT_LEADS}/${lead.id}`, { fields });
+    console.log(`[CALENDLY] Reverted (canceled): ${lead.fields['Lead Name'] || email}`);
+  } catch (e) {
+    console.error('[CALENDLY] markMeetingCanceled error:', e.message);
+  }
+}
+
+// Calendly sends JSON. We need the raw body for signature verification, so we
+// register an isolated express.raw handler ONLY on this route.
+app.post('/webhook/calendly', express.raw({ type: '*/*' }), async (req, res) => {
+  res.json({ ok: true }); // Acknowledge fast
+
+  try {
+    const raw = req.body?.toString('utf8') || '';
+    const sigHeader = req.headers['calendly-webhook-signature'];
+
+    if (!verifyCalendlySignature(raw, sigHeader)) {
+      console.error('[CALENDLY] Invalid signature - ignoring webhook');
+      return;
+    }
+
+    const body = JSON.parse(raw);
+    const event = body.event;
+    const p = body.payload || {};
+
+    const email = (p.email || '').trim();
+    const name = p.name || [p.first_name, p.last_name].filter(Boolean).join(' ').trim();
+    const eventUri = p.scheduled_event?.uri || '';
+    const startTime = p.scheduled_event?.start_time || null;
+
+    console.log(`[CALENDLY] event=${event} email=${email} name=${name} start=${startTime}`);
+
+    if (event === 'invitee.created') {
+      await airtableMarkMeetingBooked({ email, leadName: name, eventUri, startTime });
+      // Log to Messages for full timeline (use safe existing intent 'positive')
+      try {
+        const lead = email ? await airtableFindLeadByEmail(email) : null;
+        const li = lead?.fields?.['LinkedIn URL'] || '';
+        await airtableLogMessage(
+          name || email,
+          li,
+          'inbound',
+          'positive',
+          `[CALENDLY BOOKED] ${startTime || 'unknown time'} | ${eventUri || ''}`,
+          null,
+          true
+        );
+      } catch (e) { /* non-fatal */ }
+    } else if (event === 'invitee.canceled') {
+      await airtableMarkMeetingCanceled({ eventUri, email });
+      try {
+        const lead = eventUri ? await airtableFindLeadByEventUri(eventUri) : (email ? await airtableFindLeadByEmail(email) : null);
+        const li = lead?.fields?.['LinkedIn URL'] || '';
+        await airtableLogMessage(
+          name || email,
+          li,
+          'inbound',
+          'negative',
+          `[CALENDLY CANCELED] ${eventUri || ''}`,
+          null,
+          true
+        );
+      } catch (e) { /* non-fatal */ }
+    } else {
+      console.log(`[CALENDLY] Ignored event: ${event}`);
+    }
+  } catch (err) {
+    console.error('[CALENDLY] Webhook error:', err.message);
+  }
+});
+
+// One-time bootstrap on startup: ensure a Calendly webhook subscription exists.
+async function ensureCalendlySubscription() {
+  if (!CALENDLY_PAT) {
+    console.log('[CALENDLY] CALENDLY_PAT not set - skipping subscription bootstrap');
+    return;
+  }
+  const base = process.env.SERVER_URL || process.env.RENDER_EXTERNAL_URL;
+  if (!base) {
+    console.log('[CALENDLY] No SERVER_URL/RENDER_EXTERNAL_URL - cannot register webhook');
+    return;
+  }
+  const targetUrl = `${base.replace(/\/$/, '')}/webhook/calendly`;
+
+  try {
+    // Resolve user + organization URIs
+    const meRes = await fetch(`${CALENDLY_API}/users/me`, {
+      headers: { 'Authorization': `Bearer ${CALENDLY_PAT}` }
+    });
+    if (!meRes.ok) {
+      console.error('[CALENDLY] /users/me failed:', meRes.status, await meRes.text());
+      return;
+    }
+    const me = await meRes.json();
+    const userUri = me.resource?.uri;
+    const orgUri = me.resource?.current_organization;
+    if (!userUri || !orgUri) {
+      console.error('[CALENDLY] Could not resolve user/org URIs');
+      return;
+    }
+
+    // List existing subscriptions
+    const listRes = await fetch(
+      `${CALENDLY_API}/webhook_subscriptions?organization=${encodeURIComponent(orgUri)}&user=${encodeURIComponent(userUri)}&scope=user`,
+      { headers: { 'Authorization': `Bearer ${CALENDLY_PAT}` } }
+    );
+    const list = listRes.ok ? await listRes.json() : { collection: [] };
+    const existing = (list.collection || []).find(s => s.callback_url === targetUrl);
+
+    if (existing) {
+      console.log(`[CALENDLY] Webhook already subscribed: ${targetUrl} (state=${existing.state})`);
+      return;
+    }
+
+    // Create new subscription
+    const createRes = await fetch(`${CALENDLY_API}/webhook_subscriptions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CALENDLY_PAT}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: targetUrl,
+        events: ['invitee.created', 'invitee.canceled'],
+        organization: orgUri,
+        user: userUri,
+        scope: 'user',
+        ...(CALENDLY_WEBHOOK_SIGNING_KEY ? { signing_key: CALENDLY_WEBHOOK_SIGNING_KEY } : {})
+      })
+    });
+    if (!createRes.ok) {
+      console.error('[CALENDLY] Subscription create failed:', createRes.status, await createRes.text());
+      return;
+    }
+    const created = await createRes.json();
+    console.log(`[CALENDLY] Webhook subscribed: ${targetUrl} (uri=${created.resource?.uri})`);
+  } catch (e) {
+    console.error('[CALENDLY] Subscription bootstrap error:', e.message);
+  }
+}
+
 // ─── START ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
@@ -2616,6 +2888,9 @@ app.listen(PORT, () => {
   // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 6h
   setTimeout(processFollowups, 60 * 1000);
   setInterval(processFollowups, 6 * 60 * 60 * 1000);
+
+  // Calendly webhook auto-subscribe (idempotent - only creates if missing)
+  setTimeout(ensureCalendlySubscription, 20 * 1000);
 
   // Self-ping every 14 min to prevent Render free tier spin-down
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
