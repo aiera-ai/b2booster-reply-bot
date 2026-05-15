@@ -2478,76 +2478,40 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    // Log full payload for debugging (no truncation, walk top-level keys too)
-    const rawJson = JSON.stringify(payload);
-    console.log('[OUTFLO] Top-level keys:', Object.keys(payload).join(','));
-    console.log('[OUTFLO] Raw payload (full):', rawJson.length > 5000 ? rawJson.substring(0, 5000) + '...[truncated]' : rawJson);
+    // Real Outflo schema (confirmed 2026-05-15):
+    //   payload.account = OUR Outflo account (Žan/Vesna/Mojca)
+    //   payload.message.text = body
+    //   payload.message.sender_* = the LEAD (the person who replied to us)
+    //   payload.conversation_id = conversation id
 
-    // Try every plausible path Outflo might use
-    const messageText =
-      payload.message?.text ||
-      payload.message?.body ||
-      payload.message?.content ||
-      payload.message_text ||
-      payload.text ||
-      payload.body ||
-      payload.reply?.text ||
-      payload.reply?.body ||
-      payload.conversation?.last_message?.text ||
-      payload.data?.message?.text ||
-      payload.data?.text ||
-      '';
+    const msg = payload.message || {};
+    const acct = payload.account || {};
 
-    const leadProfileUrl =
-      payload.lead?.profile_url ||
-      payload.lead?.linkedin_url ||
-      payload.lead?.linkedinUrl ||
-      payload.lead?.url ||
-      payload.profile_url ||
-      payload.linkedin_url ||
-      payload.linkedinUrl ||
-      payload.prospect?.profile_url ||
-      payload.prospect?.linkedin_url ||
-      payload.contact?.profile_url ||
-      payload.contact?.linkedin_url ||
-      payload.from?.profile_url ||
-      payload.from?.linkedin_url ||
-      payload.data?.lead?.profile_url ||
-      payload.data?.lead?.linkedin_url ||
-      payload.conversation?.lead?.profile_url ||
-      payload.conversation?.lead?.linkedin_url ||
-      '';
+    const messageText = msg.text || msg.body || msg.content || payload.text || '';
+    const leadProfileUrl = msg.sender_profile_url || msg.sender_url || payload.lead?.profile_url || payload.lead?.linkedin_url || '';
+    const leadFirstNameFromPayload = msg.sender_first_name || payload.lead?.first_name || '';
+    const leadLastNameFromPayload = msg.sender_last_name || payload.lead?.last_name || '';
+    const leadFullName = [leadFirstNameFromPayload, leadLastNameFromPayload].filter(Boolean).join(' ') || payload.lead?.full_name || payload.lead?.name || 'Lead';
 
-    const leadFullName =
-      payload.lead?.full_name ||
-      payload.lead?.name ||
-      payload.lead?.fullName ||
-      [payload.lead?.first_name, payload.lead?.last_name].filter(Boolean).join(' ') ||
-      [payload.lead?.firstName, payload.lead?.lastName].filter(Boolean).join(' ') ||
-      payload.prospect?.full_name ||
-      payload.prospect?.name ||
-      payload.contact?.full_name ||
-      payload.contact?.name ||
-      payload.from?.name ||
-      payload.full_name ||
-      payload.name ||
-      payload.data?.lead?.full_name ||
-      payload.data?.lead?.name ||
-      payload.conversation?.lead?.full_name ||
-      'Lead';
+    // Safety: skip if "sender" is actually one of our own accounts (e.g. echo of an outbound message)
+    if (leadProfileUrl && acct.profile_url && leadProfileUrl === acct.profile_url) {
+      console.log('[OUTFLO] Skipping - sender is our own account (echo)');
+      return;
+    }
 
     if (!messageText) {
       console.log('[OUTFLO] Missing message text - payload keys:', Object.keys(payload).join(','));
       return;
     }
     if (!leadProfileUrl) {
-      console.log('[OUTFLO] Missing lead profile URL - lead obj:', JSON.stringify(payload.lead || payload.prospect || payload.contact || payload.from || {}));
+      console.log('[OUTFLO] Missing lead profile URL - message obj:', JSON.stringify(msg).substring(0, 500));
       return;
     }
 
-    // Detect if this is a Vesna campaign (campaign name contains "vesna")
-    const campaignName = payload.campaign?.name || '';
-    const isVesna = campaignName.toLowerCase().includes('vesna');
+    // Detect if this is a Vesna account (payload.account is OUR account in Outflo)
+    const campaignName = payload.campaign?.name || acct.full_name || '';
+    const acctFirst = (acct.first_name || '').toLowerCase();
+    const isVesna = acctFirst === 'vesna' || campaignName.toLowerCase().includes('vesna');
     const senderLabel = isVesna ? 'VESNA' : 'WEBHOOK';
 
     console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
