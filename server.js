@@ -297,7 +297,9 @@ function buildTrainingContext() {
 // ─── STYLE GUIDE ──────────────────────────────────────────────────────────────
 
 const CALENDLY_LINK = process.env.CALENDLY_LINK || '[CALENDLY LINK]';
+const CALENDLY_AI_15MIN = process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar/aiera-ai';
 const VESNA_LINKEDIN_URL = process.env.VESNA_LINKEDIN_URL || 'https://www.linkedin.com/in/vesna-pevec-2110b8b4/';
+const HANDOFF_FROM_EMAIL = process.env.HANDOFF_FROM_EMAIL || 'Žan Bagarič <zan@aiera.si>';
 
 const STYLE_GUIDE = `
 You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
@@ -848,6 +850,734 @@ ${draft}
   console.log(`[RESEND] Approval sent: ${leadData.firstName} ${leadData.lastName}`);
 }
 
+// ─── EMAIL HANDOFF (LinkedIn → Email) ────────────────────────────────────────
+// Flow: prospect prosi za email predstavitev → bot detektira → najde email
+// (parse → Airtable → ask on LinkedIn) → pripravi handoff email body + LinkedIn
+// auto-reply → pošlje approval mail Žanu z gumbom POŠLJI EMAIL.
+
+const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const ROLE_EMAIL_PREFIXES = ['noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon', 'postmaster', 'notifications', 'notification'];
+
+function extractEmailFromMessage(text) {
+  if (!text) return null;
+  const matches = text.match(EMAIL_REGEX);
+  if (!matches || matches.length === 0) return null;
+  // Filter junk addresses (signatures, role accounts)
+  const clean = matches
+    .map(e => e.toLowerCase().replace(/[.,;:)]+$/, ''))
+    .filter(e => !ROLE_EMAIL_PREFIXES.some(p => e.startsWith(p + '@')))
+    .filter(e => !e.includes('linkedin.com'));
+  return clean[0] || null;
+}
+
+async function detectEmailHandoff(message) {
+  if (!message || message.trim().length < 3) {
+    return { isHandoff: false, providedEmail: null };
+  }
+  // Fast regex path: if message clearly contains an email, treat as handoff
+  const directEmail = extractEmailFromMessage(message);
+  if (directEmail) {
+    return { isHandoff: true, providedEmail: directEmail };
+  }
+  // LLM path: detect intent to receive details via email
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 10,
+      messages: [{
+        role: 'user',
+        content: `Does this LinkedIn message ask the sender to send an offer, presentation, more info, or details to email? Or does it ask for an email contact?
+
+Return ONLY "yes" or "no".
+
+yes examples: "Pošljite mi ponudbo na email", "Lahko mi pošljete predstavitev na e-pošto?", "Send me details to my email", "Mi lahko pošljete več informacij?"
+no examples: "Zanima me", "Pokličite me", "Hvala", "Kdaj se lahko slišimo?"
+
+Message: "${message.substring(0, 400)}"`
+      }]
+    });
+    const ans = response.content[0].text.trim().toLowerCase();
+    return { isHandoff: ans.startsWith('yes'), providedEmail: null };
+  } catch (e) {
+    console.error('[HANDOFF] detect error:', e.message);
+    return { isHandoff: false, providedEmail: null };
+  }
+}
+
+async function airtableLookupEmailForLead(linkedinUrl) {
+  if (!AIRTABLE_PAT || !linkedinUrl) return null;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    if (!r?.records?.length) return null;
+    const fields = r.records[0].fields || {};
+    const email = fields.Email || fields.email || fields['E-mail'] || null;
+    if (!email) return null;
+    return { email: String(email).trim(), recordId: r.records[0].id };
+  } catch (e) {
+    console.error('[AIRTABLE] lookupEmail error:', e.message);
+    return null;
+  }
+}
+
+async function airtableMarkOfferSent(linkedinUrl, leadName, email, offerType) {
+  if (!AIRTABLE_PAT || !linkedinUrl) return;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const fields = {
+      'Status': 'Offer Sent (Email)',
+      'Email Sent At': new Date().toISOString(),
+      'Last Activity': new Date().toISOString().split('T')[0]
+    };
+    if (email) fields['Email'] = email;
+    if (offerType) fields['Offer Type'] = offerType;
+    if (r?.records?.length) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${r.records[0].id}`, { fields });
+    } else {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields: {
+        'Lead Name': leadName || '',
+        'LinkedIn URL': linkedinUrl,
+        'Channel': 'linkedin',
+        ...fields
+      }}]});
+    }
+    console.log(`[AIRTABLE] Marked Offer Sent (Email): ${leadName}`);
+  } catch (e) {
+    console.error('[AIRTABLE] markOfferSent error:', e.message);
+  }
+}
+
+const HANDOFF_EMAIL_PROMPT = `You draft outreach emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
+
+CONTEXT: The lead asked on LinkedIn for details/offer/presentation via email. You write the follow-up email.
+
+ABOUT AIERA / B2Booster:
+AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
+Clients: Toyota Slovenija, Hidria, SavingsBlue.
+
+WRITING RULES (strict):
+- Slovenian, šumniki correct (š, č, ž)
+- NEVER use dashes (pomišljaji). Use commas or periods.
+- Never use negative words: problem, težava, izziv, zamudno, zapleteno
+- Frame as opportunity, not pain
+- Polite, professional, modern SaaS tone
+- No bullet points
+- 4 to 6 short sentences total
+- Sign as: Žan Bagarič
+- End with one clear CTA: 15-min razgovor preko Calendly link [CALENDLY_15MIN]
+- Never include a phone number in the body
+- First sentence references the LinkedIn conversation naturally
+- Tikamo NIKOLI. Vedno vikamo (Vi, Vas, Vam)
+
+OUTPUT FORMAT (strict):
+Line 1: SUBJECT: <subject line>
+Empty line
+Line 3+: email body (plain text, paragraphs separated by blank lines)
+
+DO NOT include any other labels, markdown, or commentary.`;
+
+async function generateHandoffEmail(leadData, theirMessage) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const enrichmentContext = [
+    leadData.title && `Title: ${leadData.title}`,
+    leadData.company && leadData.company !== 'LinkedIn' && `Company: ${leadData.company}`,
+    leadData.industry && `Industry: ${leadData.industry}`,
+    leadData.employees && `Company size: ${leadData.employees}`,
+    leadData.seniority && `Seniority: ${leadData.seniority}`
+  ].filter(Boolean).join('\n');
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 600,
+    system: HANDOFF_EMAIL_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `Lead: ${leadData.firstName} ${leadData.lastName}
+${enrichmentContext}
+Their LinkedIn message: "${theirMessage || '(prosil za email predstavitev)'}"
+
+Write the handoff email.`
+    }]
+  });
+
+  let raw = response.content[0].text.trim();
+  raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
+  raw = raw.replace(/\[CALENDLY LINK\]/g, CALENDLY_AI_15MIN);
+
+  // Parse SUBJECT: line
+  let subject = `AI predstavitev za ${leadData.firstName}`;
+  let body = raw;
+  const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
+  if (subjMatch) {
+    subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
+    body = raw.replace(subjMatch[0], '').trim();
+  }
+  return { subject, body };
+}
+
+const HANDOFF_LI_REPLY_PROMPT = `You write very short Slovenian LinkedIn replies (2 sentences max).
+
+Context: prospect asked for details/offer via email. We just sent the email. Confirm warmly.
+
+Rules:
+- 1 to 2 sentences total
+- Slovenian, vikamo (Vi, Vas)
+- No dashes, no negative words
+- Mention that the email is on its way
+- Sign as: Žan Bagarič
+- No Calendly link in this LinkedIn reply (Calendly is in the email)
+
+Return only the message text.`;
+
+async function generateHandoffLinkedInReply(leadData, providedEmail) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 120,
+    system: HANDOFF_LI_REPLY_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.`
+    }]
+  });
+  return response.content[0].text.trim();
+}
+
+const ASK_EMAIL_LI_PROMPT = `You write very short Slovenian LinkedIn replies (1 sentence) that ask the prospect for their work email so we can send a tailored offer.
+
+Rules:
+- 1 sentence
+- Slovenian, vikamo
+- No dashes, no negative words
+- Sign as: Žan Bagarič
+- No Calendly link
+
+Return only the message text.`;
+
+async function generateAskForEmailReply(leadData) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 100,
+    system: ASK_EMAIL_LI_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.`
+    }]
+  });
+  return response.content[0].text.trim();
+}
+
+async function sendOfferEmailViaResend({ to, subject, bodyText }) {
+  const htmlBody = bodyText
+    .split('\n')
+    .map(line => line.trim() === '' ? '<br>' : `<p style="margin:0 0 10px 0;font-family:Arial,sans-serif;font-size:14px;color:#111827;line-height:1.6">${line}</p>`)
+    .join('');
+  const html = `<div style="max-width:600px;padding:24px">${htmlBody}${AIERA_SIGNATURE_HTML}</div>`;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: HANDOFF_FROM_EMAIL,
+      to,
+      subject,
+      html
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`Resend handoff error: ${JSON.stringify(data)}`);
+  console.log(`[HANDOFF] Email sent to ${to}`);
+  return data;
+}
+
+async function sendHandoffApprovalEmail(id, leadData, payload) {
+  const base = process.env.SERVER_URL || `http://localhost:${PORT}`;
+  const { mode, recipientEmail, subject, body, liReply } = payload;
+
+  const modeLabel = mode === 'send_email'
+    ? '✉️ EMAIL HANDOFF (pošlji ponudbo)'
+    : '❓ EMAIL HANDOFF (vprašaj za email na LinkedInu)';
+
+  const headerColor = mode === 'send_email' ? '#15803d' : '#d97706';
+
+  const messageSection = leadData.theirMessage
+    ? `<p style="color:#555;margin:0 0 8px"><strong>Njihovo sporočilo:</strong></p>
+       <div style="border-left:3px solid #d1d5db;padding:10px 16px;color:#444;margin-bottom:24px;background:#f9fafb;font-size:14px;line-height:1.6">
+         ${leadData.theirMessage.replace(/\n/g, '<br>')}
+       </div>`
+    : '';
+
+  const profileLink = leadData.linkedinUrl
+    ? `<a href="${leadData.linkedinUrl}" style="color:#2563eb;font-size:13px;text-decoration:none">Odpri LinkedIn profil</a>`
+    : '';
+
+  const emailDraftSection = mode === 'send_email'
+    ? `
+      <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:14px 16px;margin-bottom:16px">
+        <p style="margin:0 0 4px;color:#065f46;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Email naslov</p>
+        <p style="margin:0;color:#065f46;font-size:15px;font-weight:600">${recipientEmail}</p>
+      </div>
+      <p style="color:#555;margin:0 0 6px;font-size:13px"><strong>Subject:</strong> ${subject}</p>
+      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Email body:</strong></p>
+      <div style="border-left:3px solid #15803d;padding:14px 18px;background:#f0fdf4;margin-bottom:20px;font-size:14px;line-height:1.7;color:#064e3b;white-space:pre-wrap">
+${body}
+      </div>
+      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>LinkedIn auto-reply (pošlje se po emailu):</strong></p>
+      <div style="border-left:3px solid #2563eb;padding:10px 16px;background:#eff6ff;margin-bottom:24px;font-size:14px;line-height:1.6;color:#1e3a5f;white-space:pre-wrap">
+${liReply}
+      </div>`
+    : `
+      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Email v sporočilu ni najden, niti v Airtable ni shranjen.</strong></p>
+      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Predlog LinkedIn vprašanja:</strong></p>
+      <div style="border-left:3px solid #d97706;padding:10px 16px;background:#fffbeb;margin-bottom:24px;font-size:14px;line-height:1.6;color:#7c2d12;white-space:pre-wrap">
+${liReply}
+      </div>`;
+
+  const primaryButton = mode === 'send_email'
+    ? `<a href="${base}/approve/email-handoff/${id}"
+         style="background:#15803d;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
+        POŠLJI EMAIL
+      </a>`
+    : `<a href="${base}/approve/email-handoff/${id}"
+         style="background:#d97706;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
+        POŠLJI VPRAŠANJE NA LINKEDIN
+      </a>`;
+
+  const html = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#fff">
+      <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
+        <h2 style="margin:0 0 6px;font-size:18px;color:${headerColor}">
+          ${modeLabel}
+        </h2>
+        <p style="margin:4px 0 6px;color:#111;font-size:15px;font-weight:600">
+          ${leadData.firstName} ${leadData.lastName} ${leadData.company && leadData.company !== 'LinkedIn' ? ' · ' + leadData.company : ''}
+        </p>
+        ${profileLink}
+      </div>
+      ${messageSection}
+      ${emailDraftSection}
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        ${primaryButton}
+        <a href="${base}/edit/email-handoff/${id}"
+           style="background:#2563eb;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
+          UREDI
+        </a>
+        <a href="${base}/dismiss/${id}"
+           style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">
+          ZAVRNI
+        </a>
+      </div>
+      <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · Email Handoff</p>
+    </div>
+  `;
+
+  const subj = mode === 'send_email'
+    ? `[HANDOFF] ${leadData.firstName} ${leadData.lastName} prosi za ponudbo`
+    : `[HANDOFF?] ${leadData.firstName} ${leadData.lastName} omenja email`;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
+      to: process.env.MY_EMAIL,
+      subject: subj,
+      html
+    })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error('[RESEND] Handoff approval error:', err);
+    throw new Error(`Resend handoff approval failed: ${err}`);
+  }
+  console.log(`[HANDOFF] Approval sent: ${leadData.firstName} ${leadData.lastName} (${mode})`);
+}
+
+// Main handoff orchestrator - returns true if handoff was triggered (caller should return).
+// channel: 'linkedin' | 'vesna' | 'outflo'
+// Returns false if no handoff intent detected (caller continues normal flow).
+async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
+  if (!theirMessage || theirMessage.length < 5) return false;
+
+  const detection = await detectEmailHandoff(theirMessage);
+  if (!detection.isHandoff) return false;
+
+  console.log(`[HANDOFF] Detected on ${channel} | ${leadData.firstName} ${leadData.lastName} | providedEmail=${detection.providedEmail || 'none'}`);
+
+  // Tier 1: email in their message
+  let email = detection.providedEmail;
+  let source = 'message';
+
+  // Tier 2: lookup in Airtable
+  if (!email && leadData.linkedinUrl) {
+    const lookup = await airtableLookupEmailForLead(leadData.linkedinUrl);
+    if (lookup?.email) {
+      email = lookup.email;
+      source = 'airtable';
+    }
+  }
+
+  const id = uuidv4();
+
+  if (email) {
+    // We have an email - build full handoff package
+    const { subject, body } = await generateHandoffEmail(leadData, theirMessage);
+    const liReply = await generateHandoffLinkedInReply(leadData, email);
+
+    storePending(id, {
+      kind: 'email_handoff',
+      mode: 'send_email',
+      channel,
+      leadData,
+      recipientEmail: email,
+      emailSubject: subject,
+      emailBody: body,
+      liReply,
+      source
+    });
+
+    await sendHandoffApprovalEmail(id, leadData, {
+      mode: 'send_email',
+      recipientEmail: email,
+      subject,
+      body,
+      liReply
+    });
+
+    // Log inbound + draft
+    airtableLogMessage(
+      `${leadData.firstName} ${leadData.lastName}`,
+      leadData.linkedinUrl,
+      'inbound', 'positive', theirMessage, null, false
+    ).catch(() => {});
+  } else {
+    // No email anywhere - draft LinkedIn message that asks for email
+    const liReply = await generateAskForEmailReply(leadData);
+
+    storePending(id, {
+      kind: 'email_handoff',
+      mode: 'ask_email',
+      channel,
+      leadData,
+      liReply
+    });
+
+    await sendHandoffApprovalEmail(id, leadData, {
+      mode: 'ask_email',
+      liReply
+    });
+  }
+
+  return true;
+}
+
+// ─── APPROVE EMAIL HANDOFF ───────────────────────────────────────────────────
+
+app.get('/approve/email-handoff/:id', async (req, res) => {
+  const id = req.params.id;
+  const pending = getPending(id);
+  if (!pending || pending.kind !== 'email_handoff') {
+    return res.status(404).send(page('Ni najdeno', '<p>Handoff ne obstaja ali je že bilo obdelano.</p>'));
+  }
+
+  const { mode, channel, leadData, recipientEmail, emailSubject, emailBody, liReply } = pending;
+
+  try {
+    if (mode === 'send_email') {
+      // 1. Send the offer email via Resend
+      await sendOfferEmailViaResend({
+        to: recipientEmail,
+        subject: emailSubject,
+        bodyText: emailBody
+      });
+
+      // 2. Send LinkedIn confirmation reply (via Outflo, respecting channel)
+      try {
+        if (channel === 'vesna') {
+          await sendViaOutflo(leadData.linkedinUrl, liReply, VESNA_LINKEDIN_URL);
+        } else {
+          await sendViaOutflo(leadData.linkedinUrl, liReply, leadData.senderUrl || null);
+        }
+      } catch (e) {
+        console.error('[HANDOFF] LinkedIn confirm send failed (email still sent):', e.message);
+      }
+
+      // 3. Airtable: mark Offer Sent (Email) + log messages
+      await airtableMarkOfferSent(
+        leadData.linkedinUrl,
+        `${leadData.firstName} ${leadData.lastName}`,
+        recipientEmail,
+        'teaser_v1'
+      );
+      airtableLogMessage(
+        `${leadData.firstName} ${leadData.lastName}`,
+        leadData.linkedinUrl, 'outbound', 'email_handoff',
+        `[EMAIL → ${recipientEmail}] ${emailSubject}`,
+        emailBody, true
+      ).catch(() => {});
+      airtableLogMessage(
+        `${leadData.firstName} ${leadData.lastName}`,
+        leadData.linkedinUrl, 'outbound', 'email_handoff',
+        '[LINKEDIN confirm]', liReply, true
+      ).catch(() => {});
+
+      deletePending(id);
+
+      return res.send(page('Email poslan', `
+        <div style="text-align:center;padding:40px 0">
+          <div style="font-size:48px;margin-bottom:16px">✉️</div>
+          <h2 style="color:#15803d;margin:0 0 8px">Email handoff poslan</h2>
+          <p style="color:#666;margin:0 0 4px">${leadData.firstName} ${leadData.lastName}</p>
+          <p style="color:#16a34a;font-weight:600;font-size:16px;margin:8px 0">${recipientEmail}</p>
+          <p style="color:#999;font-size:13px">LinkedIn potrditev poslana. Airtable status: Offer Sent (Email).</p>
+        </div>
+      `));
+    } else {
+      // Ask-on-LinkedIn flow: send the LinkedIn message asking for email
+      const senderUrl = channel === 'vesna' ? VESNA_LINKEDIN_URL : (leadData.senderUrl || null);
+      await sendViaOutflo(leadData.linkedinUrl, liReply, senderUrl);
+
+      airtableLogMessage(
+        `${leadData.firstName} ${leadData.lastName}`,
+        leadData.linkedinUrl, 'outbound', 'ask_email', null, liReply, true
+      ).catch(() => {});
+
+      deletePending(id);
+
+      return res.send(page('Vprašanje poslano', `
+        <div style="text-align:center;padding:40px 0">
+          <div style="font-size:48px;margin-bottom:16px">❓</div>
+          <h2 style="color:#d97706;margin:0 0 8px">LinkedIn vprašanje za email poslano</h2>
+          <p style="color:#666">${leadData.firstName} ${leadData.lastName}</p>
+        </div>
+      `));
+    }
+  } catch (err) {
+    console.error('[HANDOFF] Approve error:', err.message);
+    return res.status(500).send(page('Napaka', `<p>Napaka pri pošiljanju: ${err.message}</p>`));
+  }
+});
+
+app.get('/edit/email-handoff/:id', (req, res) => {
+  const id = req.params.id;
+  const pending = getPending(id);
+  if (!pending || pending.kind !== 'email_handoff') {
+    return res.status(404).send(page('Ni najdeno', '<p>Not found.</p>'));
+  }
+
+  if (pending.mode === 'send_email') {
+    res.send(page('Uredi handoff', `
+      <h2 style="font-size:18px;margin:0 0 12px">Uredi email handoff</h2>
+      <p style="color:#555;margin:0 0 12px">
+        <strong>${pending.leadData.firstName} ${pending.leadData.lastName}</strong>
+      </p>
+      <form method="POST" action="/edit/email-handoff/${id}">
+        <label style="display:block;font-size:13px;color:#555;margin:0 0 4px">Email naslov</label>
+        <input name="recipientEmail" value="${pending.recipientEmail}" style="width:100%;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;margin-bottom:12px">
+
+        <label style="display:block;font-size:13px;color:#555;margin:0 0 4px">Subject</label>
+        <input name="emailSubject" value="${pending.emailSubject.replace(/"/g, '&quot;')}" style="width:100%;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;margin-bottom:12px">
+
+        <label style="display:block;font-size:13px;color:#555;margin:0 0 4px">Email body</label>
+        <textarea name="emailBody" style="width:100%;height:240px;padding:12px;font-size:14px;border:1px solid #ddd;border-radius:6px;line-height:1.6;box-sizing:border-box;margin-bottom:12px">${pending.emailBody}</textarea>
+
+        <label style="display:block;font-size:13px;color:#555;margin:0 0 4px">LinkedIn potrditev</label>
+        <textarea name="liReply" style="width:100%;height:100px;padding:12px;font-size:14px;border:1px solid #ddd;border-radius:6px;line-height:1.6;box-sizing:border-box;margin-bottom:12px">${pending.liReply}</textarea>
+
+        <div style="display:flex;gap:12px">
+          <button type="submit" style="background:#15803d;color:#fff;padding:12px 28px;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer">SHRANI IN POŠLJI</button>
+          <a href="/dismiss/${id}" style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;border:1px solid #e5e7eb">ZAVRNI</a>
+        </div>
+      </form>
+    `));
+  } else {
+    res.send(page('Uredi vprašanje', `
+      <h2 style="font-size:18px;margin:0 0 12px">Uredi LinkedIn vprašanje za email</h2>
+      <p style="color:#555;margin:0 0 12px"><strong>${pending.leadData.firstName} ${pending.leadData.lastName}</strong></p>
+      <form method="POST" action="/edit/email-handoff/${id}">
+        <textarea name="liReply" style="width:100%;height:140px;padding:12px;font-size:14px;border:1px solid #ddd;border-radius:6px;line-height:1.6;box-sizing:border-box;margin-bottom:12px">${pending.liReply}</textarea>
+        <div style="display:flex;gap:12px">
+          <button type="submit" style="background:#d97706;color:#fff;padding:12px 28px;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer">SHRANI IN POŠLJI</button>
+          <a href="/dismiss/${id}" style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;border:1px solid #e5e7eb">ZAVRNI</a>
+        </div>
+      </form>
+    `));
+  }
+});
+
+app.post('/edit/email-handoff/:id', async (req, res) => {
+  const id = req.params.id;
+  const pending = getPending(id);
+  if (!pending || pending.kind !== 'email_handoff') {
+    return res.status(404).send(page('Ni najdeno', '<p>Not found.</p>'));
+  }
+  // Update fields in place, then re-route to /approve
+  const updated = { ...pending };
+  if (pending.mode === 'send_email') {
+    updated.recipientEmail = (req.body.recipientEmail || pending.recipientEmail).trim();
+    updated.emailSubject = (req.body.emailSubject || pending.emailSubject).trim();
+    updated.emailBody = req.body.emailBody || pending.emailBody;
+    updated.liReply = req.body.liReply || pending.liReply;
+  } else {
+    updated.liReply = req.body.liReply || pending.liReply;
+  }
+  // Persist edits
+  const all = loadPending();
+  all[id] = { ...all[id], ...updated };
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(all, null, 2));
+  // Redirect to approve which performs the send
+  res.redirect(`/approve/email-handoff/${id}`);
+});
+
+// ─── FOLLOW-UP CRON (3-day after Offer Sent (Email)) ─────────────────────────
+
+const FOLLOWUP_DAYS = parseInt(process.env.FOLLOWUP_DAYS || '3', 10);
+const FOLLOWUP_SENT_FIELD = 'Followup Sent At'; // optional - we skip leads where this is set
+
+const FOLLOWUP_PROMPT = `You write very short Slovenian follow-up emails (3 sentences max) sent by Žan Bagarič.
+
+Context: 3 days ago we sent an offer/presentation email after a LinkedIn conversation. No response yet. We send a gentle nudge.
+
+Rules:
+- Slovenian, šumniki correct
+- No dashes
+- No negative words (problem, težava, izziv)
+- Vikamo
+- 3 sentences max
+- End with: link to 15-min Calendly: [CALENDLY_15MIN]
+- Sign: Žan Bagarič
+- Format:
+SUBJECT: <subject>
+
+<body>
+
+Return only that format. No commentary.`;
+
+async function generateFollowupEmail(leadData) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 350,
+    system: FOLLOWUP_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
+
+Write the 3-day follow-up email.`
+    }]
+  });
+  let raw = response.content[0].text.trim();
+  raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
+  let subject = `Še aktualno, ${leadData.firstName}?`;
+  let body = raw;
+  const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
+  if (subjMatch) {
+    subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
+    body = raw.replace(subjMatch[0], '').trim();
+  }
+  return { subject, body };
+}
+
+async function airtableFindLeadsForFollowup() {
+  if (!AIRTABLE_PAT) return [];
+  try {
+    const cutoff = new Date(Date.now() - FOLLOWUP_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    // Status = "Offer Sent (Email)" AND Email Sent At <= cutoff AND no Followup Sent At
+    const formula = encodeURIComponent(
+      `AND({Status}="Offer Sent (Email)", IS_BEFORE({Email Sent At}, "${cutoff}"), {Followup Sent At}=BLANK())`
+    );
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=20`);
+    if (!r?.records) return [];
+    return r.records.map(rec => ({
+      recordId: rec.id,
+      leadName: rec.fields['Lead Name'] || '',
+      linkedinUrl: rec.fields['LinkedIn URL'] || '',
+      email: rec.fields['Email'] || '',
+      company: rec.fields['Campaign'] || '',
+      emailSentAt: rec.fields['Email Sent At'] || ''
+    })).filter(x => x.email && x.linkedinUrl);
+  } catch (e) {
+    console.error('[FOLLOWUP] find error:', e.message);
+    return [];
+  }
+}
+
+async function airtableMarkFollowupQueued(recordId) {
+  if (!AIRTABLE_PAT || !recordId) return;
+  try {
+    await airtableRequest('PATCH', `${AT_LEADS}/${recordId}`, {
+      fields: { [FOLLOWUP_SENT_FIELD]: new Date().toISOString() }
+    });
+  } catch (e) {
+    console.error('[FOLLOWUP] markQueued error:', e.message);
+  }
+}
+
+async function processFollowups() {
+  try {
+    const candidates = await airtableFindLeadsForFollowup();
+    if (candidates.length === 0) return;
+    console.log(`[FOLLOWUP] ${candidates.length} candidate(s) for follow-up approval`);
+
+    for (const c of candidates) {
+      try {
+        const nameParts = c.leadName.trim().split(' ');
+        const leadData = {
+          firstName: nameParts[0] || 'Lead',
+          lastName: nameParts.slice(1).join(' '),
+          company: c.company || '',
+          linkedinUrl: c.linkedinUrl
+        };
+
+        const { subject, body } = await generateFollowupEmail(leadData);
+
+        const id = uuidv4();
+        storePending(id, {
+          kind: 'email_handoff',
+          mode: 'send_email',
+          channel: 'linkedin',
+          leadData,
+          recipientEmail: c.email,
+          emailSubject: subject,
+          emailBody: body,
+          liReply: `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`,
+          source: 'followup-cron'
+        });
+
+        await sendHandoffApprovalEmail(id, leadData, {
+          mode: 'send_email',
+          recipientEmail: c.email,
+          subject: `[FOLLOW-UP] ${subject}`,
+          body,
+          liReply: `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`
+        });
+
+        await airtableMarkFollowupQueued(c.recordId);
+        console.log(`[FOLLOWUP] Approval queued: ${c.leadName}`);
+      } catch (e) {
+        console.error('[FOLLOWUP] per-lead error:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('[FOLLOWUP] processFollowups error:', err.message);
+  }
+}
+
+// Manual trigger
+app.get('/trigger-followups', async (req, res) => {
+  res.json({ status: 'running' });
+  await processFollowups();
+});
+
 // ─── WEBHOOK: INSTANTLY ───────────────────────────────────────────────────────
 
 app.post('/webhook/instantly', async (req, res) => {
@@ -993,6 +1723,10 @@ app.post('/webhook/linkedin', async (req, res) => {
         console.log(`[LINKEDIN] Soft negative - closing reply scheduled for ${leadData.firstName} at ${formatSendTime(sendAt)}`);
         return;
       }
+
+      // Email handoff: prospect asks for offer/info via email
+      const handoffTriggered = await maybeHandleEmailHandoff('linkedin', leadData, parsed.message);
+      if (handoffTriggered) return;
     }
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
@@ -1063,6 +1797,10 @@ app.post('/webhook/vesna', async (req, res) => {
         console.log(`[VESNA] Soft negative - closing reply scheduled for ${leadData.firstName} at ${formatSendTime(sendAt)}`);
         return;
       }
+
+      // Email handoff (Vesna campaign too - "Žan se javi z emailom")
+      const handoffTriggered = await maybeHandleEmailHandoff('vesna', leadData, parsed.message);
+      if (handoffTriggered) return;
     }
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
@@ -1615,6 +2353,10 @@ async function pollLinkedInInbox() {
         continue;
       }
 
+      // Email handoff check
+      const handoffTriggered = await maybeHandleEmailHandoff('linkedin', leadData, body);
+      if (handoffTriggered) continue;
+
       const [draft, offerUrl] = await Promise.all([
         generateReply('linkedin', leadData, body, true),
         createAndDeployOffer(leadData)
@@ -1786,21 +2528,27 @@ app.post('/webhook/outflo', async (req, res) => {
     if (intent === 'negative') {
       const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
       draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
-    } else if (isVesna) {
-      // Vesna style: warm, hands off to Žan, no Calendly, no email
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 150,
-        system: VESNA_STYLE_GUIDE,
-        messages: [{
-          role: 'user',
-          content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name.`
-        }]
-      });
-      draft = response.content[0].text.trim();
     } else {
-      draft = await generateReply('linkedin', leadData, messageText, true);
+      // Check for email handoff before drafting normal reply
+      const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
+      if (handoffTriggered) return;
+
+      if (isVesna) {
+        // Vesna style: warm, hands off to Žan, no Calendly, no email
+        const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 150,
+          system: VESNA_STYLE_GUIDE,
+          messages: [{
+            role: 'user',
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name.`
+          }]
+        });
+        draft = response.content[0].text.trim();
+      } else {
+        draft = await generateReply('linkedin', leadData, messageText, true);
+      }
     }
 
     console.log(`[${senderLabel}] Generated reply: "${draft}"`);
@@ -1837,6 +2585,10 @@ app.listen(PORT, () => {
   // Poll Instantly after warmup, then every 15 min
   setTimeout(pollInstantlyReplies, 30 * 1000);
   setInterval(pollInstantlyReplies, 15 * 60 * 1000);
+
+  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 6h
+  setTimeout(processFollowups, 60 * 1000);
+  setInterval(processFollowups, 6 * 60 * 60 * 1000);
 
   // Self-ping every 14 min to prevent Render free tier spin-down
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
