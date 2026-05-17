@@ -1150,86 +1150,114 @@ async function sendHandoffApprovalEmail(id, leadData, payload) {
   const base = process.env.SERVER_URL || `http://localhost:${PORT}`;
   const { mode, recipientEmail, subject, body, liReply } = payload;
 
-  const modeLabel = mode === 'send_email'
-    ? '✉️ EMAIL HANDOFF (pošlji ponudbo)'
-    : '❓ EMAIL HANDOFF (vprašaj za email na LinkedInu)';
+  // Mode badge - replaces the old emoji header
+  const modeBadge = mode === 'send_email'
+    ? `<span style="background:#15803d;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">HANDOFF: POŠLJI EMAIL</span>`
+    : `<span style="background:#d97706;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">HANDOFF: VPRAŠAJ ZA EMAIL</span>`;
 
-  const headerColor = mode === 'send_email' ? '#15803d' : '#d97706';
+  // Intent badge
+  const intentColors = {
+    positive: { bg: '#dcfce7', text: '#15803d', label: 'POZITIVNO' },
+    negative: { bg: '#fee2e2', text: '#b91c1c', label: 'NEGATIVNO' },
+    soft_negative: { bg: '#fef3c7', text: '#a16207', label: 'MEHKO NEGATIVNO' },
+    question: { bg: '#dbeafe', text: '#1d4ed8', label: 'VPRAŠANJE' },
+    neutral: { bg: '#f3f4f6', text: '#4b5563', label: 'NEVTRALNO' }
+  };
+  const intentStyle = intentColors[leadData.intent] || null;
+  const intentBadge = intentStyle
+    ? `<span style="background:${intentStyle.bg};color:${intentStyle.text};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${intentStyle.label}</span>`
+    : '';
+  const accountBadge = leadData.accountName
+    ? `<span style="background:#eef2ff;color:#4338ca;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">→ ${leadData.accountName}</span>`
+    : '';
 
   const messageSection = leadData.theirMessage
-    ? `<p style="color:#555;margin:0 0 8px"><strong>Njihovo sporočilo:</strong></p>
-       <div style="border-left:3px solid #d1d5db;padding:10px 16px;color:#444;margin-bottom:24px;background:#f9fafb;font-size:14px;line-height:1.6">
-         ${leadData.theirMessage.replace(/\n/g, '<br>')}
+    ? `<div style="margin-bottom:24px">
+         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
+         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
        </div>`
     : '';
 
-  const profileLink = leadData.linkedinUrl
-    ? `<a href="${leadData.linkedinUrl}" style="color:#2563eb;font-size:13px;text-decoration:none">Odpri LinkedIn profil</a>`
+  // Context info panel - same as sendApprovalEmail
+  const infoRows = [];
+  if (leadData.email || recipientEmail) infoRows.push(['Email', `<a href="mailto:${leadData.email || recipientEmail}" style="color:#2563eb;text-decoration:none">${leadData.email || recipientEmail}</a>`]);
+  if (leadData.linkedinUrl) infoRows.push(['LinkedIn', `<a href="${leadData.linkedinUrl}" style="color:#0a66c2;text-decoration:none">${leadData.linkedinUrl.replace('https://www.','')}</a>`]);
+  if (leadData.title) infoRows.push(['Vloga', leadData.title]);
+  if (leadData.company && leadData.company !== 'LinkedIn') infoRows.push(['Podjetje', leadData.company]);
+  if (leadData.industry) infoRows.push(['Industrija', leadData.industry]);
+  if (leadData.employees) infoRows.push(['Velikost', `${leadData.employees} zaposlenih`]);
+  if (leadData.seniority) infoRows.push(['Seniorost', leadData.seniority]);
+  const location = [leadData.city, leadData.country].filter(Boolean).join(', ');
+  if (location) infoRows.push(['Lokacija', location]);
+  if (leadData.campaignName) infoRows.push(['Kampanja', leadData.campaignName]);
+  if (leadData.notificationType) infoRows.push(['Tip dogodka', leadData.notificationType]);
+  if (leadData.eventType) infoRows.push(['Outflo event', leadData.eventType]);
+  if (leadData.source) infoRows.push(['Vir', leadData.source]);
+  if (leadData.messageSentAt) infoRows.push(['Poslano ob', leadData.messageSentAt]);
+  if (leadData.conversationId) infoRows.push(['Conversation ID', `<code style="font-size:11px;color:#6b7280">${leadData.conversationId}</code>`]);
+
+  const infoPanel = infoRows.length
+    ? `<div style="background:#fafafa;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-bottom:24px">
+         <p style="color:#111;margin:0 0 10px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Kontekst</p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           ${infoRows.map(([k, v]) => `<tr><td style="padding:3px 12px 3px 0;color:#6b7280;vertical-align:top;width:130px;white-space:nowrap">${k}</td><td style="padding:3px 0;color:#111;word-break:break-word">${v}</td></tr>`).join('')}
+         </table>
+       </div>`
     : '';
 
   const emailDraftSection = mode === 'send_email'
     ? `
-      <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:14px 16px;margin-bottom:16px">
-        <p style="margin:0 0 4px;color:#065f46;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em">Email naslov</p>
+      <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:14px 18px;margin-bottom:16px">
+        <p style="margin:0 0 4px;color:#065f46;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Pošljemo na</p>
         <p style="margin:0;color:#065f46;font-size:15px;font-weight:600">${recipientEmail}</p>
       </div>
-      <p style="color:#555;margin:0 0 6px;font-size:13px"><strong>Subject:</strong> ${subject}</p>
-      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Email body:</strong></p>
-      <div style="border-left:3px solid #15803d;padding:14px 18px;background:#f0fdf4;margin-bottom:20px;font-size:14px;line-height:1.7;color:#064e3b;white-space:pre-wrap">
-${body}
+      <div style="margin-bottom:20px">
+        <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Subject</p>
+        <div style="padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;font-size:14px;color:#111">${subject}</div>
       </div>
-      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>LinkedIn auto-reply (pošlje se po emailu):</strong></p>
-      <div style="border-left:3px solid #2563eb;padding:10px 16px;background:#eff6ff;margin-bottom:24px;font-size:14px;line-height:1.6;color:#1e3a5f;white-space:pre-wrap">
-${liReply}
+      <div style="margin-bottom:20px">
+        <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Email body</p>
+        <div style="border-left:3px solid #15803d;padding:14px 18px;background:#f0fdf4;font-size:14px;line-height:1.7;color:#064e3b;white-space:pre-wrap;border-radius:4px">${body.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      </div>
+      <div style="margin-bottom:24px">
+        <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">LinkedIn auto-reply (pošlje se po emailu)</p>
+        <div style="border-left:3px solid #2563eb;padding:12px 16px;background:#eff6ff;font-size:14px;line-height:1.6;color:#1e3a5f;white-space:pre-wrap;border-radius:4px">${liReply.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
       </div>`
     : `
-      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Email v sporočilu ni najden, niti v Airtable ni shranjen.</strong></p>
-      <p style="color:#555;margin:0 0 6px;font-size:14px"><strong>Predlog LinkedIn vprašanja:</strong></p>
-      <div style="border-left:3px solid #d97706;padding:10px 16px;background:#fffbeb;margin-bottom:24px;font-size:14px;line-height:1.6;color:#7c2d12;white-space:pre-wrap">
-${liReply}
+      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px">
+        <p style="margin:0;color:#92400e;font-size:13px">Email v sporočilu ni najden, niti v Airtable ni shranjen. Bot bo vprašal za email na LinkedInu.</p>
+      </div>
+      <div style="margin-bottom:24px">
+        <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Predlog LinkedIn vprašanja</p>
+        <div style="border-left:3px solid #d97706;padding:12px 16px;background:#fffbeb;font-size:14px;line-height:1.6;color:#7c2d12;white-space:pre-wrap;border-radius:4px">${liReply.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
       </div>`;
 
   const primaryButton = mode === 'send_email'
-    ? `<a href="${base}/approve/email-handoff/${id}"
-         style="background:#15803d;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
-        POŠLJI EMAIL
-      </a>`
-    : `<a href="${base}/approve/email-handoff/${id}"
-         style="background:#d97706;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
-        POŠLJI VPRAŠANJE NA LINKEDIN
-      </a>`;
+    ? `<a href="${base}/approve/email-handoff/${id}" style="background:#15803d;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">POŠLJI EMAIL</a>`
+    : `<a href="${base}/approve/email-handoff/${id}" style="background:#d97706;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">POŠLJI VPRAŠANJE NA LINKEDIN</a>`;
 
   const html = `
-    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:620px;margin:0 auto;padding:24px;background:#fff">
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
-        <h2 style="margin:0 0 6px;font-size:18px;color:${headerColor}">
-          ${modeLabel}
-        </h2>
-        <p style="margin:4px 0 6px;color:#111;font-size:15px;font-weight:600">
-          ${leadData.firstName} ${leadData.lastName} ${leadData.company && leadData.company !== 'LinkedIn' ? ' · ' + leadData.company : ''}
-        </p>
-        ${profileLink}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${modeBadge}${intentBadge}${accountBadge}</div>
+        <h2 style="margin:0;font-size:20px;color:#111;font-weight:700">${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ' · ' + leadData.company : ''}</h2>
       </div>
       ${messageSection}
+      ${infoPanel}
       ${emailDraftSection}
-      <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
         ${primaryButton}
-        <a href="${base}/edit/email-handoff/${id}"
-           style="background:#2563eb;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
-          UREDI
-        </a>
-        <a href="${base}/dismiss/${id}"
-           style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">
-          ZAVRNI
-        </a>
+        <a href="${base}/edit/email-handoff/${id}" style="background:#2563eb;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">UREDI</a>
+        <a href="${base}/dismiss/${id}" style="background:#f3f4f6;color:#6b7280;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">ZAVRNI</a>
       </div>
-      <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · Email Handoff</p>
+      <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · Email Handoff · ID ${id.substring(0,8)}</p>
     </div>
   `;
 
+  const subjectAccount = leadData.accountFirstName ? ` →${leadData.accountFirstName}` : '';
   const subj = mode === 'send_email'
-    ? `[HANDOFF] ${leadData.firstName} ${leadData.lastName} prosi za ponudbo`
-    : `[HANDOFF?] ${leadData.firstName} ${leadData.lastName} omenja email`;
+    ? `[HANDOFF${subjectAccount}] ${leadData.firstName} ${leadData.lastName} prosi za ponudbo`
+    : `[HANDOFF?${subjectAccount}] ${leadData.firstName} ${leadData.lastName} omenja email`;
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
