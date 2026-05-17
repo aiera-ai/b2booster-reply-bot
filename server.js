@@ -760,72 +760,122 @@ async function sendViaInstantly(replyToUuid, emailBody, subject) {
 
 async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) {
   const base = process.env.SERVER_URL || `http://localhost:${PORT}`;
-  const channelLabel = channel === 'linkedin' ? '🔵 LinkedIn' : '📧 Email';
+  const channelLabel = channel === 'linkedin' ? 'LinkedIn' : 'Email';
+  const channelBadgeColor = channel === 'linkedin' ? '#0a66c2' : '#059669';
 
   let actionLabel = 'sporočil';
   if (leadData.notificationType === 'accepted') actionLabel = 'sprejel povabilo';
   else if (leadData.notificationType === 'replied') actionLabel = 'odgovoril';
   else if (leadData.notificationType === 'messaged') actionLabel = 'sporočil';
 
-  const messageSection = leadData.theirMessage
-    ? `<p style="color:#555;margin:0 0 8px"><strong>Njihovo sporočilo:</strong></p>
-       <div style="border-left:3px solid #d1d5db;padding:10px 16px;color:#444;margin-bottom:24px;background:#f9fafb;font-size:14px;line-height:1.6">
-         ${leadData.theirMessage.replace(/\n/g, '<br>')}
-       </div>`
-    : `<p style="color:#999;font-size:13px;margin:0 0 20px;font-style:italic">
-         Besedilo sporočila ni bilo v notifikacijskem emailu (LinkedIn digest format).
-       </p>`;
+  // Intent badge
+  const intentColors = {
+    positive: { bg: '#dcfce7', text: '#15803d', label: 'POZITIVNO' },
+    negative: { bg: '#fee2e2', text: '#b91c1c', label: 'NEGATIVNO' },
+    soft_negative: { bg: '#fef3c7', text: '#a16207', label: 'MEHKO NEGATIVNO' },
+    question: { bg: '#dbeafe', text: '#1d4ed8', label: 'VPRAŠANJE' },
+    neutral: { bg: '#f3f4f6', text: '#4b5563', label: 'NEVTRALNO' }
+  };
+  const intentStyle = intentColors[leadData.intent] || null;
+  const intentBadge = intentStyle
+    ? `<span style="background:${intentStyle.bg};color:${intentStyle.text};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${intentStyle.label}</span>`
+    : '';
 
+  // Source / account badge - who from our side received this
+  const accountBadge = leadData.accountName
+    ? `<span style="background:#eef2ff;color:#4338ca;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">→ ${leadData.accountName}</span>`
+    : '';
+
+  const channelBadge = `<span style="background:${channelBadgeColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${channelLabel.toUpperCase()}</span>`;
+
+  // Inbound message - always show, prominent. If empty say so.
+  const messageSection = leadData.theirMessage
+    ? `<div style="margin-bottom:24px">
+         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
+         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
+       </div>`
+    : `<div style="margin-bottom:24px">
+         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
+         <div style="border-left:3px solid #d1d5db;padding:14px 18px;color:#6b7280;background:#f9fafb;font-size:13px;font-style:italic;border-radius:4px">Besedilo ni bilo v notifikaciji (LinkedIn digest). Odpri profil za polni kontekst.</div>
+       </div>`;
+
+  // Context info panel - all the metadata we have
+  const infoRows = [];
   const profileLink = leadData.linkedinUrl
-    ? `<a href="${leadData.linkedinUrl}" style="color:#2563eb;font-size:13px;text-decoration:none">Odpri LinkedIn profil</a>`
+    ? `<a href="${leadData.linkedinUrl}" style="color:#0a66c2;text-decoration:none">${leadData.linkedinUrl.replace('https://www.','')}</a>`
+    : '';
+
+  if (leadData.email) infoRows.push(['Email', `<a href="mailto:${leadData.email}" style="color:#2563eb;text-decoration:none">${leadData.email}</a>`]);
+  if (profileLink) infoRows.push(['LinkedIn', profileLink]);
+  if (leadData.title) infoRows.push(['Vloga', leadData.title]);
+  if (leadData.company && leadData.company !== 'LinkedIn') infoRows.push(['Podjetje', leadData.company]);
+  if (leadData.industry) infoRows.push(['Industrija', leadData.industry]);
+  if (leadData.employees) infoRows.push(['Velikost', `${leadData.employees} zaposlenih`]);
+  if (leadData.seniority) infoRows.push(['Seniorost', leadData.seniority]);
+  const location = [leadData.city, leadData.country].filter(Boolean).join(', ');
+  if (location) infoRows.push(['Lokacija', location]);
+  if (leadData.campaignName) infoRows.push(['Kampanja', leadData.campaignName]);
+  if (leadData.notificationType) infoRows.push(['Tip dogodka', leadData.notificationType]);
+  if (leadData.eventType) infoRows.push(['Outflo event', leadData.eventType]);
+  if (leadData.source) infoRows.push(['Vir', leadData.source]);
+  if (leadData.messageSentAt) infoRows.push(['Poslano ob', leadData.messageSentAt]);
+  if (leadData.subject) infoRows.push(['Subject', leadData.subject]);
+  if (leadData.conversationId) infoRows.push(['Conversation ID', `<code style="font-size:11px;color:#6b7280">${leadData.conversationId}</code>`]);
+
+  const infoPanel = infoRows.length
+    ? `<div style="background:#fafafa;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-bottom:24px">
+         <p style="color:#111;margin:0 0 10px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Kontekst</p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           ${infoRows.map(([k, v]) => `<tr><td style="padding:3px 12px 3px 0;color:#6b7280;vertical-align:top;width:130px;white-space:nowrap">${k}</td><td style="padding:3px 0;color:#111;word-break:break-word">${v}</td></tr>`).join('')}
+         </table>
+       </div>`
     : '';
 
   const hour = getCETHour();
   const inWindow = (channel === 'email') || (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END);
   const timingNote = (channel === 'email')
-    ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">⏰ Email bo poslan v 2-5 minutah po potrditvi.</p>`
+    ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Email bo poslan v 2-5 minutah po potrditvi.</p>`
     : inWindow
-      ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">⏰ Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
-      : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">⏰ Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
+      ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
+      : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
 
   const html = `
-    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#fff">
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
-        <h2 style="margin:0 0 6px;font-size:18px;color:#111">
-          ${channelLabel} &mdash; ${leadData.firstName} ${leadData.lastName}
-        </h2>
-        ${profileLink}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          ${channelBadge}${intentBadge}${accountBadge}
+        </div>
+        <h2 style="margin:0;font-size:20px;color:#111;font-weight:700">${leadData.firstName} ${leadData.lastName} ${actionLabel}</h2>
       </div>
       ${messageSection}
-      <p style="color:#555;margin:0 0 8px;font-size:14px"><strong>Predlog odgovora:</strong></p>
-      <div style="border-left:3px solid #2563eb;padding:12px 16px;background:#eff6ff;margin-bottom:28px;font-size:15px;line-height:1.7;color:#1e3a5f;white-space:pre-wrap">
-${draft}
+      ${infoPanel}
+      <div style="margin-bottom:24px">
+        <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Predlog odgovora</p>
+        <div style="border-left:3px solid #2563eb;padding:14px 18px;background:#eff6ff;font-size:15px;line-height:1.7;color:#1e3a5f;white-space:pre-wrap;border-radius:4px">${draft.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
       </div>
       ${offerUrl ? `
-      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px 16px;margin-bottom:20px">
-        <p style="margin:0 0 6px;font-weight:700;color:#15803d;font-size:13px">🎯 OFFER PAGE GENERIRANA</p>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px 18px;margin-bottom:24px">
+        <p style="margin:0 0 6px;font-weight:700;color:#15803d;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">Offer page generirana</p>
         <a href="${offerUrl}" style="color:#16a34a;font-size:14px;word-break:break-all;font-weight:600">${offerUrl}</a>
-        <p style="margin:6px 0 0;color:#6b7280;font-size:11px">Vključi link v email ali ga pošlji ločeno kot follow-up.</p>
       </div>
       ` : ''}
-      <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
         <a href="${base}/approve/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
-           style="background:#16a34a;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
-          POŠLJI
-        </a>
+           style="background:#16a34a;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">POŠLJI</a>
         <a href="${base}/edit/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
-           style="background:#2563eb;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">
-          UREDI
-        </a>
+           style="background:#2563eb;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">UREDI</a>
         <a href="${base}/dismiss/${id}"
-           style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">
-          ZAVRNI
-        </a>
+           style="background:#f3f4f6;color:#6b7280;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">ZAVRNI</a>
       </div>
       ${timingNote}
-      <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot</p>
+      <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · ID ${id.substring(0,8)}</p>
     </div>
   `;
+
+  // Subject: pack intent + account so it's scannable in inbox
+  const subjectIntent = leadData.intent ? ` ${leadData.intent.toUpperCase()}` : '';
+  const subjectAccount = leadData.accountFirstName ? ` →${leadData.accountFirstName}` : '';
+  const channelTag = channel === 'linkedin' ? 'LI' : 'EMAIL';
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -836,7 +886,7 @@ ${draft}
     body: JSON.stringify({
       from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
       to: process.env.MY_EMAIL,
-      subject: `[${channel === 'linkedin' ? 'LI' : 'EMAIL'}] ${leadData.firstName} ${leadData.lastName} ${actionLabel}`,
+      subject: `[${channelTag}${subjectIntent}${subjectAccount}] ${leadData.firstName} ${leadData.lastName} ${actionLabel}`,
       html
     })
   });
@@ -1584,16 +1634,21 @@ app.get('/trigger-followups', async (req, res) => {
 app.post('/webhook/instantly', async (req, res) => {
   res.sendStatus(200);
   try {
-    const { first_name, last_name, company_name, email_reply_text, email_uuid, email_subject } = req.body;
+    const { first_name, last_name, company_name, email_reply_text, email_uuid, email_subject, lead_email } = req.body;
     const leadData = {
       firstName: first_name || 'Unknown',
       lastName: last_name || '',
       company: company_name || 'Unknown',
       theirMessage: email_reply_text || '',
       emailUuid: email_uuid,
-      subject: email_subject
+      subject: email_subject,
+      email: lead_email || req.body.email || '',
+      accountName: 'Žan Bagarič',
+      accountFirstName: 'Žan',
+      source: 'instantly-webhook'
     };
     if (!leadData.theirMessage) return;
+    leadData.intent = await classifyIntent(leadData.theirMessage);
     const draft = await generateReply('email', leadData, leadData.theirMessage);
     const id = uuidv4();
     storePending(id, { channel: 'email', leadData, draft });
@@ -1698,6 +1753,9 @@ app.post('/webhook/linkedin', async (req, res) => {
       linkedinUrl: parsed.linkedinUrl,
       notificationType: parsed.notificationType,
       rawSubject: subject,
+      accountName: 'Žan Bagarič',
+      accountFirstName: 'Žan',
+      source: 'linkedin-email-notif'
     };
 
     if (!leadData.linkedinUrl) {
@@ -1708,6 +1766,7 @@ app.post('/webhook/linkedin', async (req, res) => {
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
       const intent = await classifyIntent(parsed.message);
+      leadData.intent = intent;
       console.log(`[LINKEDIN] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
 
       if (intent === 'negative') {
@@ -1775,6 +1834,9 @@ app.post('/webhook/vesna', async (req, res) => {
       linkedinUrl: parsed.linkedinUrl,
       notificationType: parsed.notificationType,
       rawSubject: subject,
+      accountName: 'Vesna Pevec',
+      accountFirstName: 'Vesna',
+      source: 'vesna-email-notif'
     };
 
     let notificationContext = '';
@@ -1787,6 +1849,7 @@ app.post('/webhook/vesna', async (req, res) => {
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
       const intent = await classifyIntent(parsed.message);
+      leadData.intent = intent;
       console.log(`[VESNA] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
 
       if (intent === 'negative') {
@@ -1891,25 +1954,65 @@ app.get('/edit/:id', (req, res) => {
   if (!pending) return res.status(404).send(page('Ni najdeno', '<p>Not found.</p>'));
 
   const dParam = req.query.d ? `?d=${req.query.d}` : '';
+  const ld = pending.leadData || {};
+  const channel = pending.channel || '';
+
+  const intentColors = {
+    positive: { bg: '#dcfce7', text: '#15803d', label: 'POZITIVNO' },
+    negative: { bg: '#fee2e2', text: '#b91c1c', label: 'NEGATIVNO' },
+    soft_negative: { bg: '#fef3c7', text: '#a16207', label: 'MEHKO NEGATIVNO' },
+    question: { bg: '#dbeafe', text: '#1d4ed8', label: 'VPRAŠANJE' },
+    neutral: { bg: '#f3f4f6', text: '#4b5563', label: 'NEVTRALNO' }
+  };
+  const intentStyle = intentColors[ld.intent] || null;
+  const intentBadge = intentStyle
+    ? `<span style="background:${intentStyle.bg};color:${intentStyle.text};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">${intentStyle.label}</span>`
+    : '';
+  const channelBadge = channel
+    ? `<span style="background:${channel === 'linkedin' || channel === 'vesna' ? '#0a66c2' : '#059669'};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">${(channel === 'vesna' ? 'LINKEDIN' : channel.toUpperCase())}</span>`
+    : '';
+  const accountBadge = ld.accountName
+    ? `<span style="background:#eef2ff;color:#4338ca;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700">→ ${ld.accountName}</span>`
+    : '';
+
+  const infoRows = [];
+  if (ld.email) infoRows.push(['Email', `<a href="mailto:${ld.email}" style="color:#2563eb">${ld.email}</a>`]);
+  if (ld.linkedinUrl) infoRows.push(['LinkedIn', `<a href="${ld.linkedinUrl}" target="_blank" style="color:#0a66c2">${ld.linkedinUrl.replace('https://www.','')}</a>`]);
+  if (ld.title) infoRows.push(['Vloga', ld.title]);
+  if (ld.company && ld.company !== 'LinkedIn') infoRows.push(['Podjetje', ld.company]);
+  if (ld.industry) infoRows.push(['Industrija', ld.industry]);
+  if (ld.employees) infoRows.push(['Velikost', `${ld.employees} zaposlenih`]);
+  if (ld.seniority) infoRows.push(['Seniorost', ld.seniority]);
+  const loc = [ld.city, ld.country].filter(Boolean).join(', ');
+  if (loc) infoRows.push(['Lokacija', loc]);
+  if (ld.campaignName) infoRows.push(['Kampanja', ld.campaignName]);
+  if (ld.notificationType) infoRows.push(['Tip dogodka', ld.notificationType]);
+  if (ld.eventType) infoRows.push(['Outflo event', ld.eventType]);
+  if (ld.source) infoRows.push(['Vir', ld.source]);
+  if (ld.messageSentAt) infoRows.push(['Poslano ob', ld.messageSentAt]);
+  if (ld.subject) infoRows.push(['Subject', ld.subject]);
+
+  const infoPanel = infoRows.length
+    ? `<div style="background:#fafafa;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-bottom:20px">
+         <p style="color:#111;margin:0 0 10px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Kontekst</p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           ${infoRows.map(([k,v]) => `<tr><td style="padding:3px 12px 3px 0;color:#6b7280;vertical-align:top;width:130px;white-space:nowrap">${k}</td><td style="padding:3px 0;color:#111;word-break:break-word">${v}</td></tr>`).join('')}
+         </table>
+       </div>`
+    : '';
+
   res.send(page('Uredi odgovor', `
-    <h2 style="font-size:18px;margin:0 0 16px">Uredi odgovor</h2>
-    <p style="color:#555;margin:0 0 4px">
-      <strong>${pending.leadData.firstName} ${pending.leadData.lastName}</strong>
-      &mdash; ${pending.leadData.company}
-    </p>
-    <p style="color:#888;font-size:13px;margin:0 0 12px">Njihovo sporočilo:</p>
-    <div style="border-left:3px solid #d1d5db;padding:8px 14px;color:#555;margin-bottom:20px;background:#f9fafb;font-size:14px">
-      ${pending.leadData.theirMessage ? pending.leadData.theirMessage.replace(/\n/g, '<br>') : '<em style="color:#999">Besedilo ni bilo v emailu.</em>'}
-    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${channelBadge}${intentBadge}${accountBadge}</div>
+    <h2 style="font-size:20px;margin:0 0 16px">${ld.firstName} ${ld.lastName}</h2>
+    <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
+    <div style="border-left:3px solid #111;padding:12px 16px;color:#222;margin-bottom:20px;background:#f9fafb;font-size:14px;line-height:1.6;border-radius:4px;white-space:pre-wrap">${ld.theirMessage ? ld.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') : '<em style="color:#999">Besedilo ni bilo v emailu.</em>'}</div>
+    ${infoPanel}
+    <p style="color:#111;margin:0 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Predlog odgovora</p>
     <form method="POST" action="/edit/${req.params.id}${dParam}">
-      <textarea name="draft" style="width:100%;height:180px;padding:12px;font-size:15px;border:1px solid #ddd;border-radius:6px;line-height:1.6;box-sizing:border-box">${pending.draft}</textarea>
+      <textarea name="draft" style="width:100%;height:200px;padding:12px;font-size:15px;border:1px solid #ddd;border-radius:6px;line-height:1.6;box-sizing:border-box;font-family:inherit">${pending.draft}</textarea>
       <div style="display:flex;gap:12px;margin-top:12px">
-        <button type="submit" style="background:#16a34a;color:#fff;padding:12px 28px;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer">
-          POŠLJI
-        </button>
-        <a href="/dismiss/${req.params.id}${dParam}" style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;border:1px solid #e5e7eb">
-          ZAVRNI
-        </a>
+        <button type="submit" style="background:#16a34a;color:#fff;padding:12px 28px;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer">POŠLJI</button>
+        <a href="/dismiss/${req.params.id}${dParam}" style="background:#f3f4f6;color:#6b7280;padding:12px 28px;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;border:1px solid #e5e7eb">ZAVRNI</a>
       </div>
     </form>
     <p style="color:#888;font-size:12px;margin-top:12px">Če popraviš besedilo, bot shrani primer in se nauči za naslednjič.</p>
@@ -2188,9 +2291,14 @@ async function pollInstantlyReplies() {
         company: item.from_address_email?.split('@')[1] || 'Unknown',
         theirMessage: item.body?.text || item.body?.html?.replace(/<[^>]+>/g, '') || item.preview || '',
         emailUuid: item.id || item.message_id,
-        subject: item.subject || ''
+        subject: item.subject || '',
+        email: item.from_address_email || '',
+        accountName: 'Žan Bagarič',
+        accountFirstName: 'Žan',
+        source: 'instantly-poll'
       };
       if (!leadData.theirMessage) continue;
+      leadData.intent = await classifyIntent(leadData.theirMessage);
       const draft = await generateReply('email', leadData, leadData.theirMessage);
       const id = uuidv4();
       storePending(id, { channel: 'email', leadData, draft });
@@ -2369,11 +2477,15 @@ async function pollLinkedInInbox() {
         theirMessage: body,
         linkedinUrl,
         notificationType: 'replied',
-        rawSubject: `${firstName} sent a message (polled)`
+        rawSubject: `${firstName} sent a message (polled)`,
+        accountName: 'Žan Bagarič',
+        accountFirstName: 'Žan',
+        source: 'linkedin-poll'
       };
 
       // Classify intent
       const intent = await classifyIntent(body);
+      leadData.intent = intent;
       console.log(`[POLL] Intent: ${intent} | ${firstName} ${lastName}`);
       if (intent === 'negative') continue;
 
@@ -2573,7 +2685,18 @@ app.post('/webhook/outflo', async (req, res) => {
       title: apolloData?.title || '',
       industry: apolloData?.industry || '',
       employees: apolloData?.employees || '',
-      seniority: apolloData?.seniority || ''
+      seniority: apolloData?.seniority || '',
+      city: apolloData?.city || '',
+      country: apolloData?.country || '',
+      theirMessage: messageText,
+      intent,
+      campaignName,
+      accountName: acct.full_name || (isVesna ? 'Vesna Pevec' : 'Žan Bagarič'),
+      accountFirstName: acct.first_name || (isVesna ? 'Vesna' : 'Žan'),
+      eventType,
+      conversationId: payload.conversation_id || '',
+      messageSentAt: msg.sent_at || '',
+      source: isVesna ? 'outflo-vesna' : 'outflo-zan'
     };
 
     let draft;
