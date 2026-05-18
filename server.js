@@ -1426,6 +1426,19 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
       const senderUrl = channel === 'vesna' ? VESNA_LINKEDIN_URL : (leadData.senderUrl || null);
       await sendViaOutflo(leadData.linkedinUrl, liReply, senderUrl);
 
+      // Mark "Asked for Email" in Airtable so cold cron can pick it up
+      (async () => {
+        try {
+          const filter = encodeURIComponent(`{LinkedIn URL}="${leadData.linkedinUrl}"`);
+          const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+          if (r?.records?.length > 0) {
+            await airtableRequest('PATCH', `${AT_LEADS}/${r.records[0].id}`, {
+              fields: { 'Asked for Email': 'Yes' }
+            });
+          }
+        } catch {}
+      })();
+
       airtableLogMessage(
         `${leadData.firstName} ${leadData.lastName}`,
         leadData.linkedinUrl, 'outbound', 'ask_email', null, liReply, true
@@ -1657,6 +1670,238 @@ async function processFollowups() {
 app.get('/trigger-followups', async (req, res) => {
   res.json({ status: 'running' });
   await processFollowups();
+});
+
+// ─── COLD LEAD CRON (3-day LinkedIn silence → first email outreach) ──────────
+
+const COLD_LEAD_DAYS = parseInt(process.env.COLD_LEAD_DAYS || '3', 10);
+
+const COLD_REACH_PROMPT = `You write very short Slovenian follow-up emails (3-4 sentences max) sent by Žan Bagarič, CEO of AIERA (aiera.si).
+
+Context: We asked this person for their email on LinkedIn but they didn't reply. We found their email and are reaching out directly as a soft second touch. Keep it light and curious, not pushy.
+
+Rules:
+- Slovenian, šumniki correct (š, č, ž)
+- NEVER use dashes. Use commas or periods.
+- Never use negative words: problem, težava, izziv
+- Vikamo (Vi, Vas, Vam) - never tikamo
+- Mention LinkedIn briefly in first sentence
+- One soft CTA: 15-min klic or simple question
+- No bullet points, no hard sell, no emojis
+- Sign as: Žan Bagarič, AIERA
+- Max 4 sentences total`;
+
+async function generateColdReachEmail(leadData) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const prompt = `Lead: ${leadData.firstName} ${leadData.lastName}
+Company context: ${leadData.company || 'unknown'}
+Their last LinkedIn message: "${leadData.lastMessage || '(no message recorded)'}"
+
+Write the cold follow-up email. Return JSON: { "subject": "...", "body": "..." }`;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 300,
+    system: COLD_REACH_PROMPT,
+    messages: [{ role: 'user', content: prompt }]
+  });
+
+  try {
+    const text = response.content[0].text.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  } catch {}
+  return {
+    subject: `${leadData.firstName}, kratko vprašanje`,
+    body: `${leadData.firstName}, sem Žan iz AIERA. Kratko sva se pogovarjala na LinkedInu, a sem izgubil nit.\n\nAli bi imeli 15 minut za kratek klic ta teden?\n\nLep pozdrav,\nŽan Bagarič, AIERA`
+  };
+}
+
+async function airtableFindColdLeads() {
+  if (!AIRTABLE_PAT) return [];
+  try {
+    const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const formula = encodeURIComponent(
+      `AND({Asked for Email}="Yes", {Email}!="", IS_BEFORE({Last Activity}, "${cutoff}"), {Cold Email Sent At}=BLANK(), {Booked At}=BLANK())`
+    );
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
+    if (!r?.records) return [];
+    return r.records.map(rec => ({
+      recordId: rec.id,
+      leadName: rec.fields['Lead Name'] || '',
+      linkedinUrl: rec.fields['LinkedIn URL'] || '',
+      email: rec.fields['Email'] || '',
+      company: rec.fields['Campaign'] || '',
+      lastMessage: rec.fields['Last Message'] || ''
+    })).filter(x => x.email);
+  } catch (e) {
+    console.error('[COLD] find error:', e.message);
+    return [];
+  }
+}
+
+async function airtableMarkColdEmailQueued(recordId) {
+  if (!AIRTABLE_PAT || !recordId) return;
+  try {
+    await airtableRequest('PATCH', `${AT_LEADS}/${recordId}`, {
+      fields: { 'Cold Email Sent At': new Date().toISOString() }
+    });
+  } catch (e) {
+    console.error('[COLD] markQueued error:', e.message);
+  }
+}
+
+async function processColdLinkedInLeads() {
+  try {
+    const candidates = await airtableFindColdLeads();
+    if (candidates.length === 0) return;
+    console.log(`[COLD] ${candidates.length} cold lead(s) for email approval`);
+
+    for (const c of candidates) {
+      try {
+        const nameParts = c.leadName.trim().split(' ');
+        const leadData = {
+          firstName: nameParts[0] || 'Lead',
+          lastName: nameParts.slice(1).join(' '),
+          company: c.company || '',
+          linkedinUrl: c.linkedinUrl,
+          lastMessage: c.lastMessage
+        };
+
+        const { subject, body } = await generateColdReachEmail(leadData);
+
+        const id = uuidv4();
+        storePending(id, {
+          kind: 'email_handoff',
+          mode: 'send_email',
+          channel: 'linkedin',
+          leadData,
+          recipientEmail: c.email,
+          emailSubject: subject,
+          emailBody: body,
+          liReply: null,
+          source: 'cold-cron'
+        });
+
+        await sendHandoffApprovalEmail(id, leadData, {
+          mode: 'send_email',
+          recipientEmail: c.email,
+          subject: `[COLD OUTREACH] ${subject}`,
+          body,
+          liReply: null
+        });
+
+        await airtableMarkColdEmailQueued(c.recordId);
+        console.log(`[COLD] Approval queued: ${c.leadName} → ${c.email}`);
+      } catch (e) {
+        console.error('[COLD] per-lead error:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('[COLD] processColdLinkedInLeads error:', err.message);
+  }
+}
+
+app.get('/trigger-cold-outreach', async (req, res) => {
+  res.json({ status: 'running' });
+  await processColdLinkedInLeads();
+});
+
+// ─── LI FOLLOWUP CRON (3-day general silence → LinkedIn nudge) ───────────────
+
+const LI_FOLLOWUP_PROMPT = `You write very short Slovenian LinkedIn follow-up messages (2-3 sentences max) sent by Žan Bagarič from AIERA.
+
+Context: This person replied to a LinkedIn outreach some days ago but then went silent. You're sending a gentle nudge.
+
+Rules:
+- First name only
+- Light, no pressure, no hard sell
+- One simple question or CTA
+- Sign off as Žan
+- Max 3 sentences`;
+
+async function generateLiFollowupMessage(leadData) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 150,
+    system: LI_FOLLOWUP_PROMPT,
+    messages: [{ role: 'user', content: `Lead: ${leadData.firstName} ${leadData.lastName}\nCompany: ${leadData.company || 'unknown'}\nLast message from them: "${leadData.lastMessage || '(no message)'}"\n\nWrite the LinkedIn nudge.` }]
+  });
+  return response.content[0].text.trim();
+}
+
+async function airtableFindSilentLeads() {
+  if (!AIRTABLE_PAT) return [];
+  try {
+    const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const formula = encodeURIComponent(
+      `AND({Status}="Replied", IS_BEFORE({Last Activity}, "${cutoff}"), {LI Followup Sent At}=BLANK(), {Asked for Email}=BLANK(), {Booked At}=BLANK())`
+    );
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
+    if (!r?.records) return [];
+    return r.records.map(rec => ({
+      recordId: rec.id,
+      leadName: rec.fields['Lead Name'] || '',
+      linkedinUrl: rec.fields['LinkedIn URL'] || '',
+      company: rec.fields['Campaign'] || '',
+      lastMessage: rec.fields['Last Message'] || '',
+      channel: rec.fields['Channel'] || 'linkedin'
+    })).filter(x => x.linkedinUrl);
+  } catch (e) {
+    console.error('[LI-FOLLOWUP] find error:', e.message);
+    return [];
+  }
+}
+
+async function processLiFollowups() {
+  try {
+    const candidates = await airtableFindSilentLeads();
+    if (candidates.length === 0) return;
+    console.log(`[LI-FOLLOWUP] ${candidates.length} silent lead(s) for LinkedIn nudge approval`);
+
+    for (const c of candidates) {
+      try {
+        const nameParts = c.leadName.trim().split(' ');
+        const leadData = {
+          firstName: nameParts[0] || 'Lead',
+          lastName: nameParts.slice(1).join(' '),
+          company: c.company || '',
+          linkedinUrl: c.linkedinUrl,
+          lastMessage: c.lastMessage
+        };
+
+        const nudge = await generateLiFollowupMessage(leadData);
+        const id = uuidv4();
+
+        storePending(id, {
+          kind: 'reply',
+          channel: c.channel === 'vesna' ? 'vesna' : 'linkedin',
+          leadData,
+          draft: nudge,
+          source: 'li-followup-cron'
+        });
+
+        await sendApprovalEmail(id, leadData, nudge, 'linkedin');
+
+        // Mark to prevent re-sending
+        await airtableRequest('PATCH', `${AT_LEADS}/${c.recordId}`, {
+          fields: { 'LI Followup Sent At': new Date().toISOString() }
+        });
+
+        console.log(`[LI-FOLLOWUP] Queued: ${c.leadName}`);
+      } catch (e) {
+        console.error('[LI-FOLLOWUP] per-lead error:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('[LI-FOLLOWUP] error:', err.message);
+  }
+}
+
+app.get('/trigger-li-followups', async (req, res) => {
+  res.json({ status: 'running' });
+  await processLiFollowups();
 });
 
 // ─── WEBHOOK: INSTANTLY ───────────────────────────────────────────────────────
@@ -2705,10 +2950,14 @@ app.post('/webhook/outflo', async (req, res) => {
     const firstName = nameParts[0] || 'Lead';
     const lastName = nameParts.slice(1).join(' ') || '';
 
-    // Apollo enrichment (1 credit per call)
-    const apolloData = await enrichLeadWithApollo(leadProfileUrl);
+    // Apollo enrichment - only for interested leads (skip negatives to save credits)
+    const apolloData = (intent !== 'negative')
+      ? await enrichLeadWithApollo(leadProfileUrl)
+      : null;
     if (apolloData) {
       console.log(`[APOLLO] ${apolloData.companyName} | ${apolloData.employees} emp | ${apolloData.industry}`);
+    } else if (intent === 'negative') {
+      console.log(`[APOLLO] Skipped - negative intent`);
     }
 
     const leadData = {
@@ -3045,6 +3294,14 @@ app.listen(PORT, () => {
   // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 6h
   setTimeout(processFollowups, 60 * 1000);
   setInterval(processFollowups, 6 * 60 * 60 * 1000);
+
+  // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
+  setTimeout(processLiFollowups, 75 * 1000);
+  setInterval(processLiFollowups, 6 * 60 * 60 * 1000);
+
+  // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
+  setTimeout(processColdLinkedInLeads, 90 * 1000);
+  setInterval(processColdLinkedInLeads, 6 * 60 * 60 * 1000);
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
