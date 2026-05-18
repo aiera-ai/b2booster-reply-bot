@@ -401,7 +401,6 @@ LANGUAGE: Slovenian throughout. Use correct šumniki (š, č, ž). No em dashes.
 
 ABOUT AIERA:
 AI automation agency for B2B companies. CEO: Žan Bagarič, +386 40 708 327, zan@aiera.si
-Clients: Toyota Slovenija, Hidria, SavingsBlue
 
 CORE SERVICES (choose 2-3 most relevant to the lead's industry):
 1. AI Sales Machine - automated LinkedIn + email outreach, reply bots, lead nurturing
@@ -1007,7 +1006,6 @@ CONTEXT: The lead asked on LinkedIn for details/offer/presentation via email. Yo
 
 ABOUT AIERA / B2Booster:
 AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
-Clients: Toyota Slovenija, Hidria, SavingsBlue.
 
 WRITING RULES (strict):
 - Slovenian, šumniki correct (š, č, ž)
@@ -1531,14 +1529,21 @@ app.post('/edit/email-handoff/:id', async (req, res) => {
   res.redirect(`/approve/email-handoff/${id}`);
 });
 
-// ─── FOLLOW-UP CRON (3-day after Offer Sent (Email)) ─────────────────────────
+// ─── FOLLOW-UP CRON (3-touch sequence after Offer Sent (Email)) ──────────────
+// Step 1: gentle nudge (Day +3 after Email Sent At)
+// Step 2: value-add / curiosity hook (Day +7 after Step 1)
+// Step 3: breakup mail (Day +14 after Step 2) - best conversion, closes the loop
 
-const FOLLOWUP_DAYS = parseInt(process.env.FOLLOWUP_DAYS || '3', 10);
-const FOLLOWUP_SENT_FIELD = 'Followup Sent At'; // optional - we skip leads where this is set
+const FOLLOWUP_STEP_1_DAYS = parseInt(process.env.FOLLOWUP_STEP_1_DAYS || process.env.FOLLOWUP_DAYS || '3', 10);
+const FOLLOWUP_STEP_2_DAYS = parseInt(process.env.FOLLOWUP_STEP_2_DAYS || '7', 10);
+const FOLLOWUP_STEP_3_DAYS = parseInt(process.env.FOLLOWUP_STEP_3_DAYS || '14', 10);
+const FOLLOWUP_SENT_FIELD = 'Followup Sent At'; // timestamp of last followup
+const FOLLOWUP_STEP_FIELD = 'Followup Step'; // 0/blank = none sent yet; 1, 2, 3 = step last sent
 
-const FOLLOWUP_PROMPT = `You write very short Slovenian follow-up emails (3 sentences max) sent by Žan Bagarič.
+const FOLLOWUP_PROMPTS = {
+  1: `You write very short Slovenian follow-up emails (3 sentences max) sent by Žan Bagarič.
 
-Context: 3 days ago we sent an offer/presentation email after a LinkedIn conversation. No response yet. We send a gentle nudge.
+Context: ${FOLLOWUP_STEP_1_DAYS} days ago we sent an offer/presentation email after a LinkedIn conversation. No response yet. We send a gentle nudge.
 
 Rules:
 - Slovenian, šumniki correct
@@ -1553,64 +1558,154 @@ SUBJECT: <subject>
 
 <body>
 
-Return only that format. No commentary.`;
+Return only that format. No commentary.`,
 
-async function generateFollowupEmail(leadData) {
+  2: `You write short Slovenian follow-up emails (4 sentences max) sent by Žan Bagarič.
+
+Context: This is the SECOND follow-up. First nudge ${FOLLOWUP_STEP_2_DAYS} days ago got no reply. Now we bring a small value-add: one concrete insight or angle relevant to their role/industry that makes opening the original offer worth it. NOT pushy. Curiosity-driven.
+
+Rules:
+- Slovenian, šumniki correct
+- No dashes
+- No negative words (problem, težava, izziv)
+- Vikamo
+- 4 sentences max
+- Open with a concrete observation about their industry or role (NOT "še vedno aktualno"; that was step 1)
+- Reference the earlier email briefly: "v predlogu ki sem ga poslal pred časom"
+- One soft CTA: link to 15-min Calendly: [CALENDLY_15MIN]
+- Sign: Žan Bagarič
+- Format:
+SUBJECT: <subject>
+
+<body>
+
+Return only that format. No commentary.`,
+
+  3: `You write a Slovenian breakup follow-up email (3 sentences max) sent by Žan Bagarič.
+
+Context: This is the THIRD and FINAL follow-up. Two earlier touches got no reply. This is the classic "closing the loop" mail: polite, low-pressure, gives them an easy out, but leaves the door open. Counterintuitively, this style has the highest conversion of the sequence because it removes pressure.
+
+Rules:
+- Slovenian, šumniki correct
+- No dashes
+- No negative words (problem, težava, izziv)
+- Vikamo
+- 3 sentences max
+- Tone: warm, professional, no guilt-tripping
+- Frame: "če zdaj ni pravi čas, samo dajte vedeti in zaključim, ne bom več motil. Če pa kdaj postane aktualno, sem na voljo."
+- Do NOT include a Calendly link in step 3 (we are closing the loop, not pushing CTA)
+- Sign: Žan Bagarič
+- Format:
+SUBJECT: <subject>
+
+<body>
+
+Return only that format. No commentary.`
+};
+
+async function generateFollowupEmail(leadData, step = 1) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const stepNum = (step === 2 || step === 3) ? step : 1;
+  const systemPrompt = FOLLOWUP_PROMPTS[stepNum];
+
+  let userPrompt;
+  if (stepNum === 1) {
+    userPrompt = `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
+
+Write the gentle ${FOLLOWUP_STEP_1_DAYS}-day follow-up email (step 1 of 3).`;
+  } else if (stepNum === 2) {
+    userPrompt = `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
+${leadData.title ? `Role: ${leadData.title}` : ''}
+${leadData.industry ? `Industry: ${leadData.industry}` : ''}
+
+Write the value-add follow-up email (step 2 of 3). Lead with a concrete industry/role observation, NOT a "still relevant?" question.`;
+  } else {
+    userPrompt = `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
+
+Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, low pressure.`;
+  }
+
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 350,
-    system: FOLLOWUP_PROMPT,
-    messages: [{
-      role: 'user',
-      content: `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
-
-Write the 3-day follow-up email.`
-    }]
+    max_tokens: 400,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }]
   });
+
   let raw = response.content[0].text.trim();
   raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
-  let subject = `Še aktualno, ${leadData.firstName}?`;
+
+  let defaultSubject = `Še aktualno, ${leadData.firstName}?`;
+  if (stepNum === 2) defaultSubject = `Kratka misel za vas, ${leadData.firstName}`;
+  if (stepNum === 3) defaultSubject = `${leadData.firstName}, naj zaključim?`;
+
+  let subject = defaultSubject;
   let body = raw;
   const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
   if (subjMatch) {
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  return { subject, body };
+  return { subject, body, step: stepNum };
 }
 
 async function airtableFindLeadsForFollowup() {
   if (!AIRTABLE_PAT) return [];
+  // 3-touch sequence: query each step separately, attach nextStep to each candidate.
+  const cutoff1 = new Date(Date.now() - FOLLOWUP_STEP_1_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff2 = new Date(Date.now() - FOLLOWUP_STEP_2_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff3 = new Date(Date.now() - FOLLOWUP_STEP_3_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  // Step 1: never followed up yet + 3d since Email Sent At
+  const f1 = encodeURIComponent(
+    `AND({Status}="Offer Sent (Email)", IS_BEFORE({Email Sent At}, "${cutoff1}"), OR({${FOLLOWUP_STEP_FIELD}}=BLANK(), {${FOLLOWUP_STEP_FIELD}}=0), {Booked At}=BLANK())`
+  );
+  // Step 2: step 1 done + 7d since last followup
+  const f2 = encodeURIComponent(
+    `AND({Status}="Offer Sent (Email)", {${FOLLOWUP_STEP_FIELD}}=1, IS_BEFORE({${FOLLOWUP_SENT_FIELD}}, "${cutoff2}"), {Booked At}=BLANK())`
+  );
+  // Step 3: step 2 done + 14d since last followup
+  const f3 = encodeURIComponent(
+    `AND({Status}="Offer Sent (Email)", {${FOLLOWUP_STEP_FIELD}}=2, IS_BEFORE({${FOLLOWUP_SENT_FIELD}}, "${cutoff3}"), {Booked At}=BLANK())`
+  );
+
+  const out = [];
+  const mapRec = (rec, nextStep) => ({
+    recordId: rec.id,
+    leadName: rec.fields['Lead Name'] || '',
+    linkedinUrl: rec.fields['LinkedIn URL'] || '',
+    email: rec.fields['Email'] || '',
+    company: rec.fields['Campaign'] || '',
+    title: rec.fields['Title'] || '',
+    industry: rec.fields['Industry'] || '',
+    emailSentAt: rec.fields['Email Sent At'] || '',
+    nextStep
+  });
+
   try {
-    const cutoff = new Date(Date.now() - FOLLOWUP_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    // Status = "Offer Sent (Email)" AND Email Sent At <= cutoff AND no Followup Sent At AND not Meeting Booked
-    // (Meeting Booked is set by Calendly webhook - skip followup if lead already booked a call.)
-    const formula = encodeURIComponent(
-      `AND({Status}="Offer Sent (Email)", IS_BEFORE({Email Sent At}, "${cutoff}"), {Followup Sent At}=BLANK(), {Booked At}=BLANK())`
-    );
-    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=20`);
-    if (!r?.records) return [];
-    return r.records.map(rec => ({
-      recordId: rec.id,
-      leadName: rec.fields['Lead Name'] || '',
-      linkedinUrl: rec.fields['LinkedIn URL'] || '',
-      email: rec.fields['Email'] || '',
-      company: rec.fields['Campaign'] || '',
-      emailSentAt: rec.fields['Email Sent At'] || ''
-    })).filter(x => x.email && x.linkedinUrl);
-  } catch (e) {
-    console.error('[FOLLOWUP] find error:', e.message);
-    return [];
-  }
+    const r1 = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${f1}&maxRecords=20`);
+    if (r1?.records) out.push(...r1.records.map(r => mapRec(r, 1)));
+  } catch (e) { console.error('[FOLLOWUP] step1 find error:', e.message); }
+
+  try {
+    const r2 = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${f2}&maxRecords=20`);
+    if (r2?.records) out.push(...r2.records.map(r => mapRec(r, 2)));
+  } catch (e) { console.error('[FOLLOWUP] step2 find error:', e.message); }
+
+  try {
+    const r3 = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${f3}&maxRecords=20`);
+    if (r3?.records) out.push(...r3.records.map(r => mapRec(r, 3)));
+  } catch (e) { console.error('[FOLLOWUP] step3 find error:', e.message); }
+
+  return out.filter(x => x.email && x.linkedinUrl);
 }
 
-async function airtableMarkFollowupQueued(recordId) {
+async function airtableMarkFollowupQueued(recordId, newStep) {
   if (!AIRTABLE_PAT || !recordId) return;
   try {
-    await airtableRequest('PATCH', `${AT_LEADS}/${recordId}`, {
-      fields: { [FOLLOWUP_SENT_FIELD]: new Date().toISOString() }
-    });
+    const fields = { [FOLLOWUP_SENT_FIELD]: new Date().toISOString() };
+    if (newStep) fields[FOLLOWUP_STEP_FIELD] = newStep;
+    await airtableRequest('PATCH', `${AT_LEADS}/${recordId}`, { fields });
   } catch (e) {
     console.error('[FOLLOWUP] markQueued error:', e.message);
   }
@@ -1620,7 +1715,7 @@ async function processFollowups() {
   try {
     const candidates = await airtableFindLeadsForFollowup();
     if (candidates.length === 0) return;
-    console.log(`[FOLLOWUP] ${candidates.length} candidate(s) for follow-up approval`);
+    console.log(`[FOLLOWUP] ${candidates.length} candidate(s) across 3-touch sequence`);
 
     for (const c of candidates) {
       try {
@@ -1629,10 +1724,16 @@ async function processFollowups() {
           firstName: nameParts[0] || 'Lead',
           lastName: nameParts.slice(1).join(' '),
           company: c.company || '',
-          linkedinUrl: c.linkedinUrl
+          linkedinUrl: c.linkedinUrl,
+          title: c.title || '',
+          industry: c.industry || ''
         };
 
-        const { subject, body } = await generateFollowupEmail(leadData);
+        const { subject, body, step } = await generateFollowupEmail(leadData, c.nextStep);
+        const stepTag = `FOLLOW-UP ${step}/3`;
+        const liReply = step === 3
+          ? null // step 3 is a quiet loop-close; no LinkedIn nudge
+          : `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`;
 
         const id = uuidv4();
         storePending(id, {
@@ -1643,20 +1744,22 @@ async function processFollowups() {
           recipientEmail: c.email,
           emailSubject: subject,
           emailBody: body,
-          liReply: `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`,
-          source: 'followup-cron'
+          liReply,
+          source: `followup-cron-step-${step}`,
+          followupStep: step,
+          followupRecordId: c.recordId
         });
 
         await sendHandoffApprovalEmail(id, leadData, {
           mode: 'send_email',
           recipientEmail: c.email,
-          subject: `[FOLLOW-UP] ${subject}`,
+          subject: `[${stepTag}] ${subject}`,
           body,
-          liReply: `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`
+          liReply
         });
 
-        await airtableMarkFollowupQueued(c.recordId);
-        console.log(`[FOLLOWUP] Approval queued: ${c.leadName}`);
+        await airtableMarkFollowupQueued(c.recordId, step);
+        console.log(`[FOLLOWUP] Approval queued (step ${step}/3): ${c.leadName}`);
       } catch (e) {
         console.error('[FOLLOWUP] per-lead error:', e.message);
       }
