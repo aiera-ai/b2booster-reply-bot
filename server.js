@@ -110,45 +110,203 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
 
-function loadPending() {
+// ─── PENDING STORE ────────────────────────────────────────────────────────────
+// Backed by Airtable "Pending" table when AIRTABLE_PAT is set (survives restarts);
+// falls back to local pending.json on disk otherwise.
+
+const AT_PENDING = process.env.AIRTABLE_PENDING_TABLE_ID || 'tblNV1AHq1VkyBcI5';
+const USE_AT_PENDING = !!AIRTABLE_PAT;
+
+// Disk helpers (fallback only)
+function loadPendingDisk() {
   if (!fs.existsSync(PENDING_FILE)) return {};
   try { return JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')); }
   catch { return {}; }
 }
-
-function storePending(id, data) {
-  const all = loadPending();
-  all[id] = { ...data, createdAt: new Date().toISOString(), status: 'pending' };
+function writePendingDisk(all) {
   fs.writeFileSync(PENDING_FILE, JSON.stringify(all, null, 2));
 }
 
-function getPending(id) {
-  return loadPending()[id];
+// Map a pending Airtable record to the in-memory shape callers expect
+function _atRecordToPending(rec) {
+  if (!rec) return null;
+  let data = {};
+  try { data = JSON.parse(rec.fields?.Data || '{}'); } catch {}
+  return {
+    ...data,
+    _recordId: rec.id,
+    status: rec.fields?.Status || data.status || 'pending',
+    sendAt: rec.fields?.['Send At'] || data.sendAt || null,
+    createdAt: rec.fields?.['Created At'] || data.createdAt || null
+  };
 }
 
-function deletePending(id) {
-  const all = loadPending();
-  delete all[id];
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(all, null, 2));
+async function _atFindPendingRecord(id) {
+  const filter = encodeURIComponent(`{ID}="${id}"`);
+  const r = await airtableRequest('GET', `${AT_PENDING}?filterByFormula=${filter}&maxRecords=1`);
+  return r?.records?.[0] || null;
 }
 
-// Mark item as scheduled (persists through server restart)
-// pendingData fallback: if server restarted and file is empty, reconstruct from ?d= param data
-function markScheduled(id, draft, sendAt, pendingData = null) {
-  const all = loadPending();
-  if (!all[id]) {
-    if (!pendingData) {
-      console.error(`[QUEUE] markScheduled: ID ${id} not found and no fallback data`);
+async function loadPending() {
+  if (!USE_AT_PENDING) return loadPendingDisk();
+  const out = {};
+  let offset = null;
+  try {
+    do {
+      const url = `${AT_PENDING}?pageSize=100${offset ? `&offset=${encodeURIComponent(offset)}` : ''}`;
+      const r = await airtableRequest('GET', url);
+      if (!r?.records) break;
+      for (const rec of r.records) {
+        const id = rec.fields?.ID;
+        if (!id) continue;
+        out[id] = _atRecordToPending(rec);
+      }
+      offset = r.offset || null;
+    } while (offset);
+  } catch (e) {
+    console.error('[PENDING] loadPending error:', e.message);
+  }
+  return out;
+}
+
+async function storePending(id, data) {
+  if (!USE_AT_PENDING) {
+    const all = loadPendingDisk();
+    all[id] = { ...data, createdAt: new Date().toISOString(), status: 'pending' };
+    writePendingDisk(all);
+    return;
+  }
+  const payload = { ...data, createdAt: new Date().toISOString(), status: 'pending' };
+  try {
+    await airtableRequest('POST', AT_PENDING, {
+      records: [{
+        fields: {
+          ID: id,
+          Status: 'pending',
+          'Send At': '',
+          Data: JSON.stringify(payload).substring(0, 95000),
+          'Created At': new Date().toISOString()
+        }
+      }]
+    });
+  } catch (e) {
+    console.error('[PENDING] storePending error:', e.message);
+  }
+}
+
+async function getPending(id) {
+  if (!USE_AT_PENDING) {
+    return loadPendingDisk()[id];
+  }
+  try {
+    const rec = await _atFindPendingRecord(id);
+    return _atRecordToPending(rec);
+  } catch (e) {
+    console.error('[PENDING] getPending error:', e.message);
+    return null;
+  }
+}
+
+async function deletePending(id) {
+  if (!USE_AT_PENDING) {
+    const all = loadPendingDisk();
+    delete all[id];
+    writePendingDisk(all);
+    return;
+  }
+  try {
+    const rec = await _atFindPendingRecord(id);
+    if (!rec) return;
+    await airtableRequest('DELETE', `${AT_PENDING}/${rec.id}`);
+  } catch (e) {
+    console.error('[PENDING] deletePending error:', e.message);
+  }
+}
+
+// Mark item as scheduled (persists through server restart).
+// pendingData fallback: if record is missing (e.g. cleaned), reconstruct from ?d= param data.
+async function markScheduled(id, draft, sendAt, pendingData = null) {
+  if (!USE_AT_PENDING) {
+    const all = loadPendingDisk();
+    if (!all[id]) {
+      if (!pendingData) {
+        console.error(`[QUEUE] markScheduled: ID ${id} not found and no fallback data`);
+        return;
+      }
+      all[id] = { ...pendingData, createdAt: new Date().toISOString() };
+      console.log(`[QUEUE] Restored entry for ${id} from fallback data`);
+    }
+    all[id].status = 'scheduled';
+    all[id].draft = draft;
+    all[id].sendAt = sendAt;
+    writePendingDisk(all);
+    return;
+  }
+  try {
+    const rec = await _atFindPendingRecord(id);
+    if (!rec) {
+      if (!pendingData) {
+        console.error(`[QUEUE] markScheduled: ID ${id} not found in Airtable and no fallback data`);
+        return;
+      }
+      // Reconstruct from fallback data
+      const restored = {
+        ...pendingData,
+        draft,
+        sendAt,
+        status: 'scheduled',
+        createdAt: new Date().toISOString()
+      };
+      await airtableRequest('POST', AT_PENDING, {
+        records: [{
+          fields: {
+            ID: id,
+            Status: 'scheduled',
+            'Send At': sendAt,
+            Data: JSON.stringify(restored).substring(0, 95000),
+            'Created At': new Date().toISOString()
+          }
+        }]
+      });
+      console.log(`[QUEUE] Restored entry for ${id} from fallback data (Airtable)`);
       return;
     }
-    // Reconstruct entry from ?d= fallback data (server restarted, file was lost)
-    all[id] = { ...pendingData, createdAt: new Date().toISOString() };
-    console.log(`[QUEUE] Restored entry for ${id} from fallback data`);
+    let existing = {};
+    try { existing = JSON.parse(rec.fields?.Data || '{}'); } catch {}
+    const merged = { ...existing, draft, sendAt, status: 'scheduled' };
+    await airtableRequest('PATCH', `${AT_PENDING}/${rec.id}`, {
+      fields: {
+        Status: 'scheduled',
+        'Send At': sendAt,
+        Data: JSON.stringify(merged).substring(0, 95000)
+      }
+    });
+  } catch (e) {
+    console.error('[PENDING] markScheduled error:', e.message);
   }
-  all[id].status = 'scheduled';
-  all[id].draft = draft;
-  all[id].sendAt = sendAt;
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(all, null, 2));
+}
+
+// Merge arbitrary fields into a pending record's Data payload (used by /edit/email-handoff POST).
+async function updatePendingData(id, patch) {
+  if (!USE_AT_PENDING) {
+    const all = loadPendingDisk();
+    if (!all[id]) return;
+    all[id] = { ...all[id], ...patch };
+    writePendingDisk(all);
+    return;
+  }
+  try {
+    const rec = await _atFindPendingRecord(id);
+    if (!rec) return;
+    let existing = {};
+    try { existing = JSON.parse(rec.fields?.Data || '{}'); } catch {}
+    const merged = { ...existing, ...patch };
+    await airtableRequest('PATCH', `${AT_PENDING}/${rec.id}`, {
+      fields: { Data: JSON.stringify(merged).substring(0, 95000) }
+    });
+  } catch (e) {
+    console.error('[PENDING] updatePendingData error:', e.message);
+  }
 }
 
 // ─── TIMING & DELAYS ─────────────────────────────────────────────────────────
@@ -227,7 +385,7 @@ async function executeSend(id, item) {
     } else {
       await sendViaInstantly(leadData.emailUuid, draft, leadData.subject);
     }
-    deletePending(id);
+    await deletePending(id);
     console.log(`[QUEUE] Sent & removed: ${leadData.firstName} ${leadData.lastName} (${channel})`);
     // Log sent message to Airtable
     airtableLogMessage(
@@ -246,7 +404,7 @@ async function executeSend(id, item) {
 }
 
 async function processScheduledSends() {
-  const all = loadPending();
+  const all = await loadPending();
   const now = Date.now();
   const overdue = Object.entries(all).filter(
     ([, item]) => item.status === 'scheduled' && new Date(item.sendAt) <= now
@@ -302,6 +460,25 @@ const CALENDLY_LINK = process.env.CALENDLY_LINK || '[CALENDLY LINK]';
 const CALENDLY_AI_15MIN = process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar/aiera-ai';
 const VESNA_LINKEDIN_URL = process.env.VESNA_LINKEDIN_URL || 'https://www.linkedin.com/in/vesna-pevec-2110b8b4/';
 const HANDOFF_FROM_EMAIL = process.env.HANDOFF_FROM_EMAIL || 'Žan Bagarič <zan@aiera.si>';
+
+// ─── AUTO-SEND CONFIG (high-confidence positive replies) ─────────────────────
+// Quiet-hold pattern: eligible drafts skip manual POŠLJI and auto-send after
+// AUTO_SEND_HOLD_MIN minutes unless Žan clicks STOP. Conservative criteria below.
+const AUTO_SEND_ENABLED = (process.env.AUTO_SEND_ENABLED || 'false').toLowerCase() === 'true';
+const AUTO_SEND_HOLD_MIN = parseInt(process.env.AUTO_SEND_HOLD_MIN || '15', 10);
+const AUTO_SEND_MAX_DRAFT_CHARS = parseInt(process.env.AUTO_SEND_MAX_DRAFT_CHARS || '600', 10);
+
+function isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, isHandoff }) {
+  if (!AUTO_SEND_ENABLED) return false;
+  if (channel !== 'linkedin') return false;          // only Žan's LinkedIn (not Vesna, not email)
+  if (intent !== 'positive') return false;           // only clearly positive replies
+  if (!hasRealMessage) return false;                 // need real inbound text
+  if (isHandoff) return false;                       // handoff has its own approval flow
+  if (!leadData?.firstName) return false;            // need at least a name
+  if (leadData.accountFirstName && leadData.accountFirstName.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '') !== 'zan') return false;
+  if (!draft || draft.length > AUTO_SEND_MAX_DRAFT_CHARS) return false;
+  return true;
+}
 
 const STYLE_GUIDE = `
 You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
@@ -759,10 +936,11 @@ async function sendViaInstantly(replyToUuid, emailBody, subject) {
 
 // ─── SEND APPROVAL EMAIL VIA RESEND ───────────────────────────────────────────
 
-async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) {
+async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, autoSendAt = null) {
   const base = process.env.SERVER_URL || `http://localhost:${PORT}`;
   const channelLabel = channel === 'linkedin' ? 'LinkedIn' : 'Email';
   const channelBadgeColor = channel === 'linkedin' ? '#0a66c2' : '#059669';
+  const isAutoSend = !!autoSendAt;
 
   let actionLabel = 'sporočil';
   if (leadData.notificationType === 'accepted') actionLabel = 'sprejel povabilo';
@@ -834,14 +1012,42 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) 
 
   const hour = getCETHour();
   const inWindow = (channel === 'email') || (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END);
-  const timingNote = (channel === 'email')
-    ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Email bo poslan v 2-5 minutah po potrditvi.</p>`
-    : inWindow
-      ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
-      : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
+  const timingNote = isAutoSend
+    ? `<p style="color:#dc2626;font-size:13px;margin:16px 0 0;font-weight:600">AUTO-SEND aktiven. Pošlje ob ${formatSendTime(autoSendAt)} ČE ne klikneš STOP.</p>`
+    : (channel === 'email')
+      ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Email bo poslan v 2-5 minutah po potrditvi.</p>`
+      : inWindow
+        ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
+        : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
+
+  // Auto-send banner at the top (clearly different from manual approval)
+  const autoSendBanner = isAutoSend
+    ? `<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:14px 18px;margin-bottom:20px">
+         <p style="margin:0;color:#991b1b;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">AUTO-SEND v ${AUTO_SEND_HOLD_MIN} min</p>
+         <p style="margin:6px 0 0;color:#7f1d1d;font-size:13px">Visoko zaupanje (positive intent + Žan kanal). Pošlje samodejno ob <strong>${formatSendTime(autoSendAt)}</strong>. Klikni STOP če hočeš zavrniti, UREDI če hočeš popraviti.</p>
+       </div>`
+    : '';
+
+  // Action buttons - differ based on auto-send mode
+  const actionButtons = isAutoSend
+    ? `<div style="display:flex;gap:10px;flex-wrap:wrap">
+         <a href="${base}/stop/${id}"
+            style="background:#dc2626;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:700;font-size:15px;display:inline-block">STOP</a>
+         <a href="${base}/edit/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
+            style="background:#2563eb;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">UREDI</a>
+       </div>`
+    : `<div style="display:flex;gap:10px;flex-wrap:wrap">
+         <a href="${base}/approve/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
+            style="background:#16a34a;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">POŠLJI</a>
+         <a href="${base}/edit/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
+            style="background:#2563eb;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">UREDI</a>
+         <a href="${base}/dismiss/${id}"
+            style="background:#f3f4f6;color:#6b7280;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">ZAVRNI</a>
+       </div>`;
 
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+      ${autoSendBanner}
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${channelBadge}${intentBadge}${accountBadge}
@@ -860,14 +1066,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) 
         <a href="${offerUrl}" style="color:#16a34a;font-size:14px;word-break:break-all;font-weight:600">${offerUrl}</a>
       </div>
       ` : ''}
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <a href="${base}/approve/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
-           style="background:#16a34a;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">POŠLJI</a>
-        <a href="${base}/edit/${id}?d=${Buffer.from(JSON.stringify({ channel, leadData, draft })).toString('base64url')}"
-           style="background:#2563eb;color:#fff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block">UREDI</a>
-        <a href="${base}/dismiss/${id}"
-           style="background:#f3f4f6;color:#6b7280;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;display:inline-block;border:1px solid #e5e7eb">ZAVRNI</a>
-      </div>
+      ${actionButtons}
       ${timingNote}
       <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · ID ${id.substring(0,8)}</p>
     </div>
@@ -877,6 +1076,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) 
   const subjectIntent = leadData.intent ? ` ${leadData.intent.toUpperCase()}` : '';
   const subjectAccount = leadData.accountFirstName ? ` →${leadData.accountFirstName}` : '';
   const channelTag = channel === 'linkedin' ? 'LI' : 'EMAIL';
+  const autoTag = isAutoSend ? ' AUTO' : '';
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -887,7 +1087,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) 
     body: JSON.stringify({
       from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
       to: process.env.MY_EMAIL,
-      subject: `[${channelTag}${subjectIntent}${subjectAccount}] ${leadData.firstName} ${leadData.lastName} ${actionLabel}`,
+      subject: `[${channelTag}${subjectIntent}${subjectAccount}${autoTag}] ${leadData.firstName} ${leadData.lastName} ${actionLabel}`,
       html
     })
   });
@@ -899,6 +1099,30 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null) 
   }
 
   console.log(`[RESEND] Approval sent: ${leadData.firstName} ${leadData.lastName}`);
+}
+
+// ─── REPLY ENQUEUE (auto-send dispatcher) ─────────────────────────────────────
+// Single entry point for all generated replies. If auto-send is enabled AND the
+// reply passes the eligibility check, it goes into the scheduled queue with a
+// quiet-hold window and a STOP-able approval mail. Otherwise it goes through
+// the standard manual approval path.
+
+async function enqueueReply({ channel, leadData, draft, intent, hasRealMessage = true, isHandoff = false, offerUrl = null, source = null, extraData = {} }) {
+  const id = uuidv4();
+  const eligible = isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, isHandoff });
+  if (eligible) {
+    const minSendMs = Date.now() + AUTO_SEND_HOLD_MIN * 60 * 1000;
+    const naturalSendMs = getSendAt(channel).getTime();
+    const sendAtISO = new Date(Math.max(minSendMs, naturalSendMs)).toISOString();
+    await storePending(id, { channel, leadData, draft, source: source || 'auto-send', ...extraData });
+    await markScheduled(id, draft, sendAtISO);
+    await sendApprovalEmail(id, leadData, draft, channel, offerUrl, sendAtISO);
+    console.log(`[AUTO-SEND] Hold ${AUTO_SEND_HOLD_MIN}min for ${leadData.firstName} ${leadData.lastName} → ${formatSendTime(sendAtISO)}`);
+  } else {
+    await storePending(id, { channel, leadData, draft, source: source || 'manual-approval', ...extraData });
+    await sendApprovalEmail(id, leadData, draft, channel, offerUrl);
+  }
+  return id;
 }
 
 // ─── EMAIL HANDOFF (LinkedIn → Email) ────────────────────────────────────────
@@ -1311,7 +1535,7 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
     const { subject, body } = await generateHandoffEmail(leadData, theirMessage);
     const liReply = await generateHandoffLinkedInReply(leadData, email);
 
-    storePending(id, {
+    await storePending(id, {
       kind: 'email_handoff',
       mode: 'send_email',
       channel,
@@ -1341,7 +1565,7 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
     // No email anywhere - draft LinkedIn message that asks for email
     const liReply = await generateAskForEmailReply(leadData);
 
-    storePending(id, {
+    await storePending(id, {
       kind: 'email_handoff',
       mode: 'ask_email',
       channel,
@@ -1362,7 +1586,7 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
 
 app.get('/approve/email-handoff/:id', async (req, res) => {
   const id = req.params.id;
-  const pending = getPending(id);
+  const pending = await getPending(id);
   if (!pending || pending.kind !== 'email_handoff') {
     return res.status(404).send(page('Ni najdeno', '<p>Handoff ne obstaja ali je že bilo obdelano.</p>'));
   }
@@ -1408,7 +1632,7 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
         '[LINKEDIN confirm]', liReply, true
       ).catch(() => {});
 
-      deletePending(id);
+      await deletePending(id);
 
       return res.send(page('Email poslan', `
         <div style="text-align:center;padding:40px 0">
@@ -1442,7 +1666,7 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
         leadData.linkedinUrl, 'outbound', 'ask_email', null, liReply, true
       ).catch(() => {});
 
-      deletePending(id);
+      await deletePending(id);
 
       return res.send(page('Vprašanje poslano', `
         <div style="text-align:center;padding:40px 0">
@@ -1458,9 +1682,9 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
   }
 });
 
-app.get('/edit/email-handoff/:id', (req, res) => {
+app.get('/edit/email-handoff/:id', async (req, res) => {
   const id = req.params.id;
-  const pending = getPending(id);
+  const pending = await getPending(id);
   if (!pending || pending.kind !== 'email_handoff') {
     return res.status(404).send(page('Ni najdeno', '<p>Not found.</p>'));
   }
@@ -1507,24 +1731,21 @@ app.get('/edit/email-handoff/:id', (req, res) => {
 
 app.post('/edit/email-handoff/:id', async (req, res) => {
   const id = req.params.id;
-  const pending = getPending(id);
+  const pending = await getPending(id);
   if (!pending || pending.kind !== 'email_handoff') {
     return res.status(404).send(page('Ni najdeno', '<p>Not found.</p>'));
   }
-  // Update fields in place, then re-route to /approve
-  const updated = { ...pending };
+  // Build patch with edited fields only
+  const patch = {};
   if (pending.mode === 'send_email') {
-    updated.recipientEmail = (req.body.recipientEmail || pending.recipientEmail).trim();
-    updated.emailSubject = (req.body.emailSubject || pending.emailSubject).trim();
-    updated.emailBody = req.body.emailBody || pending.emailBody;
-    updated.liReply = req.body.liReply || pending.liReply;
+    patch.recipientEmail = (req.body.recipientEmail || pending.recipientEmail).trim();
+    patch.emailSubject = (req.body.emailSubject || pending.emailSubject).trim();
+    patch.emailBody = req.body.emailBody || pending.emailBody;
+    patch.liReply = req.body.liReply || pending.liReply;
   } else {
-    updated.liReply = req.body.liReply || pending.liReply;
+    patch.liReply = req.body.liReply || pending.liReply;
   }
-  // Persist edits
-  const all = loadPending();
-  all[id] = { ...all[id], ...updated };
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(all, null, 2));
+  await updatePendingData(id, patch);
   // Redirect to approve which performs the send
   res.redirect(`/approve/email-handoff/${id}`);
 });
@@ -1736,7 +1957,7 @@ async function processFollowups() {
           : `Sem vam ravnokar poslal kratek nadaljevalen mail, ${leadData.firstName}. Lep pozdrav, Žan Bagarič`;
 
         const id = uuidv4();
-        storePending(id, {
+        await storePending(id, {
           kind: 'email_handoff',
           mode: 'send_email',
           channel: 'linkedin',
@@ -1874,7 +2095,7 @@ async function processColdLinkedInLeads() {
         const { subject, body } = await generateColdReachEmail(leadData);
 
         const id = uuidv4();
-        storePending(id, {
+        await storePending(id, {
           kind: 'email_handoff',
           mode: 'send_email',
           channel: 'linkedin',
@@ -1977,7 +2198,7 @@ async function processLiFollowups() {
         const nudge = await generateLiFollowupMessage(leadData);
         const id = uuidv4();
 
-        storePending(id, {
+        await storePending(id, {
           kind: 'reply',
           channel: c.channel === 'vesna' ? 'vesna' : 'linkedin',
           leadData,
@@ -2029,7 +2250,7 @@ app.post('/webhook/instantly', async (req, res) => {
     leadData.intent = await classifyIntent(leadData.theirMessage);
     const draft = await generateReply('email', leadData, leadData.theirMessage);
     const id = uuidv4();
-    storePending(id, { channel: 'email', leadData, draft });
+    await storePending(id, { channel: 'email', leadData, draft });
     await sendApprovalEmail(id, leadData, draft, 'email');
     console.log(`[EMAIL] Queued: ${leadData.firstName} ${leadData.lastName}`);
   } catch (err) {
@@ -2151,7 +2372,7 @@ app.post('/webhook/linkedin', async (req, res) => {
         // Polite closeout - same pattern as /webhook/outflo (don't silently drop)
         const draft = `Razumem, hvala za odgovor ${leadData.firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
         const id = uuidv4();
-        storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
+        await storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
         await sendApprovalEmail(id, leadData, draft, 'linkedin');
         console.log(`[LINKEDIN] Negative closeout queued for ${leadData.firstName} ${leadData.lastName}`);
         return;
@@ -2161,8 +2382,8 @@ app.post('/webhook/linkedin', async (req, res) => {
         const closing = await generateClosingReply(leadData, parsed.message);
         const sendAt = getSendAt('linkedin');
         const id = uuidv4();
-        storePending(id, { channel: 'linkedin', leadData, draft: closing });
-        markScheduled(id, closing, sendAt);
+        await storePending(id, { channel: 'linkedin', leadData, draft: closing });
+        await markScheduled(id, closing, sendAt);
         console.log(`[LINKEDIN] Soft negative - closing reply scheduled for ${leadData.firstName} at ${formatSendTime(sendAt)}`);
         return;
       }
@@ -2177,9 +2398,15 @@ app.post('/webhook/linkedin', async (req, res) => {
       generateReply('linkedin', leadData, messageForAI, hasRealMessage),
       createAndDeployOffer(leadData)
     ]);
-    const id = uuidv4();
-    storePending(id, { channel: 'linkedin', leadData, draft });
-    await sendApprovalEmail(id, leadData, draft, 'linkedin', offerUrl);
+    await enqueueReply({
+      channel: 'linkedin',
+      leadData,
+      draft,
+      intent: leadData.intent,
+      hasRealMessage,
+      offerUrl,
+      source: 'linkedin-webhook'
+    });
     console.log(`[LINKEDIN] Queued: ${leadData.firstName} ${leadData.lastName}`);
   } catch (err) {
     console.error('[LINKEDIN] Error:', err.message);
@@ -2239,8 +2466,8 @@ app.post('/webhook/vesna', async (req, res) => {
         const closing = await generateClosingReply(leadData, parsed.message);
         const sendAt = getSendAt('linkedin');
         const id = uuidv4();
-        storePending(id, { channel: 'vesna', leadData, draft: closing });
-        markScheduled(id, closing, sendAt);
+        await storePending(id, { channel: 'vesna', leadData, draft: closing });
+        await markScheduled(id, closing, sendAt);
         console.log(`[VESNA] Soft negative - closing reply scheduled for ${leadData.firstName} at ${formatSendTime(sendAt)}`);
         return;
       }
@@ -2270,7 +2497,7 @@ Write a short LinkedIn reply in Vesna's name that warmly acknowledges their inte
     const draft = response.content[0].text.trim();
     const offerUrl = await createAndDeployOffer(leadData);
     const id = uuidv4();
-    storePending(id, { channel: 'vesna', leadData, draft });
+    await storePending(id, { channel: 'vesna', leadData, draft });
     await sendApprovalEmail(id, leadData, draft, 'linkedin', offerUrl);
     console.log(`[VESNA] Queued reply for: ${leadData.firstName} ${leadData.lastName}`);
   } catch (err) {
@@ -2281,7 +2508,7 @@ Write a short LinkedIn reply in Vesna's name that warmly acknowledges their inte
 // ─── APPROVE ──────────────────────────────────────────────────────────────────
 
 app.get('/approve/:id', async (req, res) => {
-  let pending = getPending(req.params.id);
+  let pending = await getPending(req.params.id);
   if (!pending && req.query.d) {
     try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
     catch (e) { console.warn('[APPROVE] Bad d param:', e.message); }
@@ -2302,7 +2529,7 @@ app.get('/approve/:id', async (req, res) => {
   const { channel, leadData, draft } = pending;
   const sendAt = getSendAt(channel);
 
-  markScheduled(req.params.id, draft, sendAt.toISOString(), pending);
+  await markScheduled(req.params.id, draft, sendAt.toISOString(), pending);
 
   const hour = getCETHour();
   const inWindow = (channel === 'email') || (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END);
@@ -2323,8 +2550,8 @@ app.get('/approve/:id', async (req, res) => {
 
 // ─── EDIT ─────────────────────────────────────────────────────────────────────
 
-app.get('/edit/:id', (req, res) => {
-  let pending = getPending(req.params.id);
+app.get('/edit/:id', async (req, res) => {
+  let pending = await getPending(req.params.id);
   if (!pending && req.query.d) {
     try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
     catch (e) { console.warn('[EDIT] Bad d param:', e.message); }
@@ -2398,7 +2625,7 @@ app.get('/edit/:id', (req, res) => {
 });
 
 app.post('/edit/:id', async (req, res) => {
-  let pending = getPending(req.params.id);
+  let pending = await getPending(req.params.id);
   if (!pending && req.query.d) {
     try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
     catch (e) { console.warn('[EDIT POST] Bad d param:', e.message); }
@@ -2414,7 +2641,7 @@ app.post('/edit/:id', async (req, res) => {
   }
 
   const sendAt = getSendAt(channel);
-  markScheduled(req.params.id, updatedDraft, sendAt.toISOString(), pending);
+  await markScheduled(req.params.id, updatedDraft, sendAt.toISOString(), pending);
 
   const hour = getCETHour();
   const inWindow = (channel === 'email') || (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END);
@@ -2437,8 +2664,31 @@ app.post('/edit/:id', async (req, res) => {
 
 // ─── DISMISS ──────────────────────────────────────────────────────────────────
 
-app.get('/dismiss/:id', (req, res) => {
-  let pending = getPending(req.params.id);
+// /stop is the auto-send equivalent of /dismiss - clearer wording for the auto-send mail
+app.get('/stop/:id', async (req, res) => {
+  const pending = await getPending(req.params.id);
+  if (!pending) {
+    return res.send(page('Ustavljeno', `
+      <div style="text-align:center;padding:40px 0">
+        <div style="font-size:48px;margin-bottom:16px">🛑</div>
+        <h2 style="color:#6b7280;margin:0 0 8px">Že obdelano</h2>
+        <p style="color:#999">Auto-send je bil že izveden ali pa zavrnjen.</p>
+      </div>
+    `));
+  }
+  await deletePending(req.params.id);
+  res.send(page('Auto-send STOP', `
+    <div style="text-align:center;padding:40px 0">
+      <div style="font-size:48px;margin-bottom:16px">🛑</div>
+      <h2 style="color:#dc2626;margin:0 0 8px">Auto-send ustavljen</h2>
+      <p style="color:#666">${pending.leadData?.firstName || ''} ${pending.leadData?.lastName || ''}</p>
+      <p style="color:#999;font-size:13px;margin-top:8px">Sporočilo ni bilo poslano.</p>
+    </div>
+  `));
+});
+
+app.get('/dismiss/:id', async (req, res) => {
+  let pending = await getPending(req.params.id);
   if (!pending && req.query.d) {
     try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
     catch (e) { console.warn('[DISMISS] Bad d param:', e.message); }
@@ -2453,7 +2703,7 @@ app.get('/dismiss/:id', (req, res) => {
       </div>
     `));
   }
-  deletePending(req.params.id);
+  await deletePending(req.params.id);
   res.send(page('Zavrnjeno', `
     <div style="text-align:center;padding:40px 0">
       <div style="font-size:48px;margin-bottom:16px">🗑️</div>
@@ -2466,7 +2716,7 @@ app.get('/dismiss/:id', (req, res) => {
 // ─── FORCE SEND (bypass send window for testing) ──────────────────────────────
 
 app.get('/force-send/:id', async (req, res) => {
-  let pending = getPending(req.params.id);
+  let pending = await getPending(req.params.id);
   if (!pending && req.query.d) {
     try { pending = JSON.parse(Buffer.from(req.query.d, 'base64url').toString()); }
     catch (e) { console.warn('[FORCE-SEND] Bad d param:', e.message); }
@@ -2508,7 +2758,7 @@ app.get('/healthcheck', async (req, res) => {
 
   // 2. Queue
   try {
-    const all = loadPending();
+    const all = await loadPending();
     const entries = Object.values(all);
     const scheduled = entries.filter(v => v.status === 'scheduled').length;
     report.checks.queue = { ok: true, detail: `${entries.length} total, ${scheduled} scheduled` };
@@ -2567,8 +2817,8 @@ app.post('/test-reply', async (req, res) => {
 
 // ─── STATUS ───────────────────────────────────────────────────────────────────
 
-app.get('/status', (req, res) => {
-  const all = loadPending();
+app.get('/status', async (req, res) => {
+  const all = await loadPending();
   const items = Object.entries(all).map(([id, item]) => ({
     id,
     name: `${item.leadData?.firstName} ${item.leadData?.lastName}`,
@@ -2601,8 +2851,258 @@ app.get('/status', (req, res) => {
     }
     <p style="margin-top:20px">
       <a href="/poll-now" style="color:#2563eb;font-size:13px">Ročni poll Instantly</a>
+      &nbsp;|&nbsp;
+      <a href="/dashboard" style="color:#2563eb;font-size:13px">Dashboard</a>
     </p>
   `));
+});
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+// Wide-layout HTML overview: weekly KPIs, pipeline funnel, queue, system health.
+
+async function dashboardCountLeads(formula) {
+  if (!AIRTABLE_PAT) return 0;
+  try {
+    let total = 0;
+    let offset = null;
+    do {
+      const url = `${AT_LEADS}?filterByFormula=${encodeURIComponent(formula)}&fields[]=Lead%20Name&pageSize=100${offset ? `&offset=${encodeURIComponent(offset)}` : ''}`;
+      const r = await airtableRequest('GET', url);
+      if (!r?.records) break;
+      total += r.records.length;
+      offset = r.offset || null;
+      if (total > 5000) break; // safety cap
+    } while (offset);
+    return total;
+  } catch (e) {
+    console.error('[DASHBOARD] count error:', e.message);
+    return 0;
+  }
+}
+
+async function dashboardLatestMessages(limit = 10) {
+  if (!AIRTABLE_PAT) return [];
+  try {
+    const r = await airtableRequest('GET', `${AT_MESSAGES}?pageSize=${limit}&sort[0][field]=Message%20ID&sort[0][direction]=desc`);
+    if (!r?.records) return [];
+    return r.records.map(rec => ({
+      id: rec.id,
+      leadName: rec.fields['Lead Name'] || '',
+      direction: rec.fields['Direction'] || '',
+      intent: rec.fields['Intent'] || '',
+      text: (rec.fields['Text'] || rec.fields['Draft Reply'] || '').substring(0, 140),
+      messageId: rec.fields['Message ID'] || ''
+    }));
+  } catch (e) {
+    console.error('[DASHBOARD] messages error:', e.message);
+    return [];
+  }
+}
+
+app.get('/dashboard', async (req, res) => {
+  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Run all aggregations in parallel
+  const [
+    pendingAll,
+    repliesThisWeek,
+    offersSent7d,
+    meetingsBooked7d,
+    noShows7d,
+    meetingsBooked30d,
+    statusReplied,
+    statusOfferSent,
+    statusMeetingBooked,
+    statusNoShow,
+    latestMessages
+  ] = await Promise.all([
+    loadPending(),
+    dashboardCountLeads(`AND({Last Activity}!=BLANK(), IS_AFTER({Last Activity}, "${since7d.split('T')[0]}"))`),
+    dashboardCountLeads(`AND({Email Sent At}!=BLANK(), IS_AFTER({Email Sent At}, "${since7d}"))`),
+    dashboardCountLeads(`AND({Booked At}!=BLANK(), IS_AFTER({Booked At}, "${since7d}"))`),
+    dashboardCountLeads(`AND({No Show Recovered At}!=BLANK(), IS_AFTER({No Show Recovered At}, "${since7d}"))`),
+    dashboardCountLeads(`AND({Booked At}!=BLANK(), IS_AFTER({Booked At}, "${since30d}"))`),
+    dashboardCountLeads(`{Status}="Replied"`),
+    dashboardCountLeads(`{Status}="Offer Sent (Email)"`),
+    dashboardCountLeads(`{Status}="Meeting Booked"`),
+    dashboardCountLeads(`{Status}="No Show"`),
+    dashboardLatestMessages(12)
+  ]);
+
+  const pendingItems = Object.entries(pendingAll).map(([id, item]) => ({
+    id,
+    name: `${item.leadData?.firstName || ''} ${item.leadData?.lastName || ''}`.trim(),
+    channel: item.channel,
+    status: item.status,
+    source: item.source || '',
+    sendAt: item.sendAt ? formatSendTime(item.sendAt) : null,
+    isAuto: (item.source || '').includes('auto-send')
+  }));
+  const pendingCount = pendingItems.filter(i => i.status === 'pending').length;
+  const scheduledCount = pendingItems.filter(i => i.status === 'scheduled').length;
+  const autoSendCount = pendingItems.filter(i => i.isAuto).length;
+
+  const intentCounts = latestMessages.reduce((acc, m) => {
+    const k = m.intent || 'unknown';
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
+  // KPI card
+  const kpiCard = (label, value, sub = '', color = '#111') => `
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px;flex:1;min-width:160px">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;font-weight:600">${label}</div>
+      <div style="font-size:32px;font-weight:700;color:${color};margin:4px 0 2px;line-height:1.1">${value}</div>
+      ${sub ? `<div style="font-size:11px;color:#9ca3af">${sub}</div>` : ''}
+    </div>`;
+
+  // Funnel bar
+  const funnelTotal = Math.max(statusReplied + statusOfferSent + statusMeetingBooked, 1);
+  const funnelBar = (label, count, color) => {
+    const pct = Math.round((count / funnelTotal) * 100);
+    return `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+        <span style="color:#374151;font-weight:600">${label}</span>
+        <span style="color:#6b7280">${count}</span>
+      </div>
+      <div style="background:#f3f4f6;border-radius:4px;height:8px;overflow:hidden">
+        <div style="background:${color};height:100%;width:${Math.max(pct, count > 0 ? 4 : 0)}%"></div>
+      </div>
+    </div>`;
+  };
+
+  const intentBadge = (intent) => {
+    const colors = {
+      positive: { bg: '#dcfce7', text: '#15803d' },
+      negative: { bg: '#fee2e2', text: '#b91c1c' },
+      soft_negative: { bg: '#fef3c7', text: '#a16207' },
+      neutral: { bg: '#f3f4f6', text: '#4b5563' },
+      email_handoff: { bg: '#dbeafe', text: '#1d4ed8' },
+      no_show_recovery: { bg: '#fce7f3', text: '#9d174d' }
+    };
+    const c = colors[intent] || { bg: '#f3f4f6', text: '#6b7280' };
+    return `<span style="background:${c.bg};color:${c.text};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">${(intent || 'n/a').toUpperCase()}</span>`;
+  };
+
+  const queueRows = pendingItems.length === 0
+    ? '<tr><td colspan="5" style="padding:12px;color:#9ca3af;text-align:center">Vrsta je prazna.</td></tr>'
+    : pendingItems.map(i => `
+        <tr style="border-top:1px solid #f3f4f6">
+          <td style="padding:8px 10px;font-size:13px;font-weight:600">${i.name || '<em style="color:#9ca3af">unknown</em>'}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#6b7280">${i.channel}</td>
+          <td style="padding:8px 10px;font-size:12px;color:${i.isAuto ? '#dc2626' : (i.status === 'scheduled' ? '#16a34a' : '#d97706')};font-weight:600">${i.isAuto ? 'AUTO-SEND' : i.status}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#6b7280">${i.sendAt || '-'}</td>
+          <td style="padding:8px 10px;font-size:11px;color:#9ca3af">${i.source}</td>
+        </tr>`).join('');
+
+  const messageRows = latestMessages.length === 0
+    ? '<tr><td colspan="4" style="padding:12px;color:#9ca3af;text-align:center">Ni zadnjih sporočil.</td></tr>'
+    : latestMessages.map(m => `
+        <tr style="border-top:1px solid #f3f4f6">
+          <td style="padding:8px 10px;font-size:12px;color:#6b7280">${m.direction}</td>
+          <td style="padding:8px 10px;font-size:12px;font-weight:600">${m.leadName || '<em style="color:#9ca3af">unknown</em>'}</td>
+          <td style="padding:8px 10px">${intentBadge(m.intent)}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#374151">${m.text.replace(/</g,'&lt;')}</td>
+        </tr>`).join('');
+
+  const envChecks = {
+    Anthropic: !!process.env.ANTHROPIC_API_KEY,
+    Outflo: !!process.env.OUTFLO_API_KEY,
+    Resend: !!process.env.RESEND_API_KEY,
+    Instantly: !!process.env.INSTANTLY_API_KEY,
+    Apollo: !!process.env.APOLLO_API_KEY,
+    Airtable: !!process.env.AIRTABLE_PAT,
+    Calendly: !!process.env.CALENDLY_PAT,
+    Netlify: !!process.env.NETLIFY_TOKEN
+  };
+  const envRow = Object.entries(envChecks).map(([name, ok]) =>
+    `<span style="display:inline-block;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600;margin:2px;background:${ok ? '#dcfce7' : '#fee2e2'};color:${ok ? '#15803d' : '#b91c1c'}">${name} ${ok ? 'OK' : 'MISSING'}</span>`
+  ).join('');
+
+  const html = `<!DOCTYPE html><html><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Dashboard | B2Booster Bot</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f9fafb; color:#111; margin:0; padding:24px; }
+      .wrap { max-width:1100px; margin:0 auto; }
+      h1 { font-size:22px; margin:0 0 4px; }
+      h2 { font-size:14px; margin:24px 0 12px; text-transform:uppercase; letter-spacing:0.5px; color:#6b7280; }
+      .card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:20px; }
+      .row { display:flex; gap:12px; flex-wrap:wrap; }
+      table { width:100%; border-collapse:collapse; }
+      a.link { color:#2563eb; text-decoration:none; font-size:13px; }
+    </style>
+  </head><body>
+    <div class="wrap">
+      <h1>B2Booster Dashboard</h1>
+      <p style="color:#6b7280;margin:0 0 4px;font-size:13px">${new Date().toLocaleString('sl-SI', { timeZone: 'Europe/Ljubljana' })} CET | Okno: ${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00 | Auto-send: <strong style="color:${AUTO_SEND_ENABLED ? '#16a34a' : '#9ca3af'}">${AUTO_SEND_ENABLED ? 'ON' : 'OFF'}</strong>${AUTO_SEND_ENABLED ? ` (hold ${AUTO_SEND_HOLD_MIN}min)` : ''}</p>
+
+      <h2>Zadnjih 7 dni</h2>
+      <div class="row">
+        ${kpiCard('Aktivnost (Last Activity)', repliesThisWeek, 'leadi z zadnjo aktivnostjo', '#2563eb')}
+        ${kpiCard('Offers Sent', offersSent7d, 'email predstavitev poslan', '#7c3aed')}
+        ${kpiCard('Meetings Booked', meetingsBooked7d, '7d | 30d: ' + meetingsBooked30d, '#16a34a')}
+        ${kpiCard('No Shows', noShows7d, 'in recovery flow', '#dc2626')}
+      </div>
+
+      <h2>Pipeline funnel (vsi leadi)</h2>
+      <div class="card">
+        ${funnelBar('Replied', statusReplied, '#0a66c2')}
+        ${funnelBar('Offer Sent (Email)', statusOfferSent, '#7c3aed')}
+        ${funnelBar('Meeting Booked', statusMeetingBooked, '#16a34a')}
+        ${funnelBar('No Show', statusNoShow, '#dc2626')}
+      </div>
+
+      <h2>Approval queue (${pendingItems.length})</h2>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:10px 16px;background:#fafafa;border-bottom:1px solid #f3f4f6;font-size:12px;color:#6b7280">
+          Pending: <strong>${pendingCount}</strong> | Scheduled: <strong>${scheduledCount}</strong> | Auto-send hold: <strong style="color:${autoSendCount > 0 ? '#dc2626' : '#6b7280'}">${autoSendCount}</strong>
+        </div>
+        <table>
+          <thead><tr style="background:#fafafa">
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Lead</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Kanal</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Status</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Send At</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Vir</th>
+          </tr></thead>
+          <tbody>${queueRows}</tbody>
+        </table>
+      </div>
+
+      <h2>Zadnja sporočila (Airtable)</h2>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr style="background:#fafafa">
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Smer</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Lead</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Intent</th>
+            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Tekst</th>
+          </tr></thead>
+          <tbody>${messageRows}</tbody>
+        </table>
+      </div>
+
+      <h2>System health</h2>
+      <div class="card">
+        <div style="margin-bottom:8px">${envRow}</div>
+        <div style="font-size:12px;color:#6b7280;border-top:1px solid #f3f4f6;padding-top:12px;margin-top:8px">
+          <a class="link" href="/healthcheck">healthcheck JSON</a> &nbsp;|&nbsp;
+          <a class="link" href="/status">simple status</a> &nbsp;|&nbsp;
+          <a class="link" href="/poll-now">manual Instantly poll</a> &nbsp;|&nbsp;
+          <a class="link" href="/trigger-followups">trigger followups</a> &nbsp;|&nbsp;
+          <a class="link" href="/trigger-cold-outreach">trigger cold</a> &nbsp;|&nbsp;
+          <a class="link" href="/trigger-li-followups">trigger LI followups</a>
+        </div>
+      </div>
+
+      <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:32px">B2Booster Reply Bot · Dashboard</p>
+    </div>
+  </body></html>`;
+  res.send(html);
 });
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -2679,7 +3179,7 @@ async function pollInstantlyReplies() {
       leadData.intent = await classifyIntent(leadData.theirMessage);
       const draft = await generateReply('email', leadData, leadData.theirMessage);
       const id = uuidv4();
-      storePending(id, { channel: 'email', leadData, draft });
+      await storePending(id, { channel: 'email', leadData, draft });
       await sendApprovalEmail(id, leadData, draft, 'email');
       console.log(`[POLL] Queued: ${leadData.firstName} ${leadData.lastName}`);
     }
@@ -2870,8 +3370,8 @@ async function pollLinkedInInbox() {
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, body);
         const id = uuidv4();
-        storePending(id, { channel: 'linkedin', leadData, draft: closing });
-        markScheduled(id, closing, getSendAt('linkedin'));
+        await storePending(id, { channel: 'linkedin', leadData, draft: closing });
+        await markScheduled(id, closing, getSendAt('linkedin'));
         continue;
       }
 
@@ -2883,9 +3383,15 @@ async function pollLinkedInInbox() {
         generateReply('linkedin', leadData, body, true),
         createAndDeployOffer(leadData)
       ]);
-      const id = uuidv4();
-      storePending(id, { channel: 'linkedin', leadData, draft });
-      await sendApprovalEmail(id, leadData, draft, 'linkedin', offerUrl);
+      await enqueueReply({
+        channel: 'linkedin',
+        leadData,
+        draft,
+        intent: leadData.intent || intent,
+        hasRealMessage: true,
+        offerUrl,
+        source: 'linkedin-poll'
+      });
     } catch (err) {
       console.error('[POLL] Error processing conv:', err.message);
     }
@@ -3116,10 +3622,23 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] Generated reply: "${draft}"`);
 
-    // Send approval email (do not auto-send)
-    const id = uuidv4();
-    storePending(id, { channel, leadData, draft, source: 'outflo-webhook' });
-    await sendApprovalEmail(id, leadData, draft, channel === 'vesna' ? 'linkedin' : 'linkedin');
+    // Route through enqueueReply: positive Žan replies may auto-send (15-min hold),
+    // everything else (Vesna, negative, neutral) still goes to manual approval.
+    if (intent === 'negative') {
+      // Negative closeouts always go to manual approval (no auto-send, no scheduling)
+      const id = uuidv4();
+      await storePending(id, { channel, leadData, draft, source: 'outflo-negative' });
+      await sendApprovalEmail(id, leadData, draft, 'linkedin');
+    } else {
+      await enqueueReply({
+        channel,
+        leadData,
+        draft,
+        intent,
+        hasRealMessage: true,
+        source: 'outflo-webhook'
+      });
+    }
 
     console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
@@ -3244,6 +3763,156 @@ async function airtableMarkMeetingCanceled({ eventUri, email }) {
   }
 }
 
+// ─── NO-SHOW RECOVERY ────────────────────────────────────────────────────────
+// Triggered by Calendly invitee_no_show.created webhook. Generates a warm,
+// low-pressure recovery email offering a fresh reschedule slot (same 15-min link).
+
+const NO_SHOW_RECOVERY_PROMPT = `You write a short Slovenian no-show recovery email sent by Žan Bagarič, CEO of AIERA.
+
+Context: This person booked a 15-min Calendly meeting with us but did not show up. We send a warm follow-up that gives them a clean, no-guilt way to reschedule. We assume something came up on their side.
+
+Rules:
+- Slovenian, šumniki correct (š, č, ž)
+- NEVER use dashes (pomišljaji). Use commas or periods.
+- Never use negative words (problem, težava, izziv, zamudili, zgrešili)
+- Vikamo (Vi, Vas, Vam) - never tikamo
+- 3 to 4 short sentences total
+- Tone: warm, professional, no judgment, no apology fishing
+- Frame: assume scheduling clash, offer one fresh slot link, leave the door wide open
+- One soft CTA: link to the same 15-min Calendly: [CALENDLY_15MIN]
+- Sign: Žan Bagarič, AIERA
+- Format:
+SUBJECT: <subject>
+
+<body>
+
+Return only that format. No commentary.`;
+
+async function generateNoShowRecoveryEmail(leadData) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 300,
+    system: NO_SHOW_RECOVERY_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
+${leadData.title ? `Role: ${leadData.title}` : ''}
+
+Write the no-show recovery email.`
+    }]
+  });
+
+  let raw = response.content[0].text.trim();
+  raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
+  let subject = `${leadData.firstName}, nov termin?`;
+  let body = raw;
+  const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
+  if (subjMatch) {
+    subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
+    body = raw.replace(subjMatch[0], '').trim();
+  }
+  return { subject, body };
+}
+
+async function fetchCalendlyInvitee(inviteeUri) {
+  if (!CALENDLY_PAT || !inviteeUri) return null;
+  try {
+    const res = await fetch(inviteeUri, {
+      headers: { 'Authorization': `Bearer ${CALENDLY_PAT}` },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.resource || null;
+  } catch (e) {
+    console.error('[CALENDLY] fetchInvitee error:', e.message);
+    return null;
+  }
+}
+
+async function handleNoShowRecovery({ email, name, eventUri }) {
+  if (!AIRTABLE_PAT) return;
+  try {
+    let lead = eventUri ? await airtableFindLeadByEventUri(eventUri) : null;
+    if (!lead && email) lead = await airtableFindLeadByEmail(email);
+    if (!lead) {
+      console.log(`[NO-SHOW] No matching lead for ${email || eventUri}`);
+      return;
+    }
+    const fields = lead.fields || {};
+    if (fields['No Show Recovered At']) {
+      console.log(`[NO-SHOW] Already recovered: ${fields['Lead Name'] || email}`);
+      return;
+    }
+    const leadNameFull = fields['Lead Name'] || name || '';
+    const recipientEmail = fields['Email'] || email || '';
+    if (!recipientEmail) {
+      console.log(`[NO-SHOW] No email on record for ${leadNameFull} - cannot send recovery`);
+      return;
+    }
+    const nameParts = leadNameFull.trim().split(' ');
+    const leadData = {
+      firstName: nameParts[0] || 'Lead',
+      lastName: nameParts.slice(1).join(' '),
+      company: fields['Campaign'] || '',
+      linkedinUrl: fields['LinkedIn URL'] || '',
+      title: fields['Title'] || '',
+      industry: fields['Industry'] || ''
+    };
+
+    const { subject, body } = await generateNoShowRecoveryEmail(leadData);
+
+    const id = uuidv4();
+    await storePending(id, {
+      kind: 'email_handoff',
+      mode: 'send_email',
+      channel: 'linkedin',
+      leadData,
+      recipientEmail,
+      emailSubject: subject,
+      emailBody: body,
+      liReply: null,
+      source: 'no-show-recovery'
+    });
+
+    await sendHandoffApprovalEmail(id, leadData, {
+      mode: 'send_email',
+      recipientEmail,
+      subject: `[NO-SHOW RECOVERY] ${subject}`,
+      body,
+      liReply: null
+    });
+
+    // Mark as recovered + flip status so followup cron skips
+    try {
+      await airtableRequest('PATCH', `${AT_LEADS}/${lead.id}`, {
+        fields: {
+          'Status': 'No Show',
+          'No Show Recovered At': new Date().toISOString(),
+          'Last Activity': new Date().toISOString().split('T')[0]
+        }
+      });
+    } catch (e) {
+      console.error('[NO-SHOW] Airtable mark error:', e.message);
+    }
+
+    airtableLogMessage(
+      leadNameFull,
+      leadData.linkedinUrl,
+      'outbound',
+      'no_show_recovery',
+      `[NO-SHOW RECOVERY → ${recipientEmail}] ${subject}`,
+      body,
+      false
+    ).catch(() => {});
+
+    console.log(`[NO-SHOW] Recovery approval queued: ${leadNameFull} → ${recipientEmail}`);
+  } catch (e) {
+    console.error('[NO-SHOW] handleNoShowRecovery error:', e.message);
+  }
+}
+
 // Calendly sends JSON. We need the raw body for signature verification, so we
 // register an isolated express.raw handler ONLY on this route.
 app.post('/webhook/calendly', express.raw({ type: '*/*' }), async (req, res) => {
@@ -3300,6 +3969,22 @@ app.post('/webhook/calendly', express.raw({ type: '*/*' }), async (req, res) => 
           true
         );
       } catch (e) { /* non-fatal */ }
+    } else if (event === 'invitee_no_show.created') {
+      // No-show recovery: Calendly invitee URI points to the resource we need
+      const inviteeUri = p.invitee || p.uri || '';
+      let noShowEmail = email;
+      let noShowName = name;
+      let noShowEventUri = eventUri;
+      if (inviteeUri) {
+        const invitee = await fetchCalendlyInvitee(inviteeUri);
+        if (invitee) {
+          noShowEmail = invitee.email || noShowEmail;
+          noShowName = invitee.name || noShowName;
+          noShowEventUri = invitee.scheduled_event?.uri || invitee.event || noShowEventUri;
+        }
+      }
+      console.log(`[CALENDLY] No-show: ${noShowName || noShowEmail} (${noShowEventUri || 'unknown event'})`);
+      await handleNoShowRecovery({ email: noShowEmail, name: noShowName, eventUri: noShowEventUri });
     } else {
       console.log(`[CALENDLY] Ignored event: ${event}`);
     }
@@ -3344,11 +4029,26 @@ async function ensureCalendlySubscription() {
       { headers: { 'Authorization': `Bearer ${CALENDLY_PAT}` } }
     );
     const list = listRes.ok ? await listRes.json() : { collection: [] };
+    const REQUIRED_EVENTS = ['invitee.created', 'invitee.canceled', 'invitee_no_show.created'];
     const existing = (list.collection || []).find(s => s.callback_url === targetUrl);
 
     if (existing) {
-      console.log(`[CALENDLY] Webhook already subscribed: ${targetUrl} (state=${existing.state})`);
-      return;
+      const has = new Set(existing.events || []);
+      const missing = REQUIRED_EVENTS.filter(e => !has.has(e));
+      if (missing.length === 0) {
+        console.log(`[CALENDLY] Webhook already subscribed with all events: ${targetUrl} (state=${existing.state})`);
+        return;
+      }
+      // Calendly API does not allow PATCH on events. Delete + recreate.
+      console.log(`[CALENDLY] Existing subscription missing events: ${missing.join(', ')}. Recreating...`);
+      try {
+        await fetch(existing.uri, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${CALENDLY_PAT}` }
+        });
+      } catch (e) {
+        console.error('[CALENDLY] Old subscription delete failed:', e.message);
+      }
     }
 
     // Create new subscription
@@ -3360,7 +4060,7 @@ async function ensureCalendlySubscription() {
       },
       body: JSON.stringify({
         url: targetUrl,
-        events: ['invitee.created', 'invitee.canceled'],
+        events: REQUIRED_EVENTS,
         organization: orgUri,
         user: userUri,
         scope: 'user',
