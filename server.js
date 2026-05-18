@@ -58,7 +58,7 @@ async function airtableRequest(method, endpoint, body) {
   }
 }
 
-async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, status, lastMessage) {
+async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, status, lastMessage, enrichData = {}) {
   if (!AIRTABLE_PAT) return;
   try {
     const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
@@ -73,6 +73,8 @@ async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, stat
       'Last Message': (lastMessage || '').substring(0, 500),
       'Last Activity': today
     };
+    if (enrichData.email) fields['Email'] = enrichData.email;
+    if (enrichData.phone) fields['Phone'] = enrichData.phone;
     if (existing?.records?.length > 0) {
       await airtableRequest('PATCH', `${AT_LEADS}/${existing.records[0].id}`, { fields });
       console.log(`[AIRTABLE] Lead updated: ${leadName}`);
@@ -2568,7 +2570,7 @@ async function enrichLeadWithApollo(linkedinUrl) {
     const res = await fetch('https://api.apollo.io/api/v1/people/match', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
-      body: JSON.stringify({ linkedin_url: linkedinUrl, reveal_personal_emails: false, reveal_phone_number: false })
+      body: JSON.stringify({ linkedin_url: linkedinUrl, reveal_personal_emails: true, reveal_phone_number: true })
     });
     const data = await res.json();
     if (!res.ok) {
@@ -2580,6 +2582,8 @@ async function enrichLeadWithApollo(linkedinUrl) {
       console.log('[APOLLO] No person returned for:', linkedinUrl, '| error:', data.error_code || data.message || 'none');
       return null;
     }
+    const email = p.email || p.personal_emails?.[0] || '';
+    const phone = p.phone_numbers?.[0]?.sanitized_number || '';
     return {
       title: p.title || '',
       seniority: p.seniority || '',
@@ -2587,7 +2591,9 @@ async function enrichLeadWithApollo(linkedinUrl) {
       industry: p.organization?.industry || '',
       employees: p.organization?.estimated_num_employees || '',
       city: p.city || '',
-      country: p.country || ''
+      country: p.country || '',
+      email,
+      phone
     };
   } catch (e) {
     console.log('[APOLLO] Enrichment failed:', e.message);
@@ -2766,7 +2772,7 @@ app.post('/webhook/outflo', async (req, res) => {
     console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
     // Log to Airtable (non-blocking)
-    airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText).catch(() => {});
+    airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText, apolloData || {}).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', intent, messageText, null, false).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false).catch(() => {});
 
