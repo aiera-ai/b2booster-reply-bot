@@ -9,6 +9,12 @@ const { v4: uuidv4 } = require('uuid');
 // New deterministic-template proposal generator (spirit-style, no prices, meeting-focused)
 const { createAndDeployProposal: createAndDeployProposalSpirit, setOnProposalGenerated } = require('./proposal');
 
+// B2Booster offer (template-driven, with pricing, sales-focused). For B2B sales/growth roles + international.
+const {
+  createAndDeployB2BoosterOffer,
+  buildB2BoosterHTML,
+} = require('./proposal-b2booster');
+
 // ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason?.message || reason);
@@ -462,6 +468,7 @@ function buildTrainingContext() {
 
 const CALENDLY_LINK = process.env.CALENDLY_LINK || '[CALENDLY LINK]';
 const CALENDLY_AI_15MIN = process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar/aiera-ai';
+const CALENDLY_B2BOOSTER = process.env.CALENDLY_B2BOOSTER || 'https://calendly.com/aiera-koledar/b2booster-x-ai';
 const VESNA_LINKEDIN_URL = process.env.VESNA_LINKEDIN_URL || 'https://www.linkedin.com/in/vesna-pevec-2110b8b4/';
 const HANDOFF_FROM_EMAIL = process.env.HANDOFF_FROM_EMAIL || 'Žan Bagarič <zan@aiera.si>';
 
@@ -848,10 +855,15 @@ async function createAndDeployOfferClassic(leadData) {
   }
 }
 
-// Router: chooses between new spirit-style proposal and classic pricing offer.
+// Router: chooses between B2Booster, spirit-style, or classic offer.
+// Priority: leadData.offerType === 'b2booster' takes precedence over offerStyle.
 // Env: PROPOSAL_STYLE=spirit (default) | classic
 // Per-call override: leadData.offerStyle = 'spirit' | 'classic'
 async function createAndDeployOffer(leadData) {
+  // B2Booster has its own template + domain (ponudbe.b2booster.eu)
+  if (leadData && leadData.offerType === 'b2booster') {
+    return createAndDeployB2BoosterOffer(leadData);
+  }
   const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
   if (style === 'classic') return createAndDeployOfferClassic(leadData);
   // Default: new spirit-style proposal
@@ -932,6 +944,99 @@ Return: negative, soft_negative, positive, or neutral`
   const intent = response.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');
   const valid = ['negative', 'soft_negative', 'positive', 'neutral'];
   return valid.includes(intent) ? intent : 'neutral';
+}
+
+// ─── OFFER CLASSIFICATION (aiera vs b2booster) ────────────────────────────────
+// Decides which offer to send. Default routing:
+//   - B2B + sales/growth role OR country != Slovenia → b2booster
+//   - SI + non-sales role (CFO, CTO, HR, ops, marketing) → aiera
+//   - Uncertain → aiera (safer default)
+// B2B_CHECK is mandatory: B2C consumer brands NEVER get b2booster.
+
+const OFFER_CLASSIFIER_PROMPT = `You classify B2B sales leads into one of two offer paths: "aiera" or "b2booster".
+
+OFFER PATHS:
+
+B2BOOSTER (B2B AI outreach service, 790 EUR setup + 890 EUR/mo):
+- Done-for-you cold outreach: LinkedIn + email + AI replies + meeting booking
+- Best for B2B sellers needing pipeline/sales meetings
+- Indicators: sales/BD/growth/export/commercial role, CEO of B2B SMB, country != Slovenia, B2B SaaS/manufacturing/services/wholesale with 10-500 employees
+
+AIERA (broader AI automation agency):
+- Best for: CFO/finance, CTO/IT, HR, operations, marketing roles, regulated industries (healthcare, legal, gov), enterprises >500 employees, B2C brands, non-sales use cases (internal AI workflow, document AI, custom apps)
+
+MANDATORY B2B_CHECK (filter BEFORE choosing b2booster):
+- The lead's company must SELL TO BUSINESSES, not consumers
+- Indicators of B2C (=> route to aiera): retail consumer brands, e-commerce direct-to-consumer, hospitality direct, B2C subscription apps, consumer products
+- If lead = "Head of Growth at a D2C beverage brand" → AIERA (not B2Booster, even though title sounds sales-y)
+
+DEFAULT RULES:
+1. If B2B_CHECK fails → aiera
+2. Else if country != "Slovenia" AND any B2B signal → b2booster
+3. Else if Slovenia AND title in [sales, BD, growth, export, CEO of B2B SMB] → b2booster
+4. Else if Slovenia AND title in [CFO, CTO, IT, HR, ops, marketing] → aiera
+5. Else (uncertain, confidence < 0.55) → aiera
+
+Return JSON only, no markdown, no commentary:
+{
+  "offer": "aiera" | "b2booster",
+  "confidence": 0.0-1.0,
+  "b2b_check": "pass" | "fail" | "unknown",
+  "key_signal": "<1 sentence: why this fit>",
+  "personalization_hook": "<1 short Slovenian sentence to use in the reply that ties to their specific situation>"
+}`;
+
+async function classifyOffer(leadData, theirMessage) {
+  // Safety: always pick a default before AI call
+  const fallback = {
+    offer: 'aiera',
+    confidence: 0.5,
+    b2b_check: 'unknown',
+    key_signal: 'classifier fallback (no AI call)',
+    personalization_hook: ''
+  };
+  if (!process.env.ANTHROPIC_API_KEY) return fallback;
+
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const leadBlock = [
+      `Name: ${leadData.firstName || ''} ${leadData.lastName || ''}`,
+      `Title/role: ${leadData.title || leadData.role || 'unknown'}`,
+      `Company: ${leadData.company || 'unknown'}`,
+      `Industry: ${leadData.industry || leadData.industryContext || 'unknown'}`,
+      `Employees: ${leadData.employees || 'unknown'}`,
+      `Seniority: ${leadData.seniority || 'unknown'}`,
+      `Country: ${leadData.country || 'unknown'}`,
+      `Campaign: ${leadData.campaignName || 'unknown'}`,
+      `Their reply: "${(theirMessage || leadData.theirMessage || '').substring(0, 400)}"`,
+    ].join('\n');
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      system: OFFER_CLASSIFIER_PROMPT,
+      messages: [{ role: 'user', content: leadBlock }]
+    });
+
+    let raw = response.content[0].text.trim();
+    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    const parsed = JSON.parse(raw);
+
+    if (!['aiera', 'b2booster'].includes(parsed.offer)) parsed.offer = 'aiera';
+    if (typeof parsed.confidence !== 'number') parsed.confidence = 0.5;
+
+    // Hard override: if env disables b2booster, force aiera
+    if (process.env.ENABLE_B2BOOSTER === 'false' && parsed.offer === 'b2booster') {
+      parsed.offer = 'aiera';
+      parsed.key_signal = '(b2booster disabled by env) ' + (parsed.key_signal || '');
+    }
+
+    return parsed;
+  } catch (err) {
+    console.error('[CLASSIFY-OFFER] Error:', err.message);
+    return fallback;
+  }
 }
 
 const CLOSING_REPLY_PROMPT = `You generate short, warm closing replies for LinkedIn conversations where the lead said they're not interested right now but might be in the future.
@@ -1356,8 +1461,10 @@ Write the handoff email.`
   });
 
   let raw = response.content[0].text.trim();
-  raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
-  raw = raw.replace(/\[CALENDLY LINK\]/g, CALENDLY_AI_15MIN);
+  // Pick Calendly URL based on offer type. B2Booster uses dedicated event link.
+  const calendlyForEmail = leadData.offerType === 'b2booster' ? CALENDLY_B2BOOSTER : CALENDLY_AI_15MIN;
+  raw = raw.replace(/\[CALENDLY_15MIN\]/g, calendlyForEmail);
+  raw = raw.replace(/\[CALENDLY LINK\]/g, calendlyForEmail);
 
   // Parse SUBJECT: line
   let subject = `AI predstavitev za ${leadData.firstName}`;
@@ -2997,6 +3104,52 @@ app.all('/preview-proposal', async (req, res) => {
   }
 });
 
+// ─── B2BOOSTER PREVIEW (HTML render, no deploy) ───────────────────────────────
+// GET /b2booster-preview?company=Acme&firstName=John&lastName=Smith&title=CEO&industry=Manufacturing&employees=120&country=Austria
+// POST /b2booster-preview with JSON body
+app.all('/b2booster-preview', async (req, res) => {
+  try {
+    const leadData = (req.method === 'POST' && req.body)
+      ? req.body
+      : {
+          firstName: req.query.firstName || 'John',
+          lastName: req.query.lastName || 'Smith',
+          company: req.query.company || 'Acme Industries',
+          title: req.query.title || 'CEO',
+          industry: req.query.industry || 'Manufacturing',
+          employees: req.query.employees || '120',
+          country: req.query.country || 'Austria',
+          theirMessage: req.query.context || '',
+        };
+    const { html, slots, slug } = await buildB2BoosterHTML(leadData);
+    console.log(`[B2BOOSTER-PREVIEW] ${leadData.company || leadData.firstName} → slug=${slug}`);
+    if (req.query.format === 'json') {
+      return res.json({ slug, slots, htmlLength: html.length });
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[B2BOOSTER-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── B2BOOSTER DEPLOY (full pipeline, returns URL) ────────────────────────────
+app.post('/b2booster-deploy', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployB2BoosterOffer(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed, check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[B2BOOSTER-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── PROPOSAL DEPLOY (full pipeline, returns URL) ─────────────────────────────
 app.post('/generate-proposal', async (req, res) => {
   try {
@@ -4052,6 +4205,15 @@ app.post('/webhook/outflo', async (req, res) => {
       messageSentAt: msg.sent_at || '',
       source: isVesna ? 'outflo-vesna' : 'outflo-zan'
     };
+
+    // Offer classification (aiera vs b2booster). Skip for negative intent (saves API call).
+    if (intent !== 'negative') {
+      const classification = await classifyOffer(leadData, messageText);
+      leadData.offerType = classification.offer;
+      leadData.classifierSignal = classification.key_signal;
+      leadData.personalizationHook = classification.personalization_hook;
+      console.log(`[CLASSIFY-OFFER] ${firstName} ${lastName} → ${classification.offer} (conf ${classification.confidence}, b2b=${classification.b2b_check}): ${classification.key_signal}`);
+    }
 
     let draft;
     const channel = isVesna ? 'vesna' : 'linkedin';
