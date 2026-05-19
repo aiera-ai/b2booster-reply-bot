@@ -484,21 +484,65 @@ function isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, 
   return true;
 }
 
+// Shared language rules - injected into all prompts so pravila ostanejo konsistentna povsod.
+const SHARED_LANG_RULES = `
+LANGUAGE RULES (always apply, hard constraints):
+- Default: VIKANJE (Vi, Vas, Vam). Switch to tikanje ONLY if the lead's own message uses tikanje (you can see it from their reply).
+- NEVER use dvojina (1st person dual). FORBIDDEN: "si vzameva", "se slišiva", "pogledava", "se vidiva", "sva", "midva", "pripraviva", "pošljeva".
+  - Use 1st plural instead: "se slišimo", "lahko pogledamo", "pripravimo", "pošljemo", "se uskladimo".
+- NEVER use these banned sales cliches:
+  - "veseli me, če se kdaj pogovorimo/pogovoriva"
+  - "rezerviraj si termin tukaj", "rezerviraj si 20 minut", "rezervirajte si termin tukaj"
+  - "se vidiva", "se slišiva"
+  - "z veseljem se pogovorim" as opener
+- Natural Calendly invitation pattern (preferred):
+  "Lahko se na kratko slišimo in lažje preverimo možnosti. Tukaj je moj koledar za naslednja 2 tedna, če vam kateri termin ustreza: [CALENDLY LINK]"
+  Shorter OK: "Če vam ustreza, lahko izberete termin tukaj: [CALENDLY LINK]"
+- Slovnično pravilno (correct case endings, verb conjugation, šumniki).
+- NEVER use dashes (pomišljaji "—"). Use commas or regular hyphens "-".
+
+FACTS to use when relevant (do NOT invent others):
+- Pricing if asked: 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
+- Social proof: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
+- Slovenia: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies within a few months of cooperation, after which we often expand abroad. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
+`;
+
 const STYLE_GUIDE = `
 You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Pricing: fixed monthly retainer (900-1200 EUR/month), no commissions.
+Pricing (use EXACTLY these numbers if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges like "900-1200 EUR".
+Social proof to weave in when relevant: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
 Target: B2B companies that want to expand internationally or automate their sales outreach.
+Slovenia market rule: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies in a few months of cooperation, after which we often expand to foreign markets. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
+
+LANGUAGE / TONE RULES (CRITICAL):
+- DEFAULT: vikanje (formal "vi" form). Always start vikanje.
+  - PRAVILNO: "lahko se na kratko slišimo", "vam pošljem", "če vas zanima", "rezervirate termin"
+  - NAROBE: tikanje by default
+- SWITCH to tikanje ONLY if the lead's own message uses tikanje (you can see it from their reply: "kaj pa imate" = vikanje, "kaj pa imaš" = tikanje, "te" / "ti" / "tvoj" = tikanje).
+- NEVER use dvojina (1st person dual). FORBIDDEN forms: "si vzameva", "se slišiva", "pogledava", "se vidiva", "skupaj sva", "midva".
+  - Use 1st person plural instead: "se slišimo", "lahko pogledamo", "se uskladimo", "vam pošljemo".
+- NEVER use these clichéd sales phrases (they are banned):
+  - "veseli me, če se kdaj pogovoriva/pogovorimo"
+  - "rezerviraj si termin tukaj" / "rezerviraj si 20 minut"
+  - "se vidiva" / "se slišiva"
+  - "z veseljem se pogovorim" as opener
+- Calendly intro MUST sound natural. Good pattern:
+  "Lahko se na kratko slišimo in lažje preverimo možnosti. Tukaj je moj koledar za naslednja 2 tedna - če vam kateri termin ustreza, se z veseljem slišimo na klicu ali meetu: [CALENDLY LINK]"
+- Krajše variante so OK, ampak vedno naravno, brez "rezerviraj":
+  "Če vam ustreza, lahko izberete termin tukaj: [CALENDLY LINK]"
+  "Tukaj je moj koledar, da najdete pravi termin: [CALENDLY LINK]"
 
 WRITING RULES:
 - Short, direct, professional Slovenian
-- Never use dashes (pomišljaji)
-- Use correct Slovenian spelling with šumniki
+- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
+- Use correct Slovenian spelling with šumniki (č, š, ž)
+- Slovnično pravilno (no missing diacritics, correct case endings, correct verb conjugation)
 - Never use negative or low-energy words: problem, težava, izziv, zamudno, zapleteno
 - Frame everything as opportunity, not pain
 - No bullet point lists inside messages
-- Sign as: Žan Bagarič
+- Sign as: Žan Bagarič (samo na koncu, ne v sredini)
 - Always include Calendly CTA as the literal placeholder: [CALENDLY LINK]
 - Never include a phone number
 
@@ -519,34 +563,46 @@ OUTPUT: Return only the message text. No subject lines, no labels, no formatting
 `;
 
 const VESNA_STYLE_GUIDE = `
-You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster (b2booster.eu).
+You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster / AIERA (b2booster.eu, aiera.si).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Vesna's role: she does the first contact on LinkedIn. The director (Žan Bagarič) follows up personally with a tailored offer.
+Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored offer that gets sent by email.
 
 WRITING RULES:
 - Short, warm, professional Slovenian
 - Maximum 3 sentences
-- Never use dashes (pomišljaji)
-- Use correct Slovenian spelling with šumniki
+- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
+- Use correct Slovenian spelling with šumniki (č, š, ž)
+- Slovnično pravilno
 - Never use negative or low-energy words
 - No bullet points
 - Sign as: Vesna Pevec
 - Never include a Calendly link or phone number
 - Never promise specifics about price or timeline
 
+LANGUAGE / TONE RULES (CRITICAL):
+- DEFAULT: vikanje (formal "vi" form). Always start with vikanje.
+- SWITCH to tikanje ONLY if the lead's own message uses tikanje.
+- NEVER use dvojina (1st dual): "pripraviva", "pošljeva", "pogledava", "sva". Use 1st plural: "pripravimo", "pošljemo".
+
+CRITICAL HANDOFF RULE - NEVER mention "Žan" or any director by name in your reply.
+- WRONG: "Skupaj s kolegom Žanom bova pregledala vaš primer in Žan vas bo kmalu kontaktiral"
+- WRONG: "direktor Žan bo stopil v stik"
+- WRONG: "kolega Žan"
+- RIGHT: Speak as "mi/aiera/B2Booster team", neutrally.
+- Use natural variations like:
+  - "Pripravimo vam ponudbo, ki vam jo pošljemo na email v naslednjih dneh."
+  - "Pogledamo vaš primer in vam pošljemo konkretno ponudbo na email."
+  - "Skupaj pripravimo ponudbo, prilagojeno vašim potrebam, in jo pošljemo na email."
+- Why: It feels more professional that "the team" is preparing the offer rather than naming the director. The director's email itself will then naturally reference "kot ste se dogovorili z Vesno Pevec".
+
 TONE:
 - Friendly and professional, like a capable coordinator
 - Acknowledge their reply positively but briefly
-- Hand off smoothly to the director without making it feel like a brush-off
+- Hand off smoothly to the team / next steps without mentioning specific names
 - The lead should feel they are being taken care of personally
 
-KEY MESSAGE to weave in naturally:
-- "Skupaj s kolegom pripravimo ponudbo" or similar variation
-- Žan (direktor) bo stopil v stik s konkretno ponudbo
-- Make them feel the director is personally investing time in their case
-
-GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff to Žan.
+GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff that the email outreach will then continue.
 
 OUTPUT: Return only the message text. No labels, no formatting notes.
 `;
@@ -895,7 +951,7 @@ async function generateClosingReply(leadData, theirMessage) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 150,
-    system: CLOSING_REPLY_PROMPT,
+    system: CLOSING_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName} ${leadData.lastName}
@@ -1241,13 +1297,20 @@ async function airtableMarkOfferSent(linkedinUrl, leadName, email, offerType) {
 const HANDOFF_EMAIL_PROMPT = `You draft outreach emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
 
 CONTEXT: The lead asked on LinkedIn for details/offer/presentation via email. You write the follow-up email.
+The LinkedIn first-touch was done by Vesna Pevec (kolegica). If the lead spoke with Vesna first, reference it naturally:
+- Good opener pattern: "Kot ste se dogovorili z mojo kolegico Vesno Pevec, vam pošiljam ..."
+- If the lead never interacted with Vesna, do NOT mention her at all. Open naturally referencing the LinkedIn conversation.
 
 ABOUT AIERA / B2Booster:
 AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
 
+Pricing (only if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
+Social proof to use when relevant: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
+Slovenia rule: We work the Slovenian market normally; the small market means we reach all target companies within a few months, and then often expand to foreign markets. NEVER imply we skip Slovenia.
+
 WRITING RULES (strict):
 - Slovenian, šumniki correct (š, č, ž)
-- NEVER use dashes (pomišljaji). Use commas or periods.
+- NEVER use dashes (pomišljaji "—"). Use commas or periods or regular hyphens "-".
 - Never use negative words: problem, težava, izziv, zamudno, zapleteno
 - Frame as opportunity, not pain
 - Polite, professional, modern SaaS tone
@@ -1256,8 +1319,10 @@ WRITING RULES (strict):
 - Sign as: Žan Bagarič
 - End with one clear CTA: 15-min razgovor preko Calendly link [CALENDLY_15MIN]
 - Never include a phone number in the body
-- First sentence references the LinkedIn conversation naturally
-- Tikamo NIKOLI. Vedno vikamo (Vi, Vas, Vam)
+- Vikanje VEDNO (Vi, Vas, Vam). Tikamo NIKOLI.
+- NEVER use dvojina (1st dual): "se slišiva", "pogledava". Use 1st plural: "se slišimo", "lahko pogledamo".
+- NEVER use banned cliches: "veseli me, če se kdaj pogovorimo", "rezerviraj si termin tukaj", "se vidiva".
+- Natural Calendly intro example: "Če vas zanima 15-min uskladitev, lahko izberete termin tukaj: [CALENDLY_15MIN]"
 
 OUTPUT FORMAT (strict):
 Line 1: SUBJECT: <subject line>
@@ -1324,7 +1389,7 @@ async function generateHandoffLinkedInReply(leadData, providedEmail) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 120,
-    system: HANDOFF_LI_REPLY_PROMPT,
+    system: HANDOFF_LI_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.`
@@ -1349,7 +1414,7 @@ async function generateAskForEmailReply(leadData) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 100,
-    system: ASK_EMAIL_LI_PROMPT,
+    system: ASK_EMAIL_LI_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.`
@@ -1863,7 +1928,7 @@ Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 400,
-    system: systemPrompt,
+    system: systemPrompt + SHARED_LANG_RULES,
     messages: [{ role: 'user', content: userPrompt }]
   });
 
@@ -2040,7 +2105,7 @@ Write the cold follow-up email. Return JSON: { "subject": "...", "body": "..." }
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    system: COLD_REACH_PROMPT,
+    system: COLD_REACH_PROMPT + SHARED_LANG_RULES,
     messages: [{ role: 'user', content: prompt }]
   });
 
@@ -2163,7 +2228,7 @@ async function generateLiFollowupMessage(leadData) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 150,
-    system: LI_FOLLOWUP_PROMPT,
+    system: LI_FOLLOWUP_PROMPT + SHARED_LANG_RULES,
     messages: [{ role: 'user', content: `Lead: ${leadData.firstName} ${leadData.lastName}\nCompany: ${leadData.company || 'unknown'}\nLast message from them: "${leadData.lastMessage || '(no message)'}"\n\nWrite the LinkedIn nudge.` }]
   });
   return response.content[0].text.trim();
@@ -4190,7 +4255,7 @@ async function generateNoShowRecoveryEmail(leadData) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    system: NO_SHOW_RECOVERY_PROMPT,
+    system: NO_SHOW_RECOVERY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
