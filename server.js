@@ -6,6 +6,9 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
+// New deterministic-template proposal generator (spirit-style, no prices, meeting-focused)
+const { createAndDeployProposal: createAndDeployProposalSpirit, setOnProposalGenerated } = require('./proposal');
+
 // ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason?.message || reason);
@@ -38,6 +41,7 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'appDYFcKNxPmZw3P7';
 const AT_LEADS = 'tblfobqavxfv7hqC2';
 const AT_MESSAGES = 'tblNvqZEFcNaOwbnO';
+const AT_PROPOSALS = 'tblHS9tAl7c1XAQpi';
 
 async function airtableRequest(method, endpoint, body) {
   if (!AIRTABLE_PAT) return null;
@@ -773,19 +777,29 @@ async function deployOfferToNetlify(slug, html) {
   return offerUrl;
 }
 
-async function createAndDeployOffer(leadData) {
+async function createAndDeployOfferClassic(leadData) {
   try {
     const company = leadData.company && leadData.company !== 'LinkedIn'
       ? leadData.company
       : `${leadData.firstName}-${leadData.lastName}`.toLowerCase();
     const slug = createOfferSlug(company);
-    console.log(`[OFFER] Generating for: ${company} → /${slug}`);
+    console.log(`[OFFER] Generating CLASSIC pricing offer for: ${company} → /${slug}`);
     const html = await generateOfferHTML(leadData);
     return await deployOfferToNetlify(slug, html);
   } catch (err) {
-    console.error('[OFFER] Error:', err.message);
+    console.error('[OFFER] Classic error:', err.message);
     return null;
   }
+}
+
+// Router: chooses between new spirit-style proposal and classic pricing offer.
+// Env: PROPOSAL_STYLE=spirit (default) | classic
+// Per-call override: leadData.offerStyle = 'spirit' | 'classic'
+async function createAndDeployOffer(leadData) {
+  const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
+  if (style === 'classic') return createAndDeployOfferClassic(leadData);
+  // Default: new spirit-style proposal
+  return createAndDeployProposalSpirit(leadData);
 }
 
 // ─── GENERATE REPLY ───────────────────────────────────────────────────────────
@@ -2743,6 +2757,197 @@ app.get('/force-send/:id', async (req, res) => {
 
 app.get('/ping', (req, res) => res.send('pong'));
 
+// ─── PROPOSAL TRACKING (Airtable Proposals table) ────────────────────────────
+
+async function airtableProposalUpsert(slug, fields) {
+  if (!AIRTABLE_PAT) return null;
+  try {
+    const filter = encodeURIComponent(`{Slug}="${slug}"`);
+    const existing = await airtableRequest('GET', `${AT_PROPOSALS}?filterByFormula=${filter}&maxRecords=1`);
+    if (existing?.records?.length > 0) {
+      const id = existing.records[0].id;
+      await airtableRequest('PATCH', `${AT_PROPOSALS}/${id}`, { fields });
+      return { id, created: false, current: existing.records[0].fields };
+    }
+    const created = await airtableRequest('POST', AT_PROPOSALS, { records: [{ fields: { Slug: slug, ...fields } }] });
+    return { id: created?.records?.[0]?.id, created: true, current: {} };
+  } catch (e) {
+    console.error('[PROPOSAL-AT] upsert error:', e.message);
+    return null;
+  }
+}
+
+async function airtableProposalGet(slug) {
+  if (!AIRTABLE_PAT) return null;
+  const filter = encodeURIComponent(`{Slug}="${slug}"`);
+  const res = await airtableRequest('GET', `${AT_PROPOSALS}?filterByFormula=${filter}&maxRecords=1`);
+  return res?.records?.[0] || null;
+}
+
+async function airtableProposalLogEvent(slug, event, value, ua, ip) {
+  if (!AIRTABLE_PAT) return null;
+  const rec = await airtableProposalGet(slug);
+  if (!rec) {
+    // Create stub so events still get captured even if generation insert failed
+    await airtableProposalUpsert(slug, {});
+  }
+  const current = rec?.fields || {};
+  const now = new Date().toISOString();
+  const fields = {};
+
+  // Append to events log
+  const existingLog = current['Events Log'] || '';
+  const logLine = JSON.stringify({ t: now, e: event, v: value, ua: (ua || '').slice(0, 120), ip: (ip || '').slice(0, 45) });
+  const newLog = (existingLog ? existingLog + '\n' : '') + logLine;
+  // Airtable multilineText cap ~100k chars - trim oldest if huge
+  fields['Events Log'] = newLog.length > 90000 ? newLog.slice(-90000) : newLog;
+
+  // Counters
+  if (event === 'page_view') {
+    fields['Opens'] = (current['Opens'] || 0) + 1;
+    fields['Last Open At'] = now;
+    if (!current['First Open At']) fields['First Open At'] = now;
+  }
+  if (event === 'cta_click') {
+    fields['CTA Clicks'] = (current['CTA Clicks'] || 0) + 1;
+  }
+  if (event === 'calendly_click') {
+    fields['Calendly Clicks'] = (current['Calendly Clicks'] || 0) + 1;
+  }
+  if (event && event.indexOf('scroll_') === 0 && typeof value === 'number') {
+    if (!current['Max Scroll'] || value > current['Max Scroll']) fields['Max Scroll'] = value;
+  }
+  if (event === 'heartbeat' || event === 'unload') {
+    const secs = (value && typeof value === 'object') ? value.secs : null;
+    const maxScrollIn = (value && typeof value === 'object') ? value.maxScroll : null;
+    if (typeof secs === 'number') {
+      if (!current['Time On Page (s)'] || secs > current['Time On Page (s)']) fields['Time On Page (s)'] = secs;
+    }
+    if (typeof maxScrollIn === 'number') {
+      if (!current['Max Scroll'] || maxScrollIn > current['Max Scroll']) fields['Max Scroll'] = maxScrollIn;
+    }
+    fields['Last Open At'] = now;
+  }
+
+  await airtableProposalUpsert(slug, fields);
+  return true;
+}
+
+// Pixel endpoint - accepts beacons from generated proposal pages
+app.post('/pixel/:slug', express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    const slug = (req.params.slug || '').slice(0, 80);
+    const { event, value } = req.body || {};
+    if (!slug || !event) return res.status(200).end();
+    const ua = req.headers['user-agent'] || '';
+    const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
+    // Skip bot crawlers (Slackbot, LinkedInBot, etc.) - they fetch link previews and shouldn't count as opens
+    if (/bot|crawler|spider|preview|facebookexternalhit|linkedinbot|slackbot|whatsapp|telegrambot/i.test(ua)) {
+      return res.status(200).end();
+    }
+    await airtableProposalLogEvent(slug, event, value, ua, ip);
+  } catch (e) {
+    console.error('[PIXEL] Error:', e.message);
+  }
+  // Always 204 - never leak errors to the browser
+  res.status(204).end();
+});
+
+// GET fallback for older browsers (image beacon style)
+app.get('/pixel/:slug.gif', async (req, res) => {
+  try {
+    const slug = (req.params.slug || '').slice(0, 80);
+    const event = (req.query.e || 'page_view').toString().slice(0, 40);
+    const ua = req.headers['user-agent'] || '';
+    if (slug && !/bot|crawler|spider|preview/i.test(ua)) {
+      await airtableProposalLogEvent(slug, event, null, ua, '');
+    }
+  } catch (e) {}
+  // 1x1 transparent GIF
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  res.set('Content-Type', 'image/gif');
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.send(gif);
+});
+
+// Per-proposal stats JSON (for dashboard)
+app.get('/proposal-stats/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').slice(0, 80);
+  const rec = await airtableProposalGet(slug);
+  if (!rec) return res.status(404).json({ error: 'not found' });
+  res.json({ slug, fields: rec.fields });
+});
+
+// Register hook so every generated proposal creates a Proposals row
+setOnProposalGenerated(async ({ slug, persona, theme, url, leadData }) => {
+  const fullName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+  const company = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : fullName;
+  await airtableProposalUpsert(slug, {
+    'Lead Name': fullName || company,
+    'LinkedIn URL': leadData.linkedinUrl || leadData.LinkedInUrl || '',
+    'Company': company,
+    'Title': leadData.title || leadData.role || '',
+    'Persona': persona,
+    'Theme': theme,
+    'URL': url,
+    'Generated At': new Date().toISOString(),
+    'Opens': 0,
+    'CTA Clicks': 0,
+    'Calendly Clicks': 0,
+    'Max Scroll': 0,
+  });
+  console.log(`[PROPOSAL-AT] Tracked in Proposals table: ${slug}`);
+});
+
+// ─── PROPOSAL PREVIEW (no deploy, returns HTML inline) ───────────────────────
+// Usage: GET /preview-proposal?company=KRKA&firstName=Marko&lastName=Novak&title=Head%20of%20IT&industry=farmacija
+// Or:    POST /preview-proposal with JSON body of leadData
+// Renders the proposal in the browser without uploading to Netlify - useful for testing copy/design.
+app.all('/preview-proposal', async (req, res) => {
+  try {
+    const leadData = req.method === 'POST'
+      ? req.body
+      : {
+          firstName: req.query.firstName || '',
+          lastName: req.query.lastName || '',
+          company: req.query.company || '',
+          title: req.query.title || req.query.role || '',
+          industry: req.query.industry || '',
+          theirMessage: req.query.context || req.query.theirMessage || '',
+          gender: req.query.gender || undefined,
+          personaOverride: req.query.persona || undefined,
+          themeOverride: req.query.theme || undefined,
+        };
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).send('Missing company or firstName/lastName');
+    }
+    const { buildProposalHTML } = require('./proposal');
+    const { html, persona, theme, slug } = await buildProposalHTML(leadData);
+    console.log(`[PROPOSAL-PREVIEW] ${leadData.company || leadData.firstName} | persona=${persona} | theme=${theme} | slug=${slug}`);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[PROPOSAL-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── PROPOSAL DEPLOY (full pipeline, returns URL) ─────────────────────────────
+app.post('/generate-proposal', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployProposalSpirit(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed - check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[PROPOSAL-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── HEALTHCHECK (all-in-one server-side test) ────────────────────────────────
 
 app.get('/healthcheck', async (req, res) => {
@@ -2890,14 +3095,57 @@ async function dashboardLatestMessages(limit = 10) {
       leadName: rec.fields['Lead Name'] || '',
       direction: rec.fields['Direction'] || '',
       intent: rec.fields['Intent'] || '',
-      text: (rec.fields['Text'] || rec.fields['Draft Reply'] || '').substring(0, 140),
-      messageId: rec.fields['Message ID'] || ''
+      text: (rec.fields['Text'] || '').substring(0, 280),
+      draftReply: rec.fields['Draft Reply'] || '',
+      messageId: rec.fields['Message ID'] || '',
+      timestamp: rec.fields['Timestamp'] || '',
+      sent: !!rec.fields['Sent'],
+      feedbackRating: rec.fields['Feedback Rating'] || '',
+      feedbackTags: rec.fields['Feedback Tags'] || [],
+      feedbackComment: rec.fields['Feedback Comment'] || '',
+      feedbackAt: rec.fields['Feedback At'] || ''
     }));
   } catch (e) {
     console.error('[DASHBOARD] messages error:', e.message);
     return [];
   }
 }
+
+// Feedback save endpoint - patches the Messages record with rating/tags/comment
+app.post('/api/feedback', async (req, res) => {
+  try {
+    if (!AIRTABLE_PAT) return res.status(503).json({ error: 'Airtable not configured' });
+    const { recordId, rating, tags, comment } = req.body || {};
+    if (!recordId || typeof recordId !== 'string') {
+      return res.status(400).json({ error: 'recordId required' });
+    }
+    const ALLOWED_RATINGS = ['good', 'needs_edit', 'bad', ''];
+    const ALLOWED_TAGS = new Set(['ton ni ok', 'pregenerično', 'napačen angle', 'predolgo', 'prekratko', 'manjka context', 'wrong offer', 'opening weak', 'CTA weak', 'slovnica', 'preveč sales']);
+    const fields = {};
+    if (rating !== undefined) {
+      if (!ALLOWED_RATINGS.includes(rating)) return res.status(400).json({ error: 'invalid rating' });
+      fields['Feedback Rating'] = rating || null;
+    }
+    if (Array.isArray(tags)) {
+      const clean = tags.filter(t => typeof t === 'string' && ALLOWED_TAGS.has(t));
+      fields['Feedback Tags'] = clean;
+    }
+    if (comment !== undefined) {
+      fields['Feedback Comment'] = (typeof comment === 'string' ? comment : '').substring(0, 5000);
+    }
+    fields['Feedback At'] = new Date().toISOString();
+    const result = await airtableRequest('PATCH', `${AT_MESSAGES}/${recordId}`, { fields });
+    if (!result || result.error) {
+      console.error('[FEEDBACK] Airtable error:', result?.error || 'unknown');
+      return res.status(500).json({ error: result?.error?.message || 'Airtable save failed' });
+    }
+    console.log(`[FEEDBACK] Saved ${recordId} rating=${rating || '-'} tags=${(tags || []).length} comment=${(comment || '').length}ch`);
+    res.json({ ok: true, fields: result.fields });
+  } catch (e) {
+    console.error('[FEEDBACK] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/dashboard', async (req, res) => {
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -2927,8 +3175,16 @@ app.get('/dashboard', async (req, res) => {
     dashboardCountLeads(`{Status}="Offer Sent (Email)"`),
     dashboardCountLeads(`{Status}="Meeting Booked"`),
     dashboardCountLeads(`{Status}="No Show"`),
-    dashboardLatestMessages(12)
+    dashboardLatestMessages(30)
   ]);
+
+  // Feedback filter via query string: ?filter=needs_feedback | flagged | all (default)
+  const feedbackFilter = (req.query.filter || 'all').toString();
+  const filteredMessages = latestMessages.filter(m => {
+    if (feedbackFilter === 'needs_feedback') return !m.feedbackRating;
+    if (feedbackFilter === 'flagged') return m.feedbackRating === 'bad' || m.feedbackRating === 'needs_edit';
+    return true;
+  });
 
   const pendingItems = Object.entries(pendingAll).map(([id, item]) => ({
     id,
@@ -2997,15 +3253,98 @@ app.get('/dashboard', async (req, res) => {
           <td style="padding:8px 10px;font-size:11px;color:#9ca3af">${i.source}</td>
         </tr>`).join('');
 
-  const messageRows = latestMessages.length === 0
-    ? '<tr><td colspan="4" style="padding:12px;color:#9ca3af;text-align:center">Ni zadnjih sporočil.</td></tr>'
-    : latestMessages.map(m => `
-        <tr style="border-top:1px solid #f3f4f6">
-          <td style="padding:8px 10px;font-size:12px;color:#6b7280">${m.direction}</td>
-          <td style="padding:8px 10px;font-size:12px;font-weight:600">${m.leadName || '<em style="color:#9ca3af">unknown</em>'}</td>
-          <td style="padding:8px 10px">${intentBadge(m.intent)}</td>
-          <td style="padding:8px 10px;font-size:12px;color:#374151">${m.text.replace(/</g,'&lt;')}</td>
-        </tr>`).join('');
+  // Feedback aggregate stats (for the filter bar at top of section)
+  const totalMessages = latestMessages.length;
+  const ratedCount = latestMessages.filter(m => m.feedbackRating).length;
+  const flaggedCount = latestMessages.filter(m => m.feedbackRating === 'bad' || m.feedbackRating === 'needs_edit').length;
+  const needsFeedbackCount = totalMessages - ratedCount;
+
+  const TAG_OPTIONS = ['ton ni ok', 'pregenerično', 'napačen angle', 'predolgo', 'prekratko', 'manjka context', 'wrong offer', 'opening weak', 'CTA weak', 'slovnica', 'preveč sales'];
+
+  const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const ratingBadge = (r) => {
+    if (r === 'good') return '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">👍 GOOD</span>';
+    if (r === 'needs_edit') return '<span style="background:#fef3c7;color:#a16207;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">⚠️ NEEDS EDIT</span>';
+    if (r === 'bad') return '<span style="background:#fee2e2;color:#b91c1c;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">👎 BAD</span>';
+    return '';
+  };
+
+  const timeAgo = (iso) => {
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    return `${d}d`;
+  };
+
+  const messageCard = (m) => {
+    const tagsSet = new Set(m.feedbackTags || []);
+    const tagChips = TAG_OPTIONS.map(t => {
+      const active = tagsSet.has(t);
+      return `<button type="button" class="tag-chip" data-tag="${escapeHtml(t)}" data-active="${active ? '1' : '0'}" style="cursor:pointer;border:1px solid ${active ? '#2563eb' : '#e5e7eb'};background:${active ? '#dbeafe' : '#fff'};color:${active ? '#1d4ed8' : '#6b7280'};padding:3px 9px;border-radius:12px;font-size:11px;font-weight:600;margin:2px">${escapeHtml(t)}</button>`;
+    }).join('');
+
+    const ratingBtn = (val, emoji, label, color) => {
+      const active = m.feedbackRating === val;
+      return `<button type="button" class="rating-btn" data-rating="${val}" data-color="${color}" data-active="${active ? '1' : '0'}" style="cursor:pointer;border:2px solid ${active ? color : '#e5e7eb'};background:${active ? color : '#fff'};color:${active ? '#fff' : '#374151'};padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;margin-right:6px">${emoji} ${label}</button>`;
+    };
+
+    const hasInbound = m.text && m.direction === 'inbound';
+    const hasDraft = m.draftReply;
+
+    return `
+      <div class="msg-card" data-record-id="${m.id}" style="background:#fff;border:1px solid ${m.feedbackRating ? (m.feedbackRating === 'good' ? '#bbf7d0' : (m.feedbackRating === 'bad' ? '#fecaca' : '#fde68a')) : '#e5e7eb'};border-radius:10px;padding:16px 18px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+          <div>
+            <strong style="font-size:13px">${escapeHtml(m.leadName) || '<em style="color:#9ca3af">unknown</em>'}</strong>
+            <span style="font-size:11px;color:#9ca3af;margin-left:8px">${m.direction}</span>
+            <span style="margin-left:8px">${intentBadge(m.intent)}</span>
+            ${m.sent ? '<span style="background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:6px">SENT</span>' : ''}
+            ${m.feedbackRating ? `<span style="margin-left:6px">${ratingBadge(m.feedbackRating)}</span>` : ''}
+          </div>
+          <span style="font-size:11px;color:#9ca3af">${timeAgo(m.timestamp)}</span>
+        </div>
+
+        ${hasInbound ? `
+          <div style="background:#f9fafb;border-left:3px solid #cbd5e1;padding:8px 12px;font-size:12px;color:#374151;border-radius:4px;margin-bottom:8px;white-space:pre-wrap">${escapeHtml(m.text)}</div>
+        ` : ''}
+
+        ${hasDraft ? `
+          <div style="background:#eff6ff;border-left:3px solid #2563eb;padding:8px 12px;font-size:12px;color:#1e3a8a;border-radius:4px;margin-bottom:10px;white-space:pre-wrap"><strong style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#2563eb;display:block;margin-bottom:4px">Draft reply</strong>${escapeHtml(m.draftReply)}</div>
+        ` : ''}
+
+        <details class="feedback-details" ${m.feedbackRating ? 'open' : ''} style="border-top:1px dashed #e5e7eb;padding-top:10px;margin-top:10px">
+          <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;list-style:none">💬 Feedback ${m.feedbackComment ? '(has comment)' : ''}</summary>
+          <div style="margin-top:10px">
+            <div style="margin-bottom:8px">
+              ${ratingBtn('good', '👍', 'Good', '#16a34a')}
+              ${ratingBtn('needs_edit', '⚠️', 'Needs edit', '#d97706')}
+              ${ratingBtn('bad', '👎', 'Bad', '#dc2626')}
+            </div>
+            <div style="margin-bottom:8px">${tagChips}</div>
+            <textarea class="feedback-comment" placeholder="Komentar za Claude (kaj izboljšati...)" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;min-height:50px;resize:vertical">${escapeHtml(m.feedbackComment)}</textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+              <span class="feedback-status" style="font-size:11px;color:#9ca3af">${m.feedbackAt ? 'Saved ' + timeAgo(m.feedbackAt) + ' ago' : ''}</span>
+              <button type="button" class="save-feedback-btn" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:700">Save</button>
+            </div>
+          </div>
+        </details>
+      </div>`;
+  };
+
+  const messageCards = filteredMessages.length === 0
+    ? `<div style="padding:24px;color:#9ca3af;text-align:center;font-size:13px">Ni sporočil za ta filter.</div>`
+    : filteredMessages.map(messageCard).join('');
+
+  const filterPill = (val, label, count) => {
+    const active = feedbackFilter === val;
+    return `<a href="?filter=${val}" style="text-decoration:none;display:inline-block;padding:5px 12px;border-radius:14px;font-size:12px;font-weight:600;margin-right:6px;background:${active ? '#111' : '#fff'};color:${active ? '#fff' : '#374151'};border:1px solid ${active ? '#111' : '#e5e7eb'}">${label} <span style="opacity:0.6;margin-left:4px">${count}</span></a>`;
+  };
 
   const envChecks = {
     Anthropic: !!process.env.ANTHROPIC_API_KEY,
@@ -3073,18 +3412,13 @@ app.get('/dashboard', async (req, res) => {
         </table>
       </div>
 
-      <h2>Zadnja sporočila (Airtable)</h2>
-      <div class="card" style="padding:0;overflow:hidden">
-        <table>
-          <thead><tr style="background:#fafafa">
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Smer</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Lead</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Intent</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Tekst</th>
-          </tr></thead>
-          <tbody>${messageRows}</tbody>
-        </table>
+      <h2>Zadnja sporočila & feedback <span style="text-transform:none;font-weight:400;color:#9ca3af">(${filteredMessages.length}/${totalMessages})</span></h2>
+      <div style="margin-bottom:10px">
+        ${filterPill('all', 'Vsa', totalMessages)}
+        ${filterPill('needs_feedback', 'Brez feedbacka', needsFeedbackCount)}
+        ${filterPill('flagged', 'Flagged 👎⚠️', flaggedCount)}
       </div>
+      <div id="messages-list">${messageCards}</div>
 
       <h2>System health</h2>
       <div class="card">
@@ -3101,6 +3435,69 @@ app.get('/dashboard', async (req, res) => {
 
       <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:32px">B2Booster Reply Bot · Dashboard</p>
     </div>
+    <script>
+      // Feedback interactivity: rating buttons, tag chips, save button
+      function styleRating(btn) {
+        const active = btn.dataset.active === '1';
+        const color = btn.dataset.color;
+        btn.style.border = '2px solid ' + (active ? color : '#e5e7eb');
+        btn.style.background = active ? color : '#fff';
+        btn.style.color = active ? '#fff' : '#374151';
+      }
+      function styleChip(chip) {
+        const active = chip.dataset.active === '1';
+        chip.style.border = '1px solid ' + (active ? '#2563eb' : '#e5e7eb');
+        chip.style.background = active ? '#dbeafe' : '#fff';
+        chip.style.color = active ? '#1d4ed8' : '#6b7280';
+      }
+      document.querySelectorAll('.msg-card').forEach(card => {
+        const recordId = card.dataset.recordId;
+        card.querySelectorAll('.rating-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const wasActive = btn.dataset.active === '1';
+            card.querySelectorAll('.rating-btn').forEach(b => { b.dataset.active = '0'; styleRating(b); });
+            if (!wasActive) { btn.dataset.active = '1'; styleRating(btn); }
+          });
+        });
+        card.querySelectorAll('.tag-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            chip.dataset.active = chip.dataset.active === '1' ? '0' : '1';
+            styleChip(chip);
+          });
+        });
+        card.querySelector('.save-feedback-btn').addEventListener('click', async () => {
+          const btn = card.querySelector('.save-feedback-btn');
+          const status = card.querySelector('.feedback-status');
+          const activeRating = card.querySelector('.rating-btn[data-active="1"]');
+          const rating = activeRating ? activeRating.dataset.rating : '';
+          const tags = Array.from(card.querySelectorAll('.tag-chip[data-active="1"]')).map(c => c.dataset.tag);
+          const comment = card.querySelector('.feedback-comment').value;
+          btn.textContent = 'Saving...';
+          btn.disabled = true;
+          status.style.color = '#9ca3af';
+          status.textContent = '';
+          try {
+            const r = await fetch('/api/feedback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ recordId, rating, tags, comment })
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Save failed');
+            status.style.color = '#16a34a';
+            status.textContent = '✓ Saved';
+            btn.textContent = 'Save';
+            btn.disabled = false;
+            setTimeout(() => { status.textContent = 'Saved just now'; status.style.color = '#9ca3af'; }, 2500);
+          } catch (err) {
+            status.style.color = '#dc2626';
+            status.textContent = '✗ ' + err.message;
+            btn.textContent = 'Save';
+            btn.disabled = false;
+          }
+        });
+      });
+    </script>
   </body></html>`;
   res.send(html);
 });

@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>NLB d.d. - AI predlog · AIERA</title>
+  <meta name="description" content="Personaliziran AI predlog za hitrejše finančno poročanje in pregled stroškov v NLB. Manj ročnega dela, brez kompromisov pri tveganju.">
+  <meta property="og:title" content="NLB d.d. - AI predlog · AIERA">
+  <meta property="og:description" content="Personaliziran AI predlog za hitrejše finančno poročanje in pregled stroškov v NLB. Manj ročnega dela, brez kompromisov pri tveganju.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+:root {
+  --brand: #1E40AF;
+  --brand-soft: #EFF6FF;
+  --brand-dark: #1E3A8A;
+  --brand-rgba: rgba(30, 64, 175, 0.12);
+  --accent-line: #2563EB;
+  --ink: #0B1428;
+  --ink-soft: #1E293B;
+  --body: #475569;
+  --muted: #64748B;
+  --paper: #FFFFFF;
+  --paper-soft: #FAFAFB;
+  --paper-bg: #F4F4F6;
+  --border: #E5E7EB;
+  --border-strong: #D1D5DB;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  background: var(--paper-bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'ss01' on, 'cv11' on;
+  line-height: 1.55;
+}
+h1, h2, h3, h4 {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+p { margin: 0; }
+a { color: inherit; text-decoration: none; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+.wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 28px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--brand-dark); background: var(--brand-soft);
+  padding: 7px 14px; border-radius: 999px;
+  font-family: 'DM Sans', sans-serif;
+}
+.eyebrow-dot::before {
+  content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brand);
+  display: inline-block;
+}
+.section { padding: 96px 0; border-top: 1px solid var(--border); }
+.section--first { padding-top: 0; border-top: 0; }
+.section h2 { font-size: 40px; font-weight: 700; line-height: 1.1; max-width: 860px; margin: 16px auto 0; text-align: center; }
+.section-lead { color: var(--body); font-size: 17px; max-width: 760px; margin: 20px auto 0; text-align: center; }
+.center { text-align: center; }
+
+/* TOP PERSONALIZED BANNER */
+.banner {
+  background: var(--ink);
+  color: rgba(255,255,255,0.92);
+  font-size: 13px;
+  padding: 10px 28px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.banner-icon { opacity: 0.6; margin-right: 8px; }
+
+/* STICKY HEADER */
+.header {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 1180px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 28px;
+}
+.brand-lockup { display: flex; align-items: center; gap: 14px; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 17px; color: var(--ink); letter-spacing: 0.02em; }
+.brand-lockup .aiera { color: var(--brand); }
+.brand-lockup .sep { color: var(--muted); font-weight: 500; }
+.brand-lockup .target { color: var(--ink); }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 22px; font-size: 14px; font-weight: 600;
+  border-radius: 999px; border: 1px solid transparent;
+  font-family: 'DM Sans', sans-serif;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  cursor: pointer;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary:hover { background: var(--brand-dark); box-shadow: 0 8px 24px var(--brand-rgba); }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--border-strong); }
+.btn-ghost:hover { background: var(--paper-soft); }
+.btn-arrow::after { content: '→'; font-size: 16px; line-height: 1; }
+
+/* HERO */
+.hero { padding: 88px 0 64px; background: var(--paper-bg); position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; inset: 0;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 28px 28px; opacity: 0.35; mask-image: linear-gradient(180deg, #000 0%, transparent 75%);
+  pointer-events: none;
+}
+.hero-grid { position: relative; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 64px; align-items: center; }
+@media (max-width: 960px) { .hero-grid { grid-template-columns: 1fr; gap: 40px; } }
+.hero h1 { font-size: 64px; font-weight: 700; line-height: 1.02; letter-spacing: -0.025em; margin-top: 24px; }
+.hero h1 .brand-line { color: var(--brand); }
+@media (max-width: 720px) { .hero h1 { font-size: 44px; } }
+.hero-lead { color: var(--body); font-size: 18px; line-height: 1.55; max-width: 540px; margin-top: 22px; }
+.hero-cta-row { display: flex; align-items: center; gap: 18px; margin-top: 32px; flex-wrap: wrap; }
+.hero-trust { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 36px; font-size: 13px; color: var(--muted); }
+.hero-trust .item { display: inline-flex; align-items: center; gap: 8px; }
+.hero-trust .dot { width: 14px; height: 14px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+
+/* HERO MOCK WIDGET */
+.widget {
+  background: var(--paper); border: 1px solid var(--border-strong);
+  border-radius: 18px; padding: 0; box-shadow: 0 24px 48px -24px rgba(15, 23, 42, 0.18), 0 12px 24px -12px rgba(15, 23, 42, 0.08);
+  position: relative; overflow: hidden;
+}
+.widget-bar { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--paper-soft); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.widget-bar .dots { display: flex; gap: 6px; }
+.widget-bar .dots span { width: 10px; height: 10px; border-radius: 999px; }
+.widget-bar .dots span:nth-child(1) { background: #FCA5A5; }
+.widget-bar .dots span:nth-child(2) { background: #FCD34D; }
+.widget-bar .dots span:nth-child(3) { background: #86EFAC; }
+.widget-bar .url { background: var(--paper-bg); padding: 4px 10px; border-radius: 6px; color: var(--body); }
+.widget-bar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: #16A34A; font-weight: 600; }
+.widget-bar .live::before { content: ''; width: 7px; height: 7px; border-radius: 999px; background: #22C55E; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18); }
+.widget-body { padding: 22px 22px 24px; }
+.widget-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.widget-title { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 15px; color: var(--ink); }
+.widget-tag { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+.widget-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
+.stat-card { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px; }
+.stat-label { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.stat-num { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px; color: var(--ink); margin-top: 6px; display: flex; align-items: baseline; gap: 6px; }
+.stat-delta { font-size: 12px; color: var(--brand); font-weight: 600; }
+.activity { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px 8px; }
+.activity-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.activity-spark { width: 100%; height: 38px; margin-top: 6px; }
+.chat { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-top: 14px; }
+.chat-head { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.chat-head .typing { margin-left: auto; color: var(--brand); }
+.chat-bubble { background: var(--paper); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--ink-soft); margin-bottom: 8px; }
+.chat-bubble--ai { background: var(--brand-soft); border-color: transparent; color: var(--ink); }
+.chat-bubble strong { color: var(--brand-dark); font-weight: 600; }
+.chat-sources { font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-sources .tag { background: var(--paper-bg); padding: 3px 9px; border-radius: 6px; color: var(--body); }
+
+.widget-pill {
+  position: absolute; left: -16px; top: 80px;
+  background: var(--paper); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 8px 14px 8px 10px;
+  display: inline-flex; align-items: center; gap: 8px;
+  box-shadow: 0 12px 24px -12px rgba(15,23,42,0.18);
+  font-size: 12px; color: var(--ink-soft);
+}
+.widget-pill .ic { width: 24px; height: 24px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.widget-pill .lab { display: block; font-size: 9px; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+.widget-pill .val { display: block; font-weight: 600; }
+.widget-pill--bottom { top: auto; bottom: 36px; left: auto; right: -18px; }
+
+/* REFERENCES STRIP */
+.refs { background: var(--paper); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 36px 0; }
+.refs-inner { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; justify-content: center; }
+.refs-label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.refs-list { display: flex; gap: 28px; flex-wrap: wrap; align-items: center; }
+.ref-name { font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: var(--ink-soft); font-size: 15px; letter-spacing: -0.01em; }
+.refs-more { color: var(--muted); font-size: 13px; }
+
+/* KONTEKST + CARDS */
+.cards-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 56px; }
+@media (max-width: 880px) { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .cards-grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 14px;
+  padding: 24px 22px; transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: 0 16px 32px -20px rgba(15,23,42,0.12); }
+.card-ic { width: 36px; height: 36px; border-radius: 10px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 18px; }
+.card h3 { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 6px; line-height: 1.3; }
+.card p { color: var(--body); font-size: 14px; line-height: 1.55; }
+
+/* AI STACK */
+.stack-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 40px; }
+.stack-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--paper); border: 1px solid var(--border);
+  border-radius: 999px; padding: 9px 18px;
+  font-size: 13px; color: var(--ink-soft); font-weight: 500;
+}
+.stack-chip::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brand); }
+
+/* RESITVE - 6 numbered cards */
+.modules-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 56px; }
+@media (max-width: 880px) { .modules-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .modules-grid { grid-template-columns: 1fr; } }
+.module {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 16px;
+  padding: 26px 24px; position: relative;
+}
+.module-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.module-ic { width: 38px; height: 38px; border-radius: 10px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.module-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); letter-spacing: 0.06em; }
+.module h3 { font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 600; line-height: 1.3; color: var(--ink); margin-bottom: 10px; }
+.module p { color: var(--body); font-size: 14px; line-height: 1.6; }
+.module-example { margin-top: 18px; padding: 14px 16px; background: var(--paper-soft); border-radius: 10px; border-left: 3px solid var(--brand); }
+.module-example .lab { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); margin-bottom: 6px; }
+.module-example .quote { font-size: 13px; color: var(--ink-soft); font-style: italic; line-height: 1.5; }
+
+/* ARHITEKTURA - blocks */
+.arch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 56px; align-items: start; }
+@media (max-width: 880px) { .arch-grid { grid-template-columns: 1fr; } }
+.arch-text { color: var(--body); font-size: 16px; line-height: 1.65; }
+.arch-text p + p { margin-top: 16px; }
+.arch-stack { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px; }
+.arch-layer { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.arch-row {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px;
+}
+.arch-row.brand { background: var(--brand-soft); border-color: transparent; }
+.arch-row .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--paper); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--ink); font-weight: 600; font-size: 12px; flex-shrink: 0; }
+.arch-row.brand .ic { background: var(--paper); color: var(--brand); border: 0; }
+.arch-row .lab { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.arch-row .val { font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); }
+
+/* PILOT - two-column grid (cilj + faze) */
+.pilot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 56px; }
+@media (max-width: 880px) { .pilot-grid { grid-template-columns: 1fr; } }
+.pilot-block { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px 28px 22px; }
+.pilot-block .lab { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); margin-bottom: 18px; }
+.pilot-list { display: grid; gap: 12px; }
+.pilot-item { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.pilot-item .num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--brand); font-weight: 700; padding-top: 2px; }
+.pilot-item .check { width: 18px; height: 18px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px; }
+
+/* PERSONA SPOTLIGHT - asymmetric block */
+.spotlight {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 18px;
+  padding: 44px 48px; margin-top: 56px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 48px;
+}
+@media (max-width: 880px) { .spotlight { grid-template-columns: 1fr; padding: 32px 28px; } }
+.spotlight-left .eyebrow { margin-bottom: 18px; }
+.spotlight-left h3 { font-family: 'Space Grotesk', sans-serif; font-size: 30px; font-weight: 700; line-height: 1.15; color: var(--ink); margin-bottom: 18px; }
+.spotlight-left p { color: var(--body); font-size: 16px; line-height: 1.6; }
+.spotlight-right { display: grid; gap: 14px; align-content: start; }
+.bullet {
+  display: grid; grid-template-columns: 22px 1fr; gap: 14px; align-items: start;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.5;
+}
+.bullet .ic {
+  width: 22px; height: 22px; border-radius: 999px; background: var(--brand-soft); color: var(--brand);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px;
+}
+
+/* BENEFITS - 2 column table */
+.benefits-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 56px; }
+@media (max-width: 880px) { .benefits-grid { grid-template-columns: 1fr; } }
+.benefit-col { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px 30px; }
+.benefit-col .lab { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; margin-bottom: 22px; }
+.benefit-col h4 { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 600; line-height: 1.25; color: var(--ink); margin-bottom: 16px; }
+.benefit-list { display: grid; gap: 10px; }
+.benefit-list .item { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.benefit-list .item .ic { width: 18px; height: 18px; border-radius: 999px; background: var(--brand); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; margin-top: 3px; }
+
+/* VARNOST KRATKO - safety checklist */
+.safety-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 32px; margin-top: 48px; max-width: 880px; margin-left: auto; margin-right: auto; padding: 28px 32px; background: var(--paper); border: 1px solid var(--border); border-radius: 16px; }
+@media (max-width: 720px) { .safety-grid { grid-template-columns: 1fr; padding: 24px 22px; } }
+.safety-grid .item { display: grid; grid-template-columns: 22px 1fr; gap: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.safety-grid .item .ic { width: 20px; height: 20px; border-radius: 6px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px; }
+
+/* VARNOST PODATKI - full text block */
+.text-block { max-width: 800px; margin: 40px auto 0; color: var(--body); font-size: 17px; line-height: 1.65; text-align: left; }
+.text-block p + p { margin-top: 18px; }
+
+/* PRISTOP - approach block */
+.approach { background: var(--paper); border: 1px solid var(--border); border-radius: 18px; padding: 44px 48px; margin-top: 56px; }
+@media (max-width: 720px) { .approach { padding: 32px 28px; } }
+.approach .lab { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; margin-bottom: 14px; }
+.approach h3 { font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--ink); margin-bottom: 18px; }
+.approach p { color: var(--body); font-size: 16px; line-height: 1.65; margin-bottom: 14px; }
+.approach-row { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
+.approach-fact { flex: 1 1 200px; }
+.approach-fact .v { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: var(--brand); }
+.approach-fact .k { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 4px; font-weight: 600; }
+
+/* FAQ */
+.faq-list { max-width: 820px; margin: 48px auto 0; }
+.faq-item { border-bottom: 1px solid var(--border); }
+.faq-item summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 22px 4px;
+  font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 600; color: var(--ink);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::after { content: '+'; font-size: 22px; font-weight: 400; color: var(--brand); width: 24px; text-align: center; transition: transform 0.2s ease; }
+.faq-item[open] summary::after { content: '−'; }
+.faq-item .answer { padding: 4px 4px 22px; color: var(--body); font-size: 15px; line-height: 1.65; max-width: 720px; }
+
+/* FINAL CTA */
+.cta-final { padding: 96px 0 112px; background: linear-gradient(180deg, var(--paper-bg) 0%, var(--paper) 100%); border-top: 1px solid var(--border); position: relative; overflow: hidden; }
+.cta-final::before {
+  content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 800px; height: 800px; border-radius: 999px;
+  background: radial-gradient(circle at center, var(--brand-rgba) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cta-final-inner { position: relative; max-width: 720px; margin: 0 auto; text-align: center; padding: 0 28px; }
+.cta-final h2 { font-size: 44px; font-weight: 700; line-height: 1.1; }
+@media (max-width: 720px) { .cta-final h2 { font-size: 32px; } }
+.cta-final p { color: var(--body); font-size: 18px; line-height: 1.6; margin-top: 20px; max-width: 540px; margin-left: auto; margin-right: auto; }
+.cta-final .btn { margin-top: 32px; font-size: 15px; padding: 14px 28px; }
+.cta-final-contact { margin-top: 32px; font-size: 13px; color: var(--muted); display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+.cta-final-contact a { color: var(--brand-dark); font-weight: 500; }
+
+/* FOOTER */
+.footer { padding: 36px 0; border-top: 1px solid var(--border); background: var(--paper); }
+.footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; max-width: 1180px; margin: 0 auto; padding: 0 28px; font-size: 13px; color: var(--muted); }
+.footer-inner a { color: var(--muted); }
+.footer-inner a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="banner">
+  <span class="banner-icon">✉</span> Pripravljeno za: g. Jure Zupan, CFO - NLB d.d.
+</div>
+<header class="header">
+  <div class="header-inner">
+    <div class="brand-lockup">
+      <span class="aiera">AIERA</span>
+      <span class="sep">×</span>
+      <span class="target">NLB d.d.</span>
+    </div>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary">Rezerviraj 15-min sestanek</a>
+  </div>
+</header>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow eyebrow-dot">Personaliziran predlog — 18. MAJ 2026</span>
+      <h1>AI sloj nad ERP in finančnimi viri za<br><span class="brand-line">NLB d.d.</span></h1>
+      <p class="hero-lead">Hitrejša priprava poročil, jasnejši pregled stroškov in anomalij ter manj ročnega usklajevanja podatkov med oddelki. Človek še vedno potrjuje vsak zaključek - AI samo pripravi prvi osnutek.</p>
+      <div class="hero-cta-row">
+        <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+        <a href="#resitve" class="btn btn-ghost">Primeri uporabe</a>
+      </div>
+      <div class="hero-trust">
+        <span class="item"><span class="dot">✓</span>Pilot v 4 tednih</span><span class="item"><span class="dot">✓</span>On-prem ali EU cloud</span><span class="item"><span class="dot">✓</span>Polni audit log</span>
+      </div>
+    </div>
+    <div style="position: relative;">
+      <div class="widget">
+    <div class="widget-bar">
+      <div class="dots"><span></span><span></span><span></span></div>
+      <div class="url">nlb.ai-portal / pilot</div>
+      <div class="live">live</div>
+    </div>
+    <div class="widget-body">
+      <div class="widget-row">
+        <div class="widget-title">NLB finance pregled</div>
+        <div class="widget-tag">danes</div>
+      </div>
+      <div class="widget-stats">
+        <div class="stat-card">
+          <div class="stat-label">TRANSAKCIJE</div>
+          <div class="stat-num">1.8M <span class="stat-delta">+12k</span></div>
+        </div><div class="stat-card">
+          <div class="stat-label">ANOMALIJE</div>
+          <div class="stat-num">23 <span class="stat-delta">-4</span></div>
+        </div><div class="stat-card">
+          <div class="stat-label">POROČIL</div>
+          <div class="stat-num">14 <span class="stat-delta">+2</span></div>
+        </div>
+      </div>
+      <div class="activity">
+        <div class="activity-head"><span>OBDELAVA (30D)</span><span style="color: var(--brand); font-weight: 700;">▲ 38%</span></div>
+        <svg class="activity-spark" viewBox="0 0 200 38" preserveAspectRatio="none">
+          <polyline fill="none" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            points="0,30 18,28 35,29 52,25 70,26 88,22 105,20 122,17 140,14 158,10 175,12 200,5"/>
+        </svg>
+      </div>
+      <div class="chat">
+        <div class="chat-head">
+          <span>AI asistent</span>
+          <span class="typing">● piše</span>
+        </div>
+        <div class="chat-bubble">Pripravi povzetek odstopanj v stroških za maj proti aprilu.</div>
+        <div class="chat-bubble chat-bubble--ai">Stroški + <strong>2.4%</strong> vs april. Glavna razlika: <strong>IT licence (+18%)</strong> in <strong>marketing (+9%)</strong>. Preostalo skladno z napovedjo.</div>
+        <div class="chat-sources">
+          <span style="color: var(--muted); font-weight: 600;">Viri:</span>
+          <span class="tag">ERP</span><span class="tag">GL</span><span class="tag">Pogodbe</span><span class="tag">BI</span>
+        </div>
+      </div>
+    </div>
+    <div class="widget-pill">
+      <span class="ic">✓</span>
+      <span><span class="lab">ODSTOPANJE</span><span class="val">IT licence +18% proti planu</span></span>
+    </div>
+    <div class="widget-pill widget-pill--bottom">
+      <span class="ic">⊙</span>
+      <span><span class="lab">AUDIT LOG</span><span class="val">Vse poizvedbe sledljive</span></span>
+    </div>
+  </div>
+    </div>
+  </div>
+</section>
+<section class="refs">
+  <div class="wrap refs-inner">
+    <div class="refs-label">Reference — izbrane stranke AIERA</div>
+    <div class="refs-list">
+      <span class="ref-name">Munchies</span><span class="ref-name">Valtheron</span><span class="ref-name">B2Booster</span><span class="ref-name">NordLogistics</span><span class="ref-name">RedEyeMonkey</span>
+      <span class="refs-more">+ 30 podjetij v SI in EU</span>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Kontekst</span></div>
+    <h2>Pregled stroškov in priprava poročil terja čas, ki bi ga ekipa lahko porabila za analizo, ne za zbiranje podatkov.</h2>
+    <p class="section-lead">V NLB CFO funkcija pokriva širok obseg - od mesečnega zaključka do strateških analiz. Pri tej širini se večina časa porabi za usklajevanje podatkov med oddelki, ne za interpretacijo. AI lahko prevzame to rutinsko delo brez povečanja tveganja, ker človek še vedno potrjuje vsak zaključek.</p>
+    <div class="cards-grid">
+      <div class="card">
+        <div class="card-ic">◎</div>
+        <h3>Hitrejša priprava poročil</h3>
+        <p>Mesečni povzetek za upravo v urah, ne dneh.</p>
+      </div><div class="card">
+        <div class="card-ic">⊙</div>
+        <h3>Prej zaznane anomalije</h3>
+        <p>Sistem dnevno preveri odstopanja od plana.</p>
+      </div><div class="card">
+        <div class="card-ic">✦</div>
+        <h3>Manj ad-hoc analiz</h3>
+        <p>Pogosta vprašanja vodstva imajo standardne odgovore.</p>
+      </div><div class="card">
+        <div class="card-ic">⌬</div>
+        <h3>Sledljivost vsake številke</h3>
+        <p>Vsaka številka v poročilu vodi do izvornega podatka.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section" id="resitve">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Možne rešitve</span></div>
+    <h2>Kaj bi lahko razvili za NLB CFO funkcijo</h2>
+    
+    <div class="modules-grid">
+      <div class="module">
+        <div class="module-head">
+          <span class="module-ic">📑</span>
+          <span class="module-num">01</span>
+        </div>
+        <h3>AI generator mesečnih poročil</h3>
+        <p>Sistem zbere podatke iz ERP, GL in BI virov ter pripravi osnutek mesečnega CFO poročila po vaši predlogi. Ekipa pregleda, popravi in potrdi.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Pripravi povzetek aprila s primerjavo proti planu in komentarjem za upravo.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">🎯</span>
+          <span class="module-num">02</span>
+        </div>
+        <h3>AI anomalija radar</h3>
+        <p>Dnevni pregled transakcij in stroškov. Sistem označi odstopanja in razloži zakaj - z referenco do izvornih podatkov.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;IT licence +18% proti planu - povečanje izhaja iz dveh novih pogodb v aprilu.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">📊</span>
+          <span class="module-num">03</span>
+        </div>
+        <h3>CFO dashboard z AI komentarjem</h3>
+        <p>Realtime pregled ključnih kazalnikov. Vsak grafikon ima AI komentar, ki pojasni trende in opozori na tveganja.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">Vodstvo vidi P&amp;L sliko in razlago v enem pogledu, brez čakanja na analitika.</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">📘</span>
+          <span class="module-num">04</span>
+        </div>
+        <h3>AI asistent za finančna pravila</h3>
+        <p>Asistent, ki odgovarja na vprašanja iz interne metodologije, SOP, računovodskih pravil in regulatornih dokumentov. Sledljiv do izvora.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Kako se kapitalizira novo prevzeti hardware po MSRP 16?&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">📈</span>
+          <span class="module-num">05</span>
+        </div>
+        <h3>AI forecasting podpora</h3>
+        <p>Sistem predlaga forecast scenarije na podlagi zgodovinskih podatkov in znanih spremenljivk. Človek izbere in potrdi.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Pripravi 3 scenarije za H2 stroškov na podlagi trendov in pogodb.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">🌐</span>
+          <span class="module-num">06</span>
+        </div>
+        <h3>AI priprava ad-hoc analiz</h3>
+        <p>Vodstvene zahteve tipa &quot;kako je z marketingom letos&quot; dobijo standardiziran odgovor s podatki in komentarjem, brez ročnega iskanja.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">Vprašanje od CEO dobi strukturiran odgovor v 5 minutah.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Arhitektura</span></div>
+    <h2>Brez posegov v jedrne finančne sisteme. AI sloj samo bere, človek še vedno odloča.</h2>
+    <p class="section-lead">Vsi obstoječi finančni sistemi ostanejo nedotaknjeni. AI se poveže izključno z read-only dostopom in vrne strukturirane odgovore za človeško presojo.</p>
+    <div class="arch-grid">
+      <div class="arch-text">
+        <p>AI sloj nikoli ne piše v ERP ali GL. Pogled ima omejen na branje, vse spremembe gredo še vedno skozi obstoječe procese in odobritve.</p><p>Sistem se gostuje na vaši infrastrukturi - lastni servers, Azure tenant ali EU cloud z DPA. Podatki ne zapuščajo nadzorovanega okolja.</p><p>Vsak AI odgovor je sledljiv do izvora. Audit log vsake poizvedbe je na voljo regulatornim ekipam in IT auditorjem.</p>
+      </div>
+      <div class="arch-stack">
+        <div class="arch-layer">
+          <div class="arch-row">
+            <span class="ic">5</span>
+            <div><span class="lab">UPORABNIKI</span><div class="val">CFO ekipa · uprava · audit</div></div>
+          </div><div class="arch-row">
+            <span class="ic">4</span>
+            <div><span class="lab">VMESNIK</span><div class="val">CFO portal · Teams · poročila</div></div>
+          </div><div class="arch-row brand">
+            <span class="ic">3</span>
+            <div><span class="lab">AI SLOJ</span><div class="val">Claude · interni RAG · pravila</div></div>
+          </div><div class="arch-row">
+            <span class="ic">2</span>
+            <div><span class="lab">INTEGRACIJE</span><div class="val">ERP · GL · BI · DMS (READ-ONLY)</div></div>
+          </div><div class="arch-row">
+            <span class="ic">1</span>
+            <div><span class="lab">JEDRNI SISTEMI</span><div class="val">Brez sprememb</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Pilotni projekt</span></div>
+    <h2>Predlagan prvi pilot: AI generator mesečnega CFO poročila</h2>
+    <p class="section-lead">Zajamemo eno konkretno poročilo (npr. mesečni povzetek za upravo) in z AI naredimo proces priprave 5-10x hitrejši. Vsa logika in predloge ostanejo vaše. Po pilotu se odločite, kateri naslednji proces dodamo.</p>
+    <div class="pilot-grid">
+      <div class="pilot-block">
+        <div class="lab">Cilj pilota</div>
+        <div class="pilot-list">
+          <div class="pilot-item"><span class="check">✓</span><span>Skrajšati pripravo mesečnega poročila iz dni v ure</span></div><div class="pilot-item"><span class="check">✓</span><span>Ohraniti polno sledljivost vsake številke</span></div><div class="pilot-item"><span class="check">✓</span><span>Potrditi varnostni in audit standard</span></div><div class="pilot-item"><span class="check">✓</span><span>Pridobiti feedback ekipe za nadaljnje module</span></div><div class="pilot-item"><span class="check">✓</span><span>Postaviti osnovo za širši AI sloj nad finančnimi viri</span></div>
+        </div>
+      </div>
+      <div class="pilot-block">
+        <div class="lab">Faze projekta</div>
+        <div class="pilot-list">
+          <div class="pilot-item"><span class="num">01</span><span>Faza 1: Pregled procesa in dokumentacija (5 dni)</span></div><div class="pilot-item"><span class="num">02</span><span>Faza 2: Read-only integracije z ERP/GL/BI (7 dni)</span></div><div class="pilot-item"><span class="num">03</span><span>Faza 3: Razvoj generatorja poročila in audit log-a (7 dni)</span></div><div class="pilot-item"><span class="num">04</span><span>Faza 4: Testiranje s CFO ekipo - en mesečni cikel (5 dni)</span></div><div class="pilot-item"><span class="num">05</span><span>Faza 5: Pregled rezultatov in odločitev o naslednjem modulu</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="spotlight">
+      <div class="spotlight-left">
+        <span class="eyebrow">ZA FINANCE</span>
+        <h3>Merljiv prihranek časa brez kompromisov pri tveganju</h3>
+        <p>AI ne sprejema finančnih odločitev. Pripravi prvi osnutek, ekipa pregleda, CFO potrdi. Tveganje ostane na isti ravni kot danes - razlika je samo v času, ki ga ekipa porabi za pripravo. Vsa logika je transparentna in sledljiva.</p>
+      </div>
+      <div class="spotlight-right">
+        <div class="bullet"><span class="ic">✓</span><span>Vsa poročila pregleda človek pred objavo</span></div><div class="bullet"><span class="ic">✓</span><span>AI navaja vir za vsako številko in zaključek</span></div><div class="bullet"><span class="ic">✓</span><span>Audit log je polno dostopen regulatornim ekipam</span></div><div class="bullet"><span class="ic">✓</span><span>Sistem teče na vaši infrastrukturi - on-prem ali EU cloud</span></div><div class="bullet"><span class="ic">✓</span><span>Pilot omejen na eno poročilo - tveganje nizko, vpliv vidljiv</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Vpliv</span></div>
+    <h2></h2>
+    <div class="benefits-grid">
+      <div class="benefit-col">
+        <div class="lab">Za zaposlene</div>
+        <h4></h4>
+        <div class="benefit-list">
+          
+        </div>
+      </div>
+      <div class="benefit-col">
+        <div class="lab">Za vodstvo</div>
+        <h4></h4>
+        <div class="benefit-list">
+          
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Varnost in omejitve</span></div>
+    <h2>AI naj pomaga, ne odloča namesto ljudi</h2>
+    <p class="section-lead">Pri bančništvu je ključno, da AI ne sprejema samostojnih odločitev o tveganju, kreditnih politikah ali regulatornih zadevah. Njegova vloga je pomoč pri pripravi, ne pri presoji. Vsak proces ima človeško potrditev.</p>
+    <div class="safety-grid">
+      <div class="item"><span class="ic">⊙</span><span>Vsi AI odgovori imajo navedene vire</span></div><div class="item"><span class="ic">⊙</span><span>Read-only dostop do jedrnih sistemov</span></div><div class="item"><span class="ic">⊙</span><span>Pravice se preslikajo iz obstoječih sistemov</span></div><div class="item"><span class="ic">⊙</span><span>Polni audit log vseh poizvedb in odgovorov</span></div><div class="item"><span class="ic">⊙</span><span>Vsak kritičen proces zahteva človeško potrditev</span></div><div class="item"><span class="ic">⊙</span><span>On-prem ali EU cloud z DPA - brez izstopa podatkov</span></div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="approach">
+      <div class="lab">AIERA pristop</div>
+      <h3>Razvijamo finančne AI module na podlagi vaših SOP, ne katalogu generičnih funkcij.</h3>
+      <p>AIERA ni ponudnik plug-and-play AI orodja za finance. Prvi teden preživimo s CFO ekipo - razumemo, kje porabljate čas, katera poročila se pripravljajo z največ ročnega dela, kateri ad-hoc requesti se pogosto ponavljajo.</p><p>Šele potem določimo, kateri modul ima največji vpliv. Cilj je, da pilot reši konkreten problem - ne pa, da demonstrira splošno zmogljivost AI.</p>
+      <div class="approach-row">
+        <div class="approach-fact"><div class="v">4 tedne</div><div class="k">PILOT</div></div><div class="approach-fact"><div class="v">0 lock-in</div><div class="k">KOD JE VAŠ</div></div><div class="approach-fact"><div class="v">100% EU</div><div class="k">OBDELAVA</div></div><div class="approach-fact"><div class="v">Polni audit</div><div class="k">SLEDLJIVOST</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">FAQ</span></div>
+    <h2>Pogosta vprašanja</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>Kako je z varnostjo občutljivih finančnih podatkov?</summary>
+        <div class="answer">Sistem teče na vaši infrastrukturi - on-prem servers, vaš Azure tenant ali EU cloud okolje z DPA. Podatki nikoli ne zapustijo nadzorovanega okolja. Modele lahko poganjate tudi lokalno, brez prenosa.</div>
+      </details><details class="faq-item">
+        <summary>Kako se preprečijo AI napake v finančnih zaključkih?</summary>
+        <div class="answer">AI vedno navaja vir za vsako številko in zaključek. Človek pregleda in potrdi pred objavo. Sistem ni odločevalec - je pomočnik pri pripravi. Tveganje napake je enako kot danes, ko poročilo pripravi analitik in CFO potrdi.</div>
+      </details><details class="faq-item">
+        <summary>Ali izpolnjuje zahteve EBA in regulatorne smernice?</summary>
+        <div class="answer">AI sloj ne posega v regulatorno občutljive procese, samo bere podatke in pripravi gradiva za človeško presojo. Audit log je popoln, vsak korak sledljiv. Regulatorne ekipe vidijo, kdo je vprašal kaj, kdaj in kateri vir je bil uporabljen.</div>
+      </details><details class="faq-item">
+        <summary>Kakšen je ROI pilota?</summary>
+        <div class="answer">V pilotu izmerimo dejansko skrajšanje časa za eno konkretno poročilo. Pri sedanjih internih ocenah CFO ekipe je realno skrajšanje 60-80% pri rutinski pripravi. Po pilotu odločite, ali smer širite.</div>
+      </details><details class="faq-item">
+        <summary>Kaj če imamo strožje notranje pravice in pravila?</summary>
+        <div class="answer">Sistem se prilagodi vašim pravicam in pravilom. Dostop, role, podatki, ki gredo skozi AI - vse je konfigurirljivo. Brez &quot;one-size-fits-all&quot;. Pri implementaciji upoštevamo vaš lasten security review.</div>
+      </details><details class="faq-item">
+        <summary>Kdo vzdržuje sistem po pilotu?</summary>
+        <div class="answer">Možnost A: AIERA z mesečno naročnino in SLA. Možnost B: predaja vaši IT ekipi z dokumentacijo in onboardingom. Možnost C: kombinacija - AIERA podpora, vaša ekipa vzdržuje.</div>
+      </details>
+    </div>
+  </div>
+</section>
+<section class="cta-final">
+  <div class="cta-final-inner">
+    <span class="eyebrow">Za g. Jureta Zupana</span>
+    <h2 style="margin-top: 20px;">Predlog: 15-minutni pregled vpliva za NLB CFO funkcijo</h2>
+    <p>V 15 minutah lahko pogledava, katero konkretno poročilo ali analizo bi se splačalo dati v pilot. Brez zavez, brez priprave. Po pregledu odločite, ali smer pelje naprej ali ne.</p>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+    <div class="cta-final-contact">
+      <span>Žan Bagarič · CEO AIERA</span>
+      <a href="mailto:zan@aiera.si">zan@aiera.si</a>
+      <a href="tel:+38640708327">+386 40 708 327</a>
+    </div>
+  </div>
+</section>
+<footer class="footer">
+  <div class="footer-inner">
+    <span>© 2026 AIERA d.o.o. · Ta predlog je pripravljen ročno za naslovnika.</span>
+    <span><a href="https://aiera.si" target="_blank" rel="noopener">aiera.si</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
