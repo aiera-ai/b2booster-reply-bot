@@ -48,12 +48,52 @@ function createSlug(leadData) {
   return `${slugifyCompany(company)}-${randomHash(4)}`;
 }
 
+// Fetch latest published deploy's file manifest from Netlify.
+// Returns {path: sha} mapping that we merge with new files to avoid unpublishing.
+async function fetchExistingManifest() {
+  try {
+    const deploysRes = await fetch(
+      `https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?per_page=1`,
+      { headers: { 'Authorization': `Bearer ${process.env.NETLIFY_TOKEN}` } }
+    );
+    if (!deploysRes.ok) {
+      console.warn('[B2BOOSTER] Could not fetch latest deploy, using local manifest only');
+      return null;
+    }
+    const deploys = await deploysRes.json();
+    if (!deploys.length) return null;
+    const latestId = deploys[0].id;
+
+    const filesRes = await fetch(
+      `https://api.netlify.com/api/v1/deploys/${latestId}/files`,
+      { headers: { 'Authorization': `Bearer ${process.env.NETLIFY_TOKEN}` } }
+    );
+    if (!filesRes.ok) {
+      console.warn('[B2BOOSTER] Could not fetch deploy files, using local manifest only');
+      return null;
+    }
+    const files = await filesRes.json();
+    const manifest = {};
+    for (const f of files) manifest[f.path] = f.sha;
+    console.log(`[B2BOOSTER] Inherited ${files.length} existing files from latest deploy`);
+    return manifest;
+  } catch (err) {
+    console.warn('[B2BOOSTER] fetchExistingManifest error:', err.message);
+    return null;
+  }
+}
+
 async function deployToNetlify(slug, html) {
   if (!process.env.NETLIFY_TOKEN) {
     console.warn('[B2BOOSTER] No NETLIFY_TOKEN, skipping deploy');
     return null;
   }
-  const manifest = loadManifest();
+  // Merge: local cache + remote latest deploy + new files.
+  // Remote fetch ensures we never unpublish files from other deploy flows (AIERA spirit etc).
+  const remoteManifest = await fetchExistingManifest();
+  const localManifest = loadManifest();
+  const manifest = { ...localManifest, ...(remoteManifest || {}) };
+
   const filePath = `/${B2BOOSTER_PREFIX}/${slug}/index.html`;
   const robotsPath = `/${B2BOOSTER_PREFIX}/robots.txt`;
   const robotsContent = 'User-agent: *\nDisallow: /\n';
