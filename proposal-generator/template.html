@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{HERO_HEADLINE}} · AIERA Generator ponudb</title>
+<meta name="description" content="AI generator B2B ponudb za prodajno ekipo {{LEAD_COMPANY}}. Tri vzorčne ponudbe pripravljene za pregled.">
+<meta name="robots" content="noindex,nofollow">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{HERO_HEADLINE}} · AIERA">
+<meta property="og:description" content="AIERA Generator ponudb · tri vzorčne ponudbe za {{LEAD_COMPANY}}.">
+<meta property="og:locale" content="sl_SI">
+<meta name="theme-color" content="#1E40AF">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #0F172A; --ink-soft: #1E293B; --body: #475569; --mute: #64748B;
+  --paper: #FFFFFF; --paper-soft: #F8FAFC; --paper-warm: #FDFBF6; --paper-bg: #F1F5F9;
+  --border: #E2E8F0; --border-strong: #CBD5E1;
+  --brand: #1E40AF; --brand-soft: #EFF4FF; --brand-strong: #1E3A8A;
+  --sky: #38BDF8; --mint: #15803D; --mint-soft: #DCFCE7;
+  --amber: #92400E; --amber-soft: #FEF3C7;
+  --gradient-brand: linear-gradient(135deg, #1E40AF 0%, #3B82F6 50%, #38BDF8 100%);
+  --gradient-text: linear-gradient(90deg, #1E3A8A 0%, #3B82F6 45%, #38BDF8 100%);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--paper); color: var(--ink);
+  font-size: 17px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+img { max-width: 100%; display: block; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+.wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 28px; }
+
+/* Header */
+header {
+  border-bottom: 1px solid var(--border); background: var(--paper);
+  position: sticky; top: 0; z-index: 50;
+}
+.header-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 0;
+}
+.brand-mark { font-weight: 700; font-size: 17px; letter-spacing: 0.02em; color: var(--ink); }
+.brand-mark span.dot { color: var(--brand); }
+.header-meta { font-size: 13px; color: var(--mute); }
+.header-meta strong { color: var(--ink-soft); font-weight: 600; }
+.nav-cta {
+  font-size: 14px; font-weight: 600; color: var(--paper);
+  background: var(--ink); padding: 10px 18px; border-radius: 8px;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.nav-cta:hover { background: var(--brand); text-decoration: none; }
+
+/* Hero */
+.hero { padding: 72px 0 56px; }
+.hero-eyebrow {
+  font-size: 13px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--brand); margin-bottom: 16px;
+}
+.hero h1 {
+  font-size: 46px; font-weight: 700; line-height: 1.12; letter-spacing: -0.02em;
+  color: var(--ink); margin-bottom: 20px; max-width: 760px;
+}
+.hero h1 .grad {
+  background: var(--gradient-text); -webkit-background-clip: text;
+  background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero p.lead {
+  font-size: 19px; line-height: 1.6; color: var(--ink-soft);
+  max-width: 720px; margin-bottom: 32px;
+}
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--ink); color: var(--paper);
+  padding: 14px 24px; border-radius: 10px; font-weight: 600; font-size: 15px;
+  border: none; transition: all 0.15s;
+}
+.btn-primary:hover { background: var(--brand); text-decoration: none; transform: translateY(-1px); }
+.btn-secondary {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--paper); color: var(--ink);
+  padding: 14px 24px; border-radius: 10px; font-weight: 600; font-size: 15px;
+  border: 1px solid var(--border-strong);
+}
+.btn-secondary:hover { background: var(--paper-soft); border-color: var(--ink); text-decoration: none; }
+.hero-anchor {
+  font-size: 14px; color: var(--mute); margin-top: 12px;
+}
+.hero-anchor strong { color: var(--ink-soft); }
+
+/* Section base */
+section { padding: 72px 0; border-top: 1px solid var(--border); }
+
+.eyebrow {
+  font-size: 13px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--brand); margin-bottom: 14px;
+}
+h2 { font-size: 34px; font-weight: 700; line-height: 1.2; letter-spacing: -0.015em; margin-bottom: 18px; }
+h3 { font-size: 20px; font-weight: 600; line-height: 1.35; margin-bottom: 10px; }
+p { color: var(--body); font-size: 17px; line-height: 1.7; margin-bottom: 14px; }
+p.lead { font-size: 19px; line-height: 1.6; color: var(--ink-soft); margin-bottom: 28px; max-width: 720px; }
+p strong { color: var(--ink-soft); font-weight: 600; }
+
+/* DEMO TABS — 3 stilov */
+.demo-section { background: var(--paper-bg); }
+.demo-intro { display: flex; align-items: end; justify-content: space-between; gap: 32px; margin-bottom: 36px; flex-wrap: wrap; }
+.demo-tabs {
+  display: inline-flex; background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
+  padding: 4px; gap: 2px;
+}
+.demo-tab {
+  padding: 10px 18px; font-size: 14px; font-weight: 600; color: var(--body);
+  background: transparent; border: none; border-radius: 8px; transition: all 0.15s;
+}
+.demo-tab.active { background: var(--ink); color: var(--paper); }
+.demo-tab:not(.active):hover { background: var(--paper-soft); color: var(--ink); }
+
+/* Demo card (mockup of generated offer) */
+.demo-stage {
+  background: var(--paper); border: 1px solid var(--border-strong);
+  border-radius: 16px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 12px 32px -8px rgba(15,23,42,0.12);
+}
+.demo-stage[data-theme="minimal"] { --t-ink: #0F172A; --t-body: #475569; --t-paper: #FFFFFF; --t-soft: #F8FAFC; --t-border: #E2E8F0; --t-accent: #1E40AF; --t-radius: 8px; }
+.demo-stage[data-theme="modern"]  { --t-ink: #0B1220; --t-body: #475569; --t-paper: #FFFFFF; --t-soft: #FDFBF6; --t-border: #F1E9D6; --t-accent: #EA580C; --t-radius: 14px; }
+.demo-stage[data-theme="premium"] { --t-ink: #F1F5F9; --t-body: #94A3B8; --t-paper: #0B1220; --t-soft: #111827; --t-border: #1F2937; --t-accent: #38BDF8; --t-radius: 6px; }
+.demo-stage { color: var(--t-body); }
+.demo-stage h4 { color: var(--t-ink); }
+
+.dm-bar {
+  background: var(--t-paper); color: var(--t-ink); padding: 18px 28px;
+  border-bottom: 1px solid var(--t-border); display: flex; justify-content: space-between; align-items: center;
+}
+.dm-bar .dm-brand { font-weight: 700; font-size: 16px; letter-spacing: 0.04em; }
+.dm-bar .dm-ref { font-size: 12px; color: var(--t-body); font-family: 'JetBrains Mono', monospace; }
+
+.dm-body { padding: 36px 36px 28px; background: var(--t-paper); }
+.dm-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--t-accent); margin-bottom: 10px; }
+.dm-title { font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--t-ink); margin-bottom: 8px; letter-spacing: -0.01em; }
+.dm-sub { font-size: 15px; color: var(--t-body); margin-bottom: 20px; }
+
+.dm-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; padding: 18px 22px; background: var(--t-soft); border-radius: var(--t-radius); border: 1px solid var(--t-border); }
+.dm-meta-block .dm-label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--t-body); margin-bottom: 6px; }
+.dm-meta-block .dm-val { font-size: 14px; font-weight: 600; color: var(--t-ink); }
+.dm-meta-block .dm-val-sub { font-size: 13px; color: var(--t-body); margin-top: 2px; }
+
+.dm-greet { color: var(--t-body); font-size: 15px; line-height: 1.6; margin-bottom: 24px; }
+
+.dm-section-h { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--t-accent); margin-bottom: 14px; margin-top: 8px; }
+
+.dm-item { padding: 18px 0; border-bottom: 1px dashed var(--t-border); display: grid; grid-template-columns: 36px 1fr auto; gap: 16px; align-items: start; }
+.dm-item:last-child { border-bottom: none; }
+.dm-item .dm-num {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--t-accent); color: white;
+  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.dm-stage[data-theme="premium"] .dm-item .dm-num { color: var(--t-paper); }
+.dm-item .dm-info { min-width: 0; }
+.dm-item .dm-info h4 { font-size: 15px; font-weight: 600; color: var(--t-ink); margin-bottom: 4px; }
+.dm-item .dm-info p { font-size: 13px; color: var(--t-body); margin: 0; line-height: 1.5; }
+.dm-item .dm-price { text-align: right; }
+.dm-item .dm-price .dm-orig { font-size: 12px; color: var(--t-body); text-decoration: line-through; }
+.dm-item .dm-price .dm-final { font-size: 15px; font-weight: 700; color: var(--t-ink); }
+.dm-item .dm-price .dm-qty { font-size: 12px; color: var(--t-body); margin-top: 2px; }
+.dm-item .dm-price .dm-sum { font-size: 13px; font-weight: 600; color: var(--t-accent); margin-top: 2px; }
+
+.dm-totals { padding: 22px 0 4px; border-top: 2px solid var(--t-border); margin-top: 12px; }
+.dm-totals .tr { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; color: var(--t-body); }
+.dm-totals .tr.grand { font-size: 18px; font-weight: 700; color: var(--t-ink); padding-top: 14px; border-top: 1px solid var(--t-border); margin-top: 8px; }
+.dm-totals .tr.save { color: var(--t-accent); font-weight: 600; }
+
+.dm-actions { padding: 20px 36px 32px; background: var(--t-soft); border-top: 1px solid var(--t-border); display: flex; gap: 12px; flex-wrap: wrap; }
+.dm-btn-confirm { background: var(--t-accent); color: white; padding: 12px 22px; border-radius: var(--t-radius); border: none; font-size: 14px; font-weight: 600; }
+.dm-btn-confirm:hover { opacity: 0.92; }
+.dm-btn-sec { background: var(--t-paper); color: var(--t-ink); padding: 12px 22px; border-radius: var(--t-radius); border: 1px solid var(--t-border); font-size: 14px; font-weight: 600; }
+
+.dm-footer-strip { padding: 14px 36px; background: var(--t-soft); border-top: 1px solid var(--t-border); font-size: 12px; color: var(--t-body); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+/* Why different */
+.why-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 28px; }
+.why-card { background: var(--paper); padding: 28px; border: 1px solid var(--border); border-radius: 14px; }
+.why-card .wc-icon { width: 44px; height: 44px; border-radius: 10px; background: var(--brand-soft); display: flex; align-items: center; justify-content: center; margin-bottom: 14px; color: var(--brand); }
+.why-card h3 { font-size: 17px; }
+.why-card p { font-size: 15px; margin: 0; color: var(--body); }
+
+.proof-strip {
+  background: var(--ink); color: var(--paper); padding: 32px 36px; border-radius: 16px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 36px;
+}
+.proof-stat .ps-num { font-size: 36px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; margin-bottom: 8px; background: var(--gradient-text); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.proof-stat .ps-label { font-size: 13px; color: #94A3B8; line-height: 1.4; }
+
+/* How it works */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 28px; }
+.step { background: var(--paper); padding: 24px; border: 1px solid var(--border); border-radius: 14px; position: relative; }
+.step .step-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; color: var(--brand); margin-bottom: 12px; }
+.step h3 { font-size: 17px; margin-bottom: 8px; }
+.step p { font-size: 14px; margin: 0; }
+.step .step-time { display: inline-block; margin-top: 12px; padding: 4px 10px; background: var(--mint-soft); color: var(--mint); border-radius: 6px; font-size: 12px; font-weight: 600; }
+
+/* Pricing soft (no tiers) */
+.pricing-soft { background: var(--paper-warm); border: 1px solid #F1E9D6; border-radius: 16px; padding: 36px; margin-top: 24px; }
+.pricing-soft h3 { font-size: 22px; margin-bottom: 14px; }
+.pricing-soft p { font-size: 16px; }
+.pricing-soft ul { list-style: none; padding: 0; margin: 18px 0; }
+.pricing-soft ul li { padding: 8px 0; padding-left: 26px; position: relative; font-size: 15px; color: var(--ink-soft); }
+.pricing-soft ul li:before { content: ""; position: absolute; left: 0; top: 14px; width: 14px; height: 2px; background: var(--brand); }
+.pricing-anchor { background: var(--paper); padding: 16px 22px; border-radius: 10px; border: 1px dashed var(--border-strong); margin-top: 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.pricing-anchor .pa-from { font-size: 14px; color: var(--mute); }
+.pricing-anchor .pa-from strong { color: var(--ink); font-size: 16px; }
+.pricing-anchor .pa-note { font-size: 13px; color: var(--mute); }
+
+.guarantee {
+  display: flex; gap: 16px; align-items: center; margin-top: 28px;
+  background: var(--mint-soft); border: 1px solid #BBF7D0; border-radius: 12px;
+  padding: 20px 24px;
+}
+.guarantee .gi { width: 28px; height: 28px; color: var(--mint); flex-shrink: 0; }
+.guarantee .gh { font-weight: 600; color: var(--ink); font-size: 15px; margin-bottom: 2px; }
+.guarantee .gt { font-size: 13px; color: var(--ink-soft); }
+
+/* Timeline */
+.timeline { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 16px; align-items: stretch; margin-top: 32px; }
+.tl-step { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; }
+.tl-step .tl-num { width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: white; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+.tl-step h4 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.tl-step .tl-when { font-size: 12px; color: var(--mute); }
+.tl-arrow { font-size: 24px; color: var(--mute); align-self: center; }
+
+/* Contact */
+.contact-card { background: linear-gradient(135deg, #1E3A8A 0%, #1E40AF 100%); color: var(--paper); border-radius: 16px; padding: 40px; display: grid; grid-template-columns: auto 1fr auto; gap: 28px; align-items: center; margin-top: 24px; }
+.contact-avatar { width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; }
+.contact-info h3 { color: var(--paper); font-size: 19px; margin-bottom: 4px; }
+.contact-info .ci-role { color: #93C5FD; font-size: 14px; margin-bottom: 10px; }
+.contact-info .ci-meta { font-size: 13px; color: #DBEAFE; display: flex; gap: 18px; flex-wrap: wrap; }
+.contact-info .ci-meta a { color: var(--paper); }
+.contact-cta { background: var(--paper); color: var(--ink); padding: 14px 22px; border-radius: 10px; font-weight: 600; font-size: 15px; }
+.contact-cta:hover { background: var(--brand-soft); text-decoration: none; }
+
+/* Footer */
+footer { padding: 32px 0; border-top: 1px solid var(--border); color: var(--mute); font-size: 13px; }
+.footer-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.footer-meta { display: flex; gap: 16px; flex-wrap: wrap; }
+
+/* Mobile */
+@media (max-width: 768px) {
+  .hero { padding: 48px 0 32px; }
+  .hero h1 { font-size: 32px; }
+  .hero p.lead { font-size: 16px; }
+  section { padding: 48px 0; }
+  h2 { font-size: 26px; }
+  .demo-intro { flex-direction: column; align-items: flex-start; }
+  .demo-tabs { width: 100%; overflow-x: auto; }
+  .dm-body { padding: 24px 20px; }
+  .dm-meta { grid-template-columns: 1fr; gap: 14px; padding: 14px 16px; }
+  .dm-item { grid-template-columns: 28px 1fr; }
+  .dm-item .dm-price { grid-column: 2; text-align: left; margin-top: 6px; }
+  .why-grid { grid-template-columns: 1fr; }
+  .proof-strip { grid-template-columns: 1fr; gap: 16px; padding: 24px; }
+  .steps { grid-template-columns: 1fr; }
+  .timeline { grid-template-columns: 1fr; }
+  .tl-arrow { display: none; }
+  .contact-card { grid-template-columns: 1fr; text-align: center; padding: 28px; }
+  .contact-avatar { margin: 0 auto; }
+  .contact-info .ci-meta { justify-content: center; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="header-inner">
+      <div class="brand-mark">AIERA<span class="dot">.</span></div>
+      <div class="header-meta">Pripravljeno za <strong>{{LEAD_COMPANY}}</strong></div>
+      <a href="{{CALENDLY_URL}}" class="nav-cta" data-track="header-cta">Rezerviraj 15 min</a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero" style="border-top:none">
+  <div class="wrap">
+    <div class="hero-eyebrow">Generator ponudb · za {{LEAD_COMPANY}}</div>
+    <h1>{{HERO_HEADLINE}}<br><span class="grad">{{HERO_HEADLINE_ACCENT}}</span></h1>
+    <p class="lead">{{HERO_LEAD}}</p>
+    <div class="hero-actions">
+      <a href="{{CALENDLY_URL}}" class="btn-primary" data-track="hero-cta">
+        Rezerviraj 15 min predstavitev
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>
+      </a>
+      <a href="#demo" class="btn-secondary" data-track="hero-demo-jump">Poglej vzorčne ponudbe</a>
+    </div>
+    <div class="hero-anchor"><strong>Pilotna naročnina od 290 EUR mesečno.</strong> Točen plan oblikujemo na 15-minutnem klicu glede na obseg in velikost ekipe.</div>
+  </div>
+</section>
+
+<!-- DEMO TABS -->
+<section class="demo-section" id="demo">
+  <div class="wrap">
+    <div class="eyebrow">Vzorčne ponudbe</div>
+    <div class="demo-intro">
+      <div>
+        <h2>Vaše ponudbe v 3 različnih stilih</h2>
+        <p class="lead" style="margin-bottom:0">Isto vsebino prikažemo v treh layoutih. Izberete katera grafična podoba ustreza vaši blagovni znamki, mi pa nastavimo predloge na vaš logotip, barve in tipografijo.</p>
+      </div>
+      <div class="demo-tabs" role="tablist">
+        <button class="demo-tab active" data-style="minimal" data-track="tab-minimal">Minimalist</button>
+        <button class="demo-tab" data-style="modern" data-track="tab-modern">Modern</button>
+        <button class="demo-tab" data-style="premium" data-track="tab-premium">Premium</button>
+      </div>
+    </div>
+
+    <div class="demo-stage" id="demoStage" data-theme="minimal">
+      <div class="dm-bar">
+        <div class="dm-brand">{{DEMO_SELLER_NAME}}</div>
+        <div class="dm-ref">Ponudba {{DEMO_OFFER_REF}}</div>
+      </div>
+      <div class="dm-body">
+        <div class="dm-eyebrow">{{DEMO_EYEBROW}}</div>
+        <h4 class="dm-title">{{DEMO_TITLE}}</h4>
+        <p class="dm-sub">{{DEMO_SUBTITLE}}</p>
+
+        <div class="dm-meta">
+          <div class="dm-meta-block">
+            <div class="dm-label">Ponudnik</div>
+            <div class="dm-val">{{DEMO_SELLER_NAME}}</div>
+            <div class="dm-val-sub">{{DEMO_SELLER_ADDRESS}}</div>
+          </div>
+          <div class="dm-meta-block">
+            <div class="dm-label">Naročnik</div>
+            <div class="dm-val">{{DEMO_BUYER_NAME}}</div>
+            <div class="dm-val-sub">{{DEMO_BUYER_CONTACT}}</div>
+          </div>
+        </div>
+
+        <p class="dm-greet">{{DEMO_GREETING}}</p>
+
+        <div class="dm-section-h">Predmet ponudbe</div>
+        {{DEMO_ITEMS_HTML}}
+
+        <div class="dm-totals">
+          <div class="tr"><span>Skupaj brez DDV</span><span>{{DEMO_SUBTOTAL}}</span></div>
+          <div class="tr"><span>DDV (22%)</span><span>{{DEMO_VAT}}</span></div>
+          <div class="tr grand"><span>SKUPAJ Z DDV</span><span>{{DEMO_TOTAL}}</span></div>
+          <div class="tr save"><span>Vaš prihranek</span><span>{{DEMO_SAVINGS}}</span></div>
+        </div>
+      </div>
+      <div class="dm-actions">
+        <button class="dm-btn-confirm">Potrjujem ponudbo</button>
+        <button class="dm-btn-sec">Shrani kot PDF</button>
+      </div>
+      <div class="dm-footer-strip">
+        <span>Veljavnost: {{DEMO_VALID_UNTIL}}</span>
+        <span>Skrbnik: {{DEMO_REP_NAME}} · {{DEMO_REP_PHONE}}</span>
+      </div>
+    </div>
+
+    <p style="margin-top:18px;font-size:13px;color:var(--mute);text-align:center;">Vsaka ponudba se generira v vaši podobi, z vašim cenikom in vašim prodajnim tonom. Vzorec zgoraj je samo prikaz strukture.</p>
+  </div>
+</section>
+
+<!-- WHY DIFFERENT -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Zakaj je drugače</div>
+    <h2>Ponudba ki jo kupec dejansko prebere</h2>
+    <p class="lead">{{WHY_LEAD_PARAGRAPH}}</p>
+
+    <div class="why-grid">
+      <div class="why-card">
+        <div class="wc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+        <h3>{{WHY_1_TITLE}}</h3>
+        <p>{{WHY_1_TEXT}}</p>
+      </div>
+      <div class="why-card">
+        <div class="wc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg></div>
+        <h3>{{WHY_2_TITLE}}</h3>
+        <p>{{WHY_2_TEXT}}</p>
+      </div>
+      <div class="why-card">
+        <div class="wc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3zM9 9h6v6H9z"></path></svg></div>
+        <h3>{{WHY_3_TITLE}}</h3>
+        <p>{{WHY_3_TEXT}}</p>
+      </div>
+      <div class="why-card">
+        <div class="wc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></div>
+        <h3>{{WHY_4_TITLE}}</h3>
+        <p>{{WHY_4_TEXT}}</p>
+      </div>
+    </div>
+
+    <div class="proof-strip">
+      <div class="proof-stat">
+        <div class="ps-num">{{PROOF_1_NUM}}</div>
+        <div class="ps-label">{{PROOF_1_LABEL}}</div>
+      </div>
+      <div class="proof-stat">
+        <div class="ps-num">{{PROOF_2_NUM}}</div>
+        <div class="ps-label">{{PROOF_2_LABEL}}</div>
+      </div>
+      <div class="proof-stat">
+        <div class="ps-num">{{PROOF_3_NUM}}</div>
+        <div class="ps-label">{{PROOF_3_LABEL}}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section style="background:var(--paper-soft)">
+  <div class="wrap">
+    <div class="eyebrow">Kako deluje</div>
+    <h2>Od cenika do poslane ponudbe v eni minuti</h2>
+    <p class="lead">Vaš prodajnik vnese podatke o kupcu, sistem pripravi osnutek v vaši grafični podobi, prodajnik popravi v eni minuti, klikne pošlji. Vse sledenje teče v ozadju.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01 / Setup</div>
+        <h3>Integracija cenika in podobe</h3>
+        <p>Naložimo vaš cenik (Excel ali ERP), nastavimo logotip, barve, tipografijo in pravna besedila. Predloge pripravimo na vašo industrijo.</p>
+        <div class="step-time">7 dni</div>
+      </div>
+      <div class="step">
+        <div class="step-num">02 / Dnevna raba</div>
+        <h3>AI osnutek v 30 sekundah</h3>
+        <p>Prodajnik vnese podatke o kupcu in povpraševanje. Sistem pripravi celotno ponudbo s strukturo, opisi izdelkov in personalizirano utemeljitvijo izbire.</p>
+        <div class="step-time">30 s</div>
+      </div>
+      <div class="step">
+        <div class="step-num">03 / Pošiljanje</div>
+        <h3>Pregled in pošlji</h3>
+        <p>Prodajnik popravi v eni minuti, klikne pošlji. Ponudba postane spletna stran v vaši podobi, kupec jo odpre brez prenosa PDF priponke. Sistem sledi odprtjem.</p>
+        <div class="step-time">1 min</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SOFT PRICING -->
+<section>
+  <div class="wrap-narrow">
+    <div class="eyebrow">Naročnina</div>
+    <h2>Cena temelji na obsegu in velikosti ekipe</h2>
+    <p class="lead">Cena ni standardna paketna oznaka. Oblikujemo jo glede na predviden mesečni obseg ponudb, število prodajnikov in stopnjo integracije z vašim sistemom (ERP, CRM).</p>
+
+    <div class="pricing-soft">
+      <h3>Kaj definira ceno</h3>
+      <p>Vse naročnine vključujejo lastno poddomeno, ponudbe v vaši podobi, sledenje odzivov, podporo. Nimamo licenčnin na uporabnika, ne računamo dodatno za integracije.</p>
+      <ul>
+        <li>Predviden mesečni obseg ponudb (od 30 do nekaj sto)</li>
+        <li>Število prodajnikov v ekipi (od 1 do več kot 10)</li>
+        <li>Integracija s cenikom in ERP (Excel, SAP, MS Dynamics, druge)</li>
+        <li>Raven podpore in odzivni čas</li>
+      </ul>
+      <div class="pricing-anchor">
+        <div class="pa-from">
+          <strong>Pilotna naročnina od 290 EUR / mesec</strong><br>
+          <span class="pa-note">Enkraten setup od 490 EUR. Točen predračun pripravimo na 15-minutnem klicu.</span>
+        </div>
+        <a href="{{CALENDLY_URL}}" class="btn-primary" data-track="pricing-cta">Pripravi mi predračun</a>
+      </div>
+    </div>
+
+    <div class="guarantee">
+      <svg class="gi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>
+      <div>
+        <div class="gh">30-dnevna garancija vračila setupa</div>
+        <div class="gt">Če sistem ne ustreza vaši ekipi, postavitveni strošek vrnemo brez vprašanj. Mesečna naročnina ima 30-dnevni odpovedni rok.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TIMELINE -->
+<section style="background:var(--paper-soft)">
+  <div class="wrap">
+    <div class="eyebrow">Po podpisu</div>
+    <h2>Prva ponudba v 7 dneh</h2>
+    <p class="lead">Brez dolgih implementacij. Pilot poteka na konkretnih ponudbah, ne v sandboxu.</p>
+
+    <div class="timeline">
+      <div class="tl-step">
+        <div class="tl-num">1</div>
+        <h4>Uvodni klic</h4>
+        <div class="tl-when">Ta teden, 15 min</div>
+      </div>
+      <div class="tl-arrow">→</div>
+      <div class="tl-step">
+        <div class="tl-num">2</div>
+        <h4>Setup in integracija</h4>
+        <div class="tl-when">3 do 5 dni po podpisu</div>
+      </div>
+      <div class="tl-arrow">→</div>
+      <div class="tl-step">
+        <div class="tl-num">3</div>
+        <h4>Prva ponudba poslana</h4>
+        <div class="tl-when">7 dni po podpisu</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CONTACT -->
+<section>
+  <div class="wrap-narrow">
+    <div class="eyebrow">Skrbnik za {{LEAD_COMPANY}}</div>
+    <h2>Pogovor o vašem primeru</h2>
+    <p class="lead">15-minutni klic, brez priprave. Pokažem realen prikaz na primeru iz vaše industrije in odgovorim na vsa vprašanja o ceni, integraciji in časovnici.</p>
+
+    <div class="contact-card">
+      <div class="contact-avatar">ŽB</div>
+      <div class="contact-info">
+        <h3>Žan Bagarič</h3>
+        <div class="ci-role">CEO · AIERA d.o.o.</div>
+        <div class="ci-meta">
+          <a href="tel:+38640708327">040 708 327</a>
+          <a href="mailto:zan@aiera.si">zan@aiera.si</a>
+          <span>aiera.si</span>
+        </div>
+      </div>
+      <a href="{{CALENDLY_URL}}" class="contact-cta" data-track="contact-cta">Rezerviraj termin</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-inner">
+      <div>AIERA d.o.o. © 2026 · Generator ponudb</div>
+      <div class="footer-meta">
+        <span>Pripravljeno: {{PREPARED_DATE}}</span>
+        <span>Velja do: {{VALID_UNTIL}}</span>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  // Tab switching
+  var stage = document.getElementById('demoStage');
+  var tabs = document.querySelectorAll('.demo-tab');
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      tabs.forEach(function(x){ x.classList.remove('active'); });
+      t.classList.add('active');
+      stage.setAttribute('data-theme', t.getAttribute('data-style'));
+      track('tab-switch', { style: t.getAttribute('data-style') });
+    });
+  });
+
+  // Tracking
+  var SLUG = '{{SLUG}}';
+  var TRACK_BASE = '{{TRACK_BASE}}';
+  var sent = {};
+  function track(event, data){
+    if (!SLUG || !TRACK_BASE) return;
+    var payload = JSON.stringify({ slug: SLUG, event: event, data: data || {}, t: Date.now() });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(TRACK_BASE + '/g-track', new Blob([payload], { type: 'application/json' }));
+    } else {
+      fetch(TRACK_BASE + '/g-track', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true }).catch(function(){});
+    }
+  }
+
+  // Page load
+  track('page-open', { ua: navigator.userAgent.slice(0, 200), ref: document.referrer.slice(0, 200) });
+
+  // Scroll depth
+  var maxScroll = 0;
+  function getScrollPct(){
+    var h = document.documentElement;
+    var b = document.body;
+    var st = h.scrollTop || b.scrollTop;
+    var sh = (h.scrollHeight || b.scrollHeight) - h.clientHeight;
+    return sh > 0 ? Math.round((st / sh) * 100) : 0;
+  }
+  function checkScroll(){
+    var p = getScrollPct();
+    if (p > maxScroll) maxScroll = p;
+    [25,50,75,100].forEach(function(m){
+      if (p >= m && !sent['s'+m]) { sent['s'+m] = 1; track('scroll', { depth: m }); }
+    });
+  }
+  window.addEventListener('scroll', checkScroll, { passive: true });
+
+  // Time on page
+  var start = Date.now();
+  [10, 30, 60, 180].forEach(function(s){
+    setTimeout(function(){ track('time', { sec: s }); }, s * 1000);
+  });
+
+  // CTA clicks (data-track attribute)
+  document.querySelectorAll('[data-track]').forEach(function(el){
+    el.addEventListener('click', function(){
+      track('click', { id: el.getAttribute('data-track'), href: el.getAttribute('href') || '' });
+    });
+  });
+
+  // Final scroll on unload
+  window.addEventListener('beforeunload', function(){
+    track('exit', { maxScroll: maxScroll, sec: Math.round((Date.now() - start) / 1000) });
+  });
+
+  // Visibility (return to tab)
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible') track('return', {});
+  });
+})();
+</script>
+
+</body>
+</html>

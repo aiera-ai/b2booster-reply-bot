@@ -15,6 +15,12 @@ const {
   buildB2BoosterHTML,
 } = require('./proposal-b2booster');
 
+// Generator ponudb offer (AIERA brand SaaS demo). For SI SMB B2B sellers (any sales role).
+const {
+  createAndDeployGeneratorOffer,
+  buildGeneratorHTML,
+} = require('./proposal-generator');
+
 // ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason?.message || reason);
@@ -115,6 +121,90 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
     console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}`);
   } catch (e) {
     console.error('[AIRTABLE] logMessage error:', e.message);
+  }
+}
+
+// ─── OFFER ENGAGEMENT TRACKING ────────────────────────────────────────────────
+// In-memory dedup so we don't write same event 100x on every scroll.
+const _engagementSeen = new Map(); // key: slug+event+bucket → ts
+const ENG_DEDUP_WINDOW_MS = 60 * 1000;
+
+function _dedupKey(slug, event, data) {
+  if (event === 'scroll') return `${slug}|scroll|${data?.depth || 0}`;
+  if (event === 'time')   return `${slug}|time|${data?.sec || 0}`;
+  if (event === 'click')  return `${slug}|click|${data?.id || ''}`;
+  if (event === 'tab-switch') return `${slug}|tab|${data?.style || ''}`;
+  return `${slug}|${event}`;
+}
+
+async function logOfferEngagement(slug, event, data) {
+  if (!AIRTABLE_PAT || !slug) return;
+  try {
+    // Dedup
+    const key = _dedupKey(slug, event, data);
+    const now = Date.now();
+    const last = _engagementSeen.get(key);
+    if (last && (now - last) < ENG_DEDUP_WINDOW_MS) return;
+    _engagementSeen.set(key, now);
+    if (_engagementSeen.size > 5000) {
+      // GC: drop old entries
+      for (const [k, t] of _engagementSeen) if (now - t > 60 * 60 * 1000) _engagementSeen.delete(k);
+    }
+
+    // Find lead by Offer Generator URL containing this slug
+    const filter = encodeURIComponent(`FIND("${slug}", {Offer Generator URL})`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const rec = r?.records?.[0];
+
+    // Log to Messages tabela (immutable event log)
+    try {
+      await airtableRequest('POST', AT_MESSAGES, { records: [{ fields: {
+        'Message ID': `eng-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        'Lead Name': rec?.fields?.['Lead Name'] || '',
+        'LinkedIn URL': rec?.fields?.['LinkedIn URL'] || '',
+        'Direction': 'engagement',
+        'Intent': event,
+        'Text': `slug=${slug} ${JSON.stringify(data || {}).slice(0, 1500)}`,
+        'Sent': false,
+        'Timestamp': new Date().toISOString()
+      }}]});
+    } catch (e) { /* swallow */ }
+
+    // Update Lead fields
+    if (rec) {
+      const f = rec.fields || {};
+      const patch = { 'Offer Last Activity': new Date().toISOString() };
+
+      if (event === 'page-open') {
+        if (!f['Offer Opened At']) patch['Offer Opened At'] = new Date().toISOString();
+        patch['Offer Open Count'] = (Number(f['Offer Open Count']) || 0) + 1;
+      }
+      if (event === 'scroll' && data?.depth) {
+        const cur = Number(f['Offer Max Scroll']) || 0;
+        if (data.depth > cur) patch['Offer Max Scroll'] = data.depth;
+      }
+      if (event === 'time' && data?.sec) {
+        const cur = Number(f['Offer Time On Page']) || 0;
+        if (data.sec > cur) patch['Offer Time On Page'] = data.sec;
+      }
+      if (event === 'exit' && data?.sec) {
+        const cur = Number(f['Offer Time On Page']) || 0;
+        if (data.sec > cur) patch['Offer Time On Page'] = data.sec;
+        if (data.maxScroll) {
+          const sCur = Number(f['Offer Max Scroll']) || 0;
+          if (data.maxScroll > sCur) patch['Offer Max Scroll'] = data.maxScroll;
+        }
+      }
+      if (event === 'click' && data?.id && /cta|calendly|contact-cta|hero-cta|pricing-cta|header-cta/.test(data.id)) {
+        patch['Offer Calendly Clicked'] = true;
+      }
+
+      try {
+        await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: patch });
+      } catch (e) { console.error('[ENG] patch failed:', e.message); }
+    }
+  } catch (e) {
+    console.error('[ENG] logOfferEngagement error:', e.message);
   }
 }
 
@@ -855,11 +945,21 @@ async function createAndDeployOfferClassic(leadData) {
   }
 }
 
-// Router: chooses between B2Booster, spirit-style, or classic offer.
-// Priority: leadData.offerType === 'b2booster' takes precedence over offerStyle.
+// Router: chooses between Generator ponudb, B2Booster, spirit-style, or classic offer.
+// Priority: leadData.offerType === 'generator' or 'b2booster' takes precedence over offerStyle.
 // Env: PROPOSAL_STYLE=spirit (default) | classic
 // Per-call override: leadData.offerStyle = 'spirit' | 'classic'
 async function createAndDeployOffer(leadData) {
+  // Generator ponudb (AIERA brand SaaS demo) - ai.aiera.si/g/{slug}
+  if (leadData && leadData.offerType === 'generator') {
+    const url = await createAndDeployGeneratorOffer(leadData);
+    if (url) {
+      // Persist URL so engagement tracker can look up lead by slug
+      const leadName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+      airtableSaveGeneratorUrl(leadData.linkedinUrl, leadName, url).catch(e => console.error('[GEN] save URL:', e.message));
+    }
+    return url;
+  }
   // B2Booster has its own template + domain (ponudbe.b2booster.eu)
   if (leadData && leadData.offerType === 'b2booster') {
     return createAndDeployB2BoosterOffer(leadData);
@@ -953,33 +1053,47 @@ Return: negative, soft_negative, positive, or neutral`
 //   - Uncertain → aiera (safer default)
 // B2B_CHECK is mandatory: B2C consumer brands NEVER get b2booster.
 
-const OFFER_CLASSIFIER_PROMPT = `You classify B2B sales leads into one of two offer paths: "aiera" or "b2booster".
+const OFFER_CLASSIFIER_PROMPT = `You classify B2B sales leads into one of three offer paths: "generator", "b2booster", or "aiera".
 
 OFFER PATHS:
 
+GENERATOR (AIERA Generator ponudb - SaaS for sales teams that send B2B offers/quotes):
+- Tool/service that auto-generates personalized branded offers from the company's pricelist
+- Replaces static Word/PDF quotes with tracked web pages in their own brand
+- Pricing: pilot from 290 EUR/mo + 490 EUR setup (custom per segment)
+- Best for: SI companies (10-500 employees) that SEND many B2B quotes
+- Indicators: any sales/commercial/export/owner role at SI SMB that DOES B2B sales themselves
+- Industries: manufacturing, construction, IT services, distribution, electromechanical, HVAC, engineering, agencies, consulting, wholesale, technical services
+- THIS IS THE DEFAULT FOR SLOVENIAN LEADS
+
 B2BOOSTER (B2B AI outreach service, 790 EUR setup + 890 EUR/mo):
 - Done-for-you cold outreach: LinkedIn + email + AI replies + meeting booking
-- Best for B2B sellers needing pipeline/sales meetings
-- Indicators: sales/BD/growth/export/commercial role, CEO of B2B SMB, country != Slovenia, B2B SaaS/manufacturing/services/wholesale with 10-500 employees
+- We do outreach FOR them (vs Generator which is a tool THEY use to send offers)
+- Best for B2B sellers needing pipeline/sales meetings into FOREIGN markets
+- Indicators: sales/BD/growth/export/commercial role AND country != Slovenia (DACH, EU, US)
+- OR Slovenian company with EXPLICIT focus on international expansion / DACH outreach
 
 AIERA (broader AI automation agency):
-- Best for: CFO/finance, CTO/IT, HR, operations, marketing roles, regulated industries (healthcare, legal, gov), enterprises >500 employees, B2C brands, non-sales use cases (internal AI workflow, document AI, custom apps)
+- Best for: CFO/finance, CTO/IT, HR, operations, regulated industries (healthcare, legal, gov), enterprises >500 employees, B2C brands, non-sales use cases (internal AI workflow, document AI, custom apps)
+- Use as fallback when Generator and B2Booster don't fit
 
-MANDATORY B2B_CHECK (filter BEFORE choosing b2booster):
-- The lead's company must SELL TO BUSINESSES, not consumers
-- Indicators of B2C (=> route to aiera): retail consumer brands, e-commerce direct-to-consumer, hospitality direct, B2C subscription apps, consumer products
-- If lead = "Head of Growth at a D2C beverage brand" → AIERA (not B2Booster, even though title sounds sales-y)
+MANDATORY B2B_CHECK (filter BEFORE choosing generator or b2booster):
+- The lead's company must SELL TO BUSINESSES, not just consumers
+- Pure B2C (=> route to aiera): pure retail consumer brands, e-commerce direct-to-consumer only, B2C subscription apps, pure hospitality/restaurant chains, transport-only/logistics-to-consumer
+- If lead = "Head of Growth at a D2C beverage brand" → AIERA
 
 DEFAULT RULES:
 1. If B2B_CHECK fails → aiera
-2. Else if country != "Slovenia" AND any B2B signal → b2booster
-3. Else if Slovenia AND title in [sales, BD, growth, export, CEO of B2B SMB] → b2booster
-4. Else if Slovenia AND title in [CFO, CTO, IT, HR, ops, marketing] → aiera
-5. Else (uncertain, confidence < 0.55) → aiera
+2. Else if country != "Slovenia" AND any B2B sales signal → b2booster
+3. Else if Slovenia AND company explicitly targets international expansion → b2booster
+4. Else if Slovenia AND B2B company (any size 10-500, any sales role OR owner/CEO) → generator
+5. Else if Slovenia AND non-sales role at large enterprise (CFO, CTO, HR, ops, marketing >500) → aiera
+6. Else if Slovenia AND B2B but role unclear → generator (default)
+7. Else (uncertain, confidence < 0.5) → aiera
 
 Return JSON only, no markdown, no commentary:
 {
-  "offer": "aiera" | "b2booster",
+  "offer": "generator" | "b2booster" | "aiera",
   "confidence": 0.0-1.0,
   "b2b_check": "pass" | "fail" | "unknown",
   "key_signal": "<1 sentence: why this fit>",
@@ -1023,13 +1137,18 @@ async function classifyOffer(leadData, theirMessage) {
     raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
     const parsed = JSON.parse(raw);
 
-    if (!['aiera', 'b2booster'].includes(parsed.offer)) parsed.offer = 'aiera';
+    if (!['aiera', 'b2booster', 'generator'].includes(parsed.offer)) parsed.offer = 'aiera';
     if (typeof parsed.confidence !== 'number') parsed.confidence = 0.5;
 
-    // Hard override: if env disables b2booster, force aiera
+    // Hard override: if env disables b2booster, force generator (or aiera as fallback)
     if (process.env.ENABLE_B2BOOSTER === 'false' && parsed.offer === 'b2booster') {
-      parsed.offer = 'aiera';
+      parsed.offer = 'generator';
       parsed.key_signal = '(b2booster disabled by env) ' + (parsed.key_signal || '');
+    }
+    // Hard override: if env disables generator, force aiera
+    if (process.env.ENABLE_GENERATOR === 'false' && parsed.offer === 'generator') {
+      parsed.offer = 'aiera';
+      parsed.key_signal = '(generator disabled by env) ' + (parsed.key_signal || '');
     }
 
     return parsed;
@@ -1368,6 +1487,37 @@ async function airtableLookupEmailForLead(linkedinUrl) {
   } catch (e) {
     console.error('[AIRTABLE] lookupEmail error:', e.message);
     return null;
+  }
+}
+
+// Store Generator URL on lead record so engagement tracking can look it up by slug.
+async function airtableSaveGeneratorUrl(linkedinUrl, leadName, generatorUrl) {
+  if (!AIRTABLE_PAT || !generatorUrl) return;
+  try {
+    let rec = null;
+    if (linkedinUrl) {
+      const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (!rec && leadName) {
+      const filter = encodeURIComponent(`{Lead Name}="${leadName}"`);
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    const fields = { 'Offer Generator URL': generatorUrl, 'Offer Type': 'generator' };
+    if (rec) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields });
+    } else {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields: {
+        'Lead Name': leadName || '',
+        'LinkedIn URL': linkedinUrl || '',
+        ...fields
+      }}]});
+    }
+    console.log(`[AIRTABLE] Generator URL saved: ${leadName} → ${generatorUrl}`);
+  } catch (e) {
+    console.error('[AIRTABLE] saveGeneratorUrl error:', e.message);
   }
 }
 
@@ -2180,6 +2330,173 @@ async function processFollowups() {
 app.get('/trigger-followups', async (req, res) => {
   res.json({ status: 'running' });
   await processFollowups();
+});
+
+// ─── GENERATOR ENGAGEMENT CRON (72h no-open / shallow-peek / read-but-no-action) ──
+// Runs every 6h. Finds Generator leads who haven't booked a meeting + 72h since URL sent.
+// 4 cases based on engagement:
+//   A: Calendly clicked      → already filtered out (no nudge needed)
+//   B: Opened, scroll < 50%  → "peeked shallow" nudge
+//   C: Opened, scroll >= 50% → "read but no action" nudge
+//   D: Never opened          → "you didn't see this" nudge
+
+const GENERATOR_NUDGE_HOURS = parseInt(process.env.GENERATOR_NUDGE_HOURS || '72', 10);
+
+const GEN_NUDGE_PROMPT = `You write very short Slovenian LinkedIn or email nudge messages (3 to 4 sentences) sent by Žan Bagarič, CEO of AIERA, to a lead who received a personalized AIERA Generator ponudb demo link but hasn't booked a call yet.
+
+Rules:
+- Slovenian only, vikanje (Vi)
+- Šumniki correct (š, č, ž)
+- No em dashes, only hyphens
+- Warm, not pushy
+- One concrete value point, then soft CTA
+- Sign off: "Lep pozdrav, Žan Bagarič, AIERA"
+- No clichés ("se slišiva", "rezerviraj termin")
+
+You will receive a CASE (B, C, or D) - tailor the opening line to that case:
+- CASE B (peeked but didn't read): "Vidim, da ste si vzeli minuto za pregled, a niste šli skozi celotno predstavitev."
+- CASE C (read but didn't book): "Vidim, da ste pregledali predstavitev. Kaj vas zadržuje, da ne bi rezervirali kratkega klica?"
+- CASE D (didn't open): "Pred dnevi sem vam pripravil osebno predstavitev našega Generatorja ponudb, a je niste odprli. Morda se je izgubila med maili."
+
+Always include Calendly link or phone number 040 708 327 as soft alternative.
+
+OUTPUT FORMAT: Return JSON only:
+{
+  "subject": "<email subject, only used if channel=email>",
+  "body": "<the nudge text, plain Slovenian, no markdown>"
+}`;
+
+async function generateGeneratorNudge(leadData, kase, offerUrl, channel) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+  const anthropic = new Anthropic({ apiKey });
+
+  const userBlock = `Lead: ${leadData.firstName || ''} ${leadData.lastName || ''}
+Company: ${leadData.company || 'unknown'}
+Title: ${leadData.title || 'unknown'}
+Channel: ${channel}
+Case: ${kase}
+Offer URL (Generator): ${offerUrl}
+Calendly: ${process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar'}
+
+Generate the JSON now.`;
+
+  const r = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 500,
+    system: GEN_NUDGE_PROMPT,
+    messages: [{ role: 'user', content: userBlock }]
+  });
+  let raw = r.content[0].text.trim();
+  raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+  try { return JSON.parse(raw); }
+  catch (e) {
+    console.error('[GEN-NUDGE] JSON parse failed, fallback:', raw.slice(0, 200));
+    return {
+      subject: `Kratek follow-up · AIERA Generator ponudb`,
+      body: `Pozdravljeni ${leadData.firstName || ''},\n\npred dnevi sem vam poslal osebno predstavitev. Če bi bilo lažje, sem dosegljiv tudi na 040 708 327.\n\nLep pozdrav, Žan Bagarič, AIERA`
+    };
+  }
+}
+
+async function processGeneratorEngagement() {
+  if (!AIRTABLE_PAT) return;
+  try {
+    const cutoffIso = new Date(Date.now() - GENERATOR_NUDGE_HOURS * 3600 * 1000).toISOString();
+    // Find candidates: Generator URL set + no calendly click + no nudge sent yet
+    // Filter old enough by "Email Sent At" (when offer link was emailed) or fallback to record creation
+    const filter = encodeURIComponent(
+      `AND(` +
+      `{Offer Generator URL}!="",` +
+      `NOT({Offer Calendly Clicked}),` +
+      `OR(NOT({Offer Nudge Sent At}),{Offer Nudge Sent At}=""),` +
+      `OR(IS_BEFORE({Email Sent At}, "${cutoffIso}"),IS_BEFORE({Last Activity}, "${cutoffIso.slice(0, 10)}"))` +
+      `)`
+    );
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=20`);
+    const records = r?.records || [];
+    if (!records.length) return;
+    console.log(`[GEN-CRON] ${records.length} candidate(s) for engagement nudge`);
+
+    for (const rec of records) {
+      try {
+        const f = rec.fields || {};
+        const name = f['Lead Name'] || '';
+        const nameParts = name.trim().split(' ');
+        const leadData = {
+          firstName: nameParts[0] || 'Lead',
+          lastName: nameParts.slice(1).join(' '),
+          company: f['Company'] || '',
+          linkedinUrl: f['LinkedIn URL'] || '',
+          title: f['Title'] || '',
+          industry: f['Industry'] || ''
+        };
+        const offerUrl = f['Offer Generator URL'];
+        const opened = !!f['Offer Opened At'];
+        const maxScroll = Number(f['Offer Max Scroll'] || 0);
+        const calendlyClicked = !!f['Offer Calendly Clicked'];
+
+        if (calendlyClicked) continue; // CASE A - skip
+
+        let kase = 'D';
+        if (opened && maxScroll >= 50) kase = 'C';
+        else if (opened && maxScroll < 50) kase = 'B';
+        else if (!opened) kase = 'D';
+
+        // Choose channel: email if we have one, else LinkedIn
+        const channel = f['Email'] ? 'email' : 'linkedin';
+
+        const nudge = await generateGeneratorNudge(leadData, kase, offerUrl, channel);
+
+        const id = uuidv4();
+        if (channel === 'email') {
+          await storePending(id, {
+            kind: 'email_handoff',
+            mode: 'send_email',
+            channel: 'linkedin',
+            leadData,
+            recipientEmail: f['Email'],
+            emailSubject: nudge.subject || `Kratek follow-up · AIERA`,
+            emailBody: nudge.body,
+            liReply: null,
+            source: `gen-nudge-cron-case-${kase}`
+          });
+          await sendHandoffApprovalEmail(id, leadData, {
+            mode: 'send_email',
+            recipientEmail: f['Email'],
+            subject: `[GEN-NUDGE ${kase}] ${nudge.subject || 'Kratek follow-up'}`,
+            body: nudge.body,
+            liReply: null
+          });
+        } else {
+          // LinkedIn nudge via approval queue
+          await storePending(id, {
+            channel: 'linkedin',
+            leadData,
+            draft: nudge.body,
+            source: `gen-nudge-cron-case-${kase}`
+          });
+          await sendApprovalEmail(id, leadData, nudge.body, 'linkedin', offerUrl);
+        }
+
+        // Mark Offer Nudge Sent At so we don't double-send
+        await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, {
+          fields: { 'Offer Nudge Sent At': new Date().toISOString() }
+        });
+
+        console.log(`[GEN-CRON] Queued ${channel} nudge (case ${kase}): ${name}`);
+      } catch (e) {
+        console.error('[GEN-CRON] per-lead error:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('[GEN-CRON] processGeneratorEngagement error:', err.message);
+  }
+}
+
+app.get('/trigger-gen-engagement', async (req, res) => {
+  res.json({ status: 'running' });
+  await processGeneratorEngagement();
 });
 
 // ─── COLD LEAD CRON (3-day LinkedIn silence → first email outreach) ──────────
@@ -3147,6 +3464,88 @@ app.post('/b2booster-deploy', async (req, res) => {
   } catch (err) {
     console.error('[B2BOOSTER-DEPLOY] Error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GENERATOR PONUDB PREVIEW (HTML only, no deploy) ──────────────────────────
+// GET /generator-preview?company=Acme&firstName=John&lastName=Smith&title=Sales+Director&industry=Manufacturing&employees=80&country=Slovenia
+app.all('/generator-preview', async (req, res) => {
+  try {
+    const leadData = (req.method === 'POST' && req.body)
+      ? req.body
+      : {
+          firstName: req.query.firstName || 'Janez',
+          lastName: req.query.lastName || 'Novak',
+          company: req.query.company || 'Big Bang',
+          title: req.query.title || 'Direktor prodaje',
+          industry: req.query.industry || 'IT distribucija',
+          employees: req.query.employees || '120',
+          country: req.query.country || 'Slovenia',
+          theirMessage: req.query.context || '',
+        };
+    const { html, slots, slug } = await buildGeneratorHTML(leadData);
+    console.log(`[GENERATOR-PREVIEW] ${leadData.company || leadData.firstName} → slug=${slug}`);
+    if (req.query.format === 'json') {
+      return res.json({ slug, slots, htmlLength: html.length });
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[GENERATOR-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── GENERATOR PONUDB DEPLOY (full pipeline) ──────────────────────────────────
+app.post('/generator-deploy', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployGeneratorOffer(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed, check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[GENERATOR-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── TRACKING: 1x1 pixel for open detection (no JS needed) ────────────────────
+// Hit from <img src="/g-pixel/{slug}.gif"> on page load. Logs first open to Airtable.
+const TRANSPARENT_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+app.get('/g-pixel/:slugWithExt', async (req, res) => {
+  const slug = (req.params.slugWithExt || '').replace(/\.(gif|png|jpg)$/i, '');
+  res.set({
+    'Content-Type': 'image/gif',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.send(TRANSPARENT_GIF);
+  // Async log (don't block response)
+  if (slug) {
+    logOfferEngagement(slug, 'page-open', {
+      ip: (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim(),
+      ua: (req.headers['user-agent'] || '').slice(0, 200),
+      ref: (req.headers['referer'] || '').slice(0, 200),
+      via: 'pixel'
+    }).catch(e => console.error('[G-PIXEL] log error:', e.message));
+  }
+});
+
+// ─── TRACKING: JS beacon for scroll/time/clicks/tabs ──────────────────────────
+app.post('/g-track', express.json({ limit: '20kb' }), async (req, res) => {
+  res.set('Content-Type', 'text/plain');
+  res.status(204).end();
+  try {
+    const { slug, event, data } = req.body || {};
+    if (slug && event) {
+      await logOfferEngagement(slug, event, data || {});
+    }
+  } catch (e) {
+    console.error('[G-TRACK] error:', e.message);
   }
 });
 
@@ -4729,6 +5128,10 @@ app.listen(PORT, () => {
   // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
   setTimeout(processColdLinkedInLeads, 90 * 1000);
   setInterval(processColdLinkedInLeads, 6 * 60 * 60 * 1000);
+
+  // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
+  setTimeout(processGeneratorEngagement, 105 * 1000);
+  setInterval(processGeneratorEngagement, 6 * 60 * 60 * 1000);
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
