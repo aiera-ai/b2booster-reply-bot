@@ -1,5 +1,8 @@
-// Generator ponudb orchestrator: leadData → slots (Haiku) → render → deploy → URL
-// Deploys to ai.aiera.si/g/{slug}
+// Generator ponudb orchestrator: leadData → slots (Haiku) → render (landing + 3 themed offers) → deploy 4 files → URL
+// Deploys to ai.aiera.si/g/{slug}/  (landing)
+//             ai.aiera.si/g/{slug}/offer-minimal.html
+//             ai.aiera.si/g/{slug}/offer-modern.html
+//             ai.aiera.si/g/{slug}/offer-premium.html
 
 const fs = require('fs');
 const path = require('path');
@@ -7,12 +10,14 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 
 const { generateGeneratorSlots } = require('./slots');
-const { renderTemplate } = require('./renderer');
+const { renderLanding, renderOffer, renderTemplate } = require('./renderer');
 
 const NETLIFY_SITE_ID = process.env.NETLIFY_SITE_ID || 'ed777b57-cb14-4997-91f9-733fe911fc70';
 const GENERATOR_BASE_URL = process.env.GENERATOR_BASE_URL || 'https://ai.aiera.si';
-const GENERATOR_PREFIX = process.env.GENERATOR_PREFIX || 'g'; // ai.aiera.si/g/{slug}
+const GENERATOR_PREFIX = process.env.GENERATOR_PREFIX || 'g';
 const MANIFEST_PATH = './generator-files.json';
+
+const OFFER_THEMES = ['minimal', 'modern', 'premium'];
 
 function loadManifest() {
   if (!fs.existsSync(MANIFEST_PATH)) return {};
@@ -83,24 +88,34 @@ async function fetchExistingManifest() {
   }
 }
 
-async function deployToNetlify(slug, html) {
+// Deploys multiple files in a single Netlify deploy:
+//   newFiles = { '/g/{slug}/index.html': htmlString, '/g/{slug}/offer-minimal.html': ..., ... }
+// Inherits all existing files from the latest deploy so nothing gets unpublished.
+async function deployFilesToNetlify(newFiles) {
   if (!process.env.NETLIFY_TOKEN) {
     console.warn('[GENERATOR] No NETLIFY_TOKEN, skipping deploy');
-    return null;
+    return false;
   }
   const remoteManifest = await fetchExistingManifest();
   const localManifest = loadManifest();
   const manifest = { ...localManifest, ...(remoteManifest || {}) };
 
-  const filePath = `/${GENERATOR_PREFIX}/${slug}/index.html`;
+  // Compute hashes for new files and add to manifest
+  const pathToContent = {}; // path → { hash, content }
+  for (const [p, content] of Object.entries(newFiles)) {
+    const h = sha1(content);
+    manifest[p] = h;
+    pathToContent[p] = { hash: h, content };
+  }
+
+  // Robots.txt (always include to keep AI-generated URLs out of crawlers)
   const robotsPath = `/${GENERATOR_PREFIX}/robots.txt`;
   const robotsContent = 'User-agent: *\nDisallow: /\n';
-
-  const fileHash = sha1(html);
   const robotsHash = sha1(robotsContent);
-  manifest[filePath] = fileHash;
   manifest[robotsPath] = robotsHash;
+  pathToContent[robotsPath] = { hash: robotsHash, content: robotsContent };
 
+  // Create deploy
   const deployRes = await fetch(`https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys`, {
     method: 'POST',
     headers: {
@@ -116,47 +131,60 @@ async function deployToNetlify(slug, html) {
   const deploy = await deployRes.json();
   const required = deploy.required || [];
 
-  if (required.includes(fileHash)) {
+  // Upload each required file by hash
+  for (const [filePath, info] of Object.entries(pathToContent)) {
+    if (!required.includes(info.hash)) continue;
+    const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8'
+      : filePath.endsWith('.txt') ? 'text/plain' : 'application/octet-stream';
     const uploadRes = await fetch(`https://api.netlify.com/api/v1/deploys/${deploy.id}/files${filePath}`, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${process.env.NETLIFY_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
+        'Content-Type': contentType,
       },
-      body: html,
+      body: info.content,
     });
     if (!uploadRes.ok) {
-      throw new Error(`Netlify upload html failed: ${await uploadRes.text()}`);
+      throw new Error(`Netlify upload ${filePath} failed: ${await uploadRes.text()}`);
     }
   }
 
-  if (required.includes(robotsHash)) {
-    await fetch(`https://api.netlify.com/api/v1/deploys/${deploy.id}/files${robotsPath}`, {
-      method: 'PUT',
-      headers: { 'Authorization': `Bearer ${process.env.NETLIFY_TOKEN}`, 'Content-Type': 'text/plain' },
-      body: robotsContent,
-    });
-  }
-
   saveManifest(manifest);
-  const url = `${GENERATOR_BASE_URL}/${GENERATOR_PREFIX}/${slug}`;
-  console.log(`[GENERATOR] Live: ${url}`);
-  return url;
+  console.log(`[GENERATOR] Deploy complete (${Object.keys(newFiles).length} new files)`);
+  return true;
 }
 
-// Build HTML only (for /generator-preview)
+// Build all HTML files (landing + 3 themed offers). Used by /generator-preview and by the deploy pipeline.
 async function buildGeneratorHTML(leadData, options = {}) {
   const slots = await generateGeneratorSlots(leadData);
   const slug = options.slug || createSlug(leadData);
-  const html = renderTemplate(leadData, slots, { ...options, slug });
-  return { html, slots, slug };
+  const baseOpts = { ...options, slug };
+
+  const landingHtml = renderLanding(leadData, slots, baseOpts);
+  const offerHtml = {};
+  for (const theme of OFFER_THEMES) {
+    offerHtml[theme] = renderOffer(leadData, slots, theme, baseOpts);
+  }
+
+  // Backward-compat 'html' field: returns the landing HTML (so old call sites still get the same shape)
+  return { html: landingHtml, landingHtml, offerHtml, slots, slug };
 }
 
-// Full pipeline
+// Full pipeline: build + deploy all 4 files. Returns the LANDING URL.
 async function createAndDeployGeneratorOffer(leadData, options = {}) {
   try {
-    const { html, slug } = await buildGeneratorHTML(leadData, options);
-    const url = await deployToNetlify(slug, html);
+    const { landingHtml, offerHtml, slug } = await buildGeneratorHTML(leadData, options);
+
+    const files = {};
+    files[`/${GENERATOR_PREFIX}/${slug}/index.html`] = landingHtml;
+    for (const theme of OFFER_THEMES) {
+      files[`/${GENERATOR_PREFIX}/${slug}/offer-${theme}.html`] = offerHtml[theme];
+    }
+
+    await deployFilesToNetlify(files);
+
+    const url = `${GENERATOR_BASE_URL}/${GENERATOR_PREFIX}/${slug}/`;
+    console.log(`[GENERATOR] Live: ${url}`);
     return url;
   } catch (err) {
     console.error('[GENERATOR] Error:', err.message);
@@ -168,8 +196,14 @@ async function createAndDeployGeneratorOffer(leadData, options = {}) {
 module.exports = {
   createAndDeployGeneratorOffer,
   buildGeneratorHTML,
-  deployToNetlify,
+  deployFilesToNetlify,
+  // Backward-compat: keep old name as alias so any caller using `deployToNetlify(slug, html)` still works
+  deployToNetlify: async (slug, html) => deployFilesToNetlify({ [`/${GENERATOR_PREFIX}/${slug}/index.html`]: html }),
+  renderTemplate,
+  renderLanding,
+  renderOffer,
   GENERATOR_BASE_URL,
   GENERATOR_PREFIX,
+  OFFER_THEMES,
   createSlug,
 };

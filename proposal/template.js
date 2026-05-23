@@ -812,6 +812,34 @@ function renderTrackingPixel(meta) {
     if (visible) totalActive += (Date.now() - lastBeat);
     send('unload', { secs: Math.round(totalActive / 1000), maxScroll: maxScroll });
   });
+
+  // Exit-intent: mouse leaves viewport via top edge. One-shot.
+  var exitFired = false;
+  document.addEventListener('mouseleave', function(e){
+    if (exitFired || e.clientY > 5) return;
+    exitFired = true;
+    send('exit_intent', { maxScroll: maxScroll, secs: Math.round(totalActive / 1000) });
+  });
+
+  // Pricing section dwell tracking (any element with .pricing, .price, [data-pricing])
+  var pricingEl = document.querySelector('[data-pricing], .pricing, .price-block, .pricing-section');
+  if (pricingEl && 'IntersectionObserver' in window) {
+    var pEnter = null, pTotal = 0, pShortFired = false, pLongFired = false;
+    var pio = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.intersectionRatio > 0.5) {
+          if (!pEnter) pEnter = Date.now();
+        } else if (pEnter) {
+          pTotal += Date.now() - pEnter;
+          pEnter = null;
+        }
+        var live = pTotal + (pEnter ? (Date.now() - pEnter) : 0);
+        if (!pShortFired && live > 15000) { pShortFired = true; send('pricing_dwell', { ms: live, bucket: 'short_15s' }); }
+        if (!pLongFired && live > 45000) { pLongFired = true; send('pricing_dwell', { ms: live, bucket: 'long_45s' }); }
+      });
+    }, { threshold: [0, 0.5, 1] });
+    pio.observe(pricingEl);
+  }
 })();
 </script>`;
 }

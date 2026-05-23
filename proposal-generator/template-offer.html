@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{OFFER_TITLE}} · {{SELLER_NAME}}</title>
+<meta name="description" content="{{OFFER_TITLE}} · Ponudba {{OFFER_REF}} · {{SELLER_NAME}}">
+<meta name="robots" content="noindex,nofollow">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{OFFER_TITLE}} · Ponudba">
+<meta property="og:description" content="Ponudba {{OFFER_REF}} - {{SELLER_NAME}}.">
+<meta property="og:locale" content="sl_SI">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Base */
+:root {
+  --ink: #0F172A; --ink-soft: #1E293B; --body: #475569; --mute: #64748B;
+  --paper: #FFFFFF; --paper-soft: #F8FAFC; --paper-bg: #F1F5F9;
+  --border: #E2E8F0; --border-strong: #CBD5E1;
+  --brand: #1E40AF; --brand-2: #3B82F6; --brand-soft: #EFF4FF; --brand-strong: #1E3A8A;
+  --accent: #38BDF8;
+  --mint: #15803D; --mint-soft: #DCFCE7;
+  --amber: #B45309; --amber-soft: #FEF3C7;
+  --red: #B91C1C; --red-soft: #FEE2E2;
+  --gradient: linear-gradient(135deg, #1E40AF 0%, #3B82F6 70%, #38BDF8 100%);
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(15,23,42,0.04), 0 10px 28px -8px rgba(15,23,42,0.10);
+}
+/* Theme: minimal (default, clean blue + white) */
+body[data-theme="minimal"] { --brand: #1E40AF; --brand-2: #3B82F6; --accent: #38BDF8; --paper-bg: #F1F5F9; --radius: 12px; }
+/* Theme: modern (warm orange, rounded) */
+body[data-theme="modern"]  { --brand: #C2410C; --brand-2: #EA580C; --accent: #FB923C; --brand-soft: #FFF7ED; --brand-strong: #9A3412; --paper-bg: #FDFBF6; --gradient: linear-gradient(135deg, #C2410C 0%, #EA580C 70%, #FB923C 100%); --radius: 18px; }
+/* Theme: premium (dark luxe) */
+body[data-theme="premium"] { --ink: #F1F5F9; --ink-soft: #E2E8F0; --body: #94A3B8; --mute: #64748B; --paper: #0B1220; --paper-soft: #111827; --paper-bg: #060B12; --border: #1F2937; --border-strong: #334155; --brand: #38BDF8; --brand-2: #0EA5E9; --accent: #38BDF8; --brand-soft: rgba(56,189,248,0.12); --brand-strong: #0284C7; --gradient: linear-gradient(135deg, #0EA5E9 0%, #38BDF8 60%, #67E8F9 100%); --radius: 8px; }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--paper-bg); color: var(--ink);
+  font-size: 16px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+img { max-width: 100%; display: block; }
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+/* HEADER (gradient bar with seller mark + offer ref) */
+.head {
+  background: var(--gradient); color: white;
+  padding: 22px 0;
+}
+.head-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.head-mark { font-weight: 800; font-size: 22px; letter-spacing: 0.06em; }
+.head-ref { font-size: 13px; opacity: 0.92; font-family: 'JetBrains Mono', monospace; }
+
+/* DEMO disclaimer banner above offer */
+.banner {
+  background: var(--amber-soft); border: 1px solid #FDE68A;
+  color: var(--amber); padding: 14px 22px;
+  display: flex; gap: 12px; align-items: center;
+  font-size: 14px; line-height: 1.45;
+}
+.banner svg { width: 20px; height: 20px; flex-shrink: 0; }
+.banner strong { font-weight: 700; }
+
+/* SHEET (the offer paper) */
+.sheet {
+  background: var(--paper); border-radius: var(--radius);
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+  margin: 32px 0 24px; padding: 0; overflow: hidden;
+}
+
+/* Title block at top of sheet */
+.title-block { padding: 36px 44px 28px; border-bottom: 1px solid var(--border); }
+.title-row { display: flex; justify-content: space-between; align-items: start; gap: 24px; flex-wrap: wrap; }
+.title-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; color: var(--brand); margin-bottom: 10px; }
+.title-h1 { font-size: 30px; font-weight: 800; line-height: 1.18; letter-spacing: -0.015em; color: var(--ink); margin-bottom: 10px; }
+.title-sub { font-size: 15px; color: var(--body); }
+.title-meta { font-size: 13px; color: var(--body); min-width: 240px; text-align: right; }
+.title-meta .tm-row { padding: 3px 0; }
+.title-meta strong { color: var(--ink); font-weight: 700; }
+.title-meta .expired { color: var(--red); font-weight: 700; margin-top: 6px; display: inline-block; }
+
+/* Parties (seller / buyer) */
+.parties { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 28px 44px 8px; }
+.party {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px 24px; background: var(--paper);
+}
+.party-label { font-size: 11px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; color: var(--brand); margin-bottom: 10px; }
+.party-name { font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+.party-line { font-size: 14px; color: var(--body); padding: 1px 0; line-height: 1.55; }
+.party-line strong { color: var(--ink-soft); font-weight: 600; }
+
+/* Greeting box */
+.greeting {
+  margin: 24px 44px 8px; padding: 24px 28px;
+  background: var(--brand-soft); border-left: 3px solid var(--brand);
+  border-radius: 10px;
+  color: var(--ink-soft); font-size: 15px; line-height: 1.7;
+}
+.greeting p { margin-bottom: 10px; }
+.greeting p:last-child { margin-bottom: 0; }
+.greeting strong { color: var(--ink); font-weight: 700; }
+
+/* Categories */
+.categories { padding: 24px 44px; }
+.cat { margin-bottom: 28px; }
+.cat:last-child { margin-bottom: 0; }
+.cat-head {
+  display: flex; align-items: center; gap: 14px; margin-bottom: 16px;
+}
+.cat-num {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--brand);
+  color: white; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.cat-title { font-size: 20px; font-weight: 700; color: var(--brand); letter-spacing: -0.005em; }
+
+.item {
+  background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px; margin-bottom: 14px;
+  display: grid; grid-template-columns: 140px 1fr auto; gap: 24px;
+}
+.item:last-child { margin-bottom: 0; }
+.item-img {
+  width: 140px; height: 140px; background: var(--paper-bg);
+  border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  color: var(--mute); border: 1px solid var(--border);
+}
+.item-img svg { width: 56px; height: 56px; opacity: 0.5; }
+.item-body { min-width: 0; }
+.item-name { font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 4px; line-height: 1.4; }
+.item-name .arrow { color: var(--mute); margin-left: 4px; font-weight: 400; }
+.item-sku { font-size: 12px; color: var(--mute); font-family: 'JetBrains Mono', monospace; margin-bottom: 12px; }
+.item-desc { font-size: 13px; color: var(--body); margin-bottom: 14px; line-height: 1.6; }
+
+.item-why {
+  background: var(--mint-soft); border-left: 3px solid var(--mint);
+  border-radius: 8px; padding: 14px 18px; margin-top: 12px;
+}
+.item-why-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--mint); margin-bottom: 8px;
+}
+.item-why-text { font-size: 13px; color: var(--ink-soft); line-height: 1.6; }
+
+.item-price { text-align: right; min-width: 160px; }
+.item-orig { font-size: 12px; color: var(--mute); text-decoration: line-through; margin-bottom: 2px; }
+.item-final { font-size: 18px; font-weight: 700; color: var(--ink); }
+.item-discount { font-size: 11px; color: var(--mint); font-weight: 600; margin-top: 1px; }
+.item-qty { font-size: 12px; color: var(--mute); margin-top: 8px; }
+.item-sum { font-size: 15px; font-weight: 700; color: var(--brand); margin-top: 4px; }
+
+/* Recap */
+.recap {
+  margin: 32px 44px 8px; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;
+}
+.recap-head {
+  background: var(--brand); color: white;
+  padding: 16px 26px; font-size: 16px; font-weight: 700; letter-spacing: 0.01em;
+}
+.recap-body { padding: 8px 26px; background: var(--paper); }
+.recap-row {
+  display: flex; justify-content: space-between; padding: 12px 0;
+  font-size: 14px; color: var(--ink-soft);
+  border-bottom: 1px solid var(--border);
+}
+.recap-row:last-of-type { border-bottom: 2px solid var(--border-strong); }
+.recap-row .item-label { color: var(--body); }
+.recap-row .item-value { font-weight: 700; color: var(--ink); }
+.recap-sub { font-size: 14px; color: var(--body); }
+.recap-grand {
+  background: var(--brand); color: white; padding: 18px 26px;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 18px; font-weight: 800;
+}
+.recap-grand .rg-total { font-size: 22px; }
+.recap-savings {
+  padding: 14px 26px; background: var(--mint-soft); color: var(--mint);
+  font-size: 14px; font-weight: 600;
+  display: flex; justify-content: space-between; align-items: center;
+}
+
+/* Primary CTA */
+.cta-block { padding: 28px 44px 8px; }
+.cta-primary {
+  width: 100%; background: var(--gradient); color: white;
+  padding: 20px 28px; border-radius: var(--radius);
+  font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  box-shadow: 0 6px 20px -6px rgba(30,64,175,0.45);
+}
+.cta-primary:hover { transform: translateY(-1px); }
+.cta-note { text-align: center; font-size: 12px; color: var(--mute); margin-top: 10px; }
+
+/* Two-column terms (delivery + payment) */
+.terms { padding: 28px 44px 8px; }
+.terms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.terms-card {
+  background: var(--paper-soft); border: 1px solid var(--border);
+  border-radius: 12px; padding: 22px 24px;
+}
+.terms-card h4 { font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 12px; }
+.terms-card ul { list-style: none; padding: 0; margin: 0; }
+.terms-card li {
+  padding: 6px 0 6px 18px; position: relative;
+  font-size: 14px; color: var(--ink-soft); line-height: 1.55;
+}
+.terms-card li:before {
+  content: ""; position: absolute; left: 0; top: 13px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--brand);
+}
+
+/* Two-column message + actions */
+.msg-actions { padding: 24px 44px 8px; }
+.msg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.msg-card {
+  background: var(--paper-soft); border: 1px solid var(--border);
+  border-radius: 12px; padding: 22px 24px;
+}
+.msg-card h4 { font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 14px; }
+.msg-card input, .msg-card textarea {
+  width: 100%; border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 11px 14px; font-size: 14px; font-family: inherit; color: var(--ink);
+  background: var(--paper); margin-bottom: 10px; outline: none;
+}
+.msg-card input:focus, .msg-card textarea:focus { border-color: var(--brand); }
+.msg-card textarea { resize: vertical; min-height: 90px; }
+.msg-btn {
+  width: 100%; background: var(--brand); color: white;
+  padding: 12px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.msg-btn:hover { background: var(--brand-strong); }
+.actions-card .actions-btn {
+  width: 100%; background: var(--paper); color: var(--ink);
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 12px 18px; font-size: 14px; font-weight: 600; margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.actions-card .actions-btn:hover { background: var(--paper-soft); }
+.actions-card .actions-btn:last-child { margin-bottom: 0; }
+
+/* Progress (Potek ponudbe) */
+.progress {
+  padding: 24px 44px 8px;
+}
+.progress-card {
+  background: var(--brand-soft); border: 1px solid var(--border);
+  border-radius: 12px; padding: 22px 24px;
+}
+.progress-label { font-size: 11px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; color: var(--brand); margin-bottom: 14px; }
+.progress-steps { list-style: none; padding: 0; margin: 0; }
+.progress-steps li {
+  display: flex; align-items: center; gap: 14px; padding: 8px 0;
+  font-size: 14px; color: var(--ink-soft);
+}
+.step-mark {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--paper-bg); color: var(--mute);
+  font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.progress-steps li.done .step-mark { background: var(--mint); color: white; }
+.progress-steps li.done { font-weight: 700; color: var(--ink); }
+
+/* Manager card */
+.manager {
+  margin: 32px 44px 8px; padding: 32px 36px;
+  background: var(--gradient); color: white;
+  border-radius: var(--radius); display: grid;
+  grid-template-columns: auto 1fr auto; gap: 24px; align-items: center;
+}
+.manager-avatar {
+  width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,0.18);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 700;
+}
+.manager-info-label { font-size: 11px; font-weight: 700; letter-spacing: 0.10em; text-transform: uppercase; opacity: 0.85; margin-bottom: 4px; }
+.manager-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.manager-role { font-size: 14px; opacity: 0.9; margin-bottom: 12px; }
+.manager-meta { display: flex; gap: 22px; font-size: 13px; flex-wrap: wrap; }
+.manager-meta a { color: white; text-decoration: none; }
+.manager-cta {
+  background: white; color: var(--ink);
+  padding: 13px 22px; border-radius: 10px; font-weight: 700; font-size: 14px;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.manager-cta:hover { background: var(--brand-soft); color: var(--ink); text-decoration: none; }
+
+/* Expired notice */
+.expired-block {
+  margin: 32px 44px; padding: 22px 26px;
+  background: var(--red-soft); border: 1px solid #FECACA;
+  border-radius: 12px; color: var(--red);
+}
+.expired-block h4 { font-size: 16px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+.expired-block .er-meta { display: flex; justify-content: space-between; font-size: 13px; margin: 10px 0; color: var(--ink-soft); }
+.expired-block .er-bar { height: 4px; background: rgba(185,28,28,0.18); border-radius: 2px; overflow: hidden; }
+.expired-block .er-bar > div { height: 100%; background: var(--red); width: 100%; }
+.expired-block .er-note { font-size: 13px; margin-top: 12px; color: var(--ink-soft); }
+
+/* Footer */
+.foot {
+  padding: 30px 0; margin-top: 12px;
+  background: var(--paper); border-top: 1px solid var(--border);
+  color: var(--mute); font-size: 13px; text-align: center;
+}
+.foot-line { padding: 2px 0; }
+.foot-line a { color: var(--mute); }
+.foot-brand {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--ink); color: var(--paper);
+  padding: 7px 12px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  margin-top: 12px;
+}
+.foot-brand .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 2px; }
+
+/* Print */
+@media print {
+  .head { background: white; color: black; }
+  .head-mark, .head-ref { color: black; }
+  .banner, .cta-block, .msg-actions, .actions-card, .manager { display: none; }
+  .sheet { box-shadow: none; border: none; }
+  body { background: white; }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .title-block { padding: 24px 22px 18px; }
+  .title-h1 { font-size: 22px; }
+  .title-row { flex-direction: column; }
+  .title-meta { text-align: left; }
+  .parties { grid-template-columns: 1fr; padding: 18px 22px 4px; gap: 14px; }
+  .greeting { margin: 18px 22px 4px; padding: 18px 20px; }
+  .categories { padding: 18px 22px; }
+  .item { grid-template-columns: 1fr; gap: 14px; padding: 16px; }
+  .item-img { width: 100%; height: 160px; }
+  .item-price { text-align: left; min-width: 0; }
+  .recap { margin: 22px 22px 4px; }
+  .recap-head { padding: 14px 18px; }
+  .recap-body { padding: 4px 18px; }
+  .recap-grand { padding: 14px 18px; font-size: 16px; }
+  .recap-grand .rg-total { font-size: 18px; }
+  .cta-block, .terms, .msg-actions, .progress { padding: 18px 22px 4px; }
+  .terms-grid, .msg-grid { grid-template-columns: 1fr; }
+  .manager { margin: 22px 22px 4px; padding: 22px; grid-template-columns: 1fr; text-align: center; }
+  .manager-avatar { margin: 0 auto; }
+  .manager-meta { justify-content: center; }
+  .expired-block { margin: 22px 22px; padding: 18px 20px; }
+}
+</style>
+</head>
+<body data-theme="{{THEME}}">
+
+<!-- HEADER GRADIENT -->
+<header class="head">
+  <div class="wrap head-inner">
+    <div class="head-mark">{{SELLER_NAME}}</div>
+    <div class="head-ref">Ponudba št. {{OFFER_REF}}</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- Demo disclaimer banner -->
+  <div class="banner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+    <div><strong>Vzorčni primer.</strong> Ta ponudba je predstavitveni prikaz, kakšne ponudbe lahko vaša prodajna ekipa pošilja preko AIERA Generatorja. Vse postavke se generirajo iz vašega cenika in CRM, naročnik in skrbnik pa se izpolnita iz vaših podatkov.</div>
+  </div>
+
+  <!-- Main offer sheet -->
+  <article class="sheet">
+
+    <div class="title-block">
+      <div class="title-row">
+        <div>
+          <div class="title-eyebrow">Ponudba</div>
+          <h1 class="title-h1">{{OFFER_TITLE}}</h1>
+          <div class="title-sub">{{OFFER_SUBTITLE}}</div>
+        </div>
+        <div class="title-meta">
+          <div class="tm-row"><strong>Št. ponudbe:</strong> {{OFFER_REF}}</div>
+          <div class="tm-row"><strong>Datum:</strong> {{OFFER_DATE}}</div>
+          <div class="tm-row"><strong>Veljavnost:</strong> {{OFFER_VALID_UNTIL}}</div>
+          {{EXPIRED_BADGE_HTML}}
+        </div>
+      </div>
+    </div>
+
+    <div class="parties">
+      <div class="party">
+        <div class="party-label">Ponudnik</div>
+        <div class="party-name">{{SELLER_FULL_NAME}}</div>
+        <div class="party-line">{{SELLER_ADDRESS}}</div>
+        <div class="party-line"><strong>Mat. št.:</strong> {{SELLER_MAT_ST}} · <strong>Davčna:</strong> {{SELLER_DAVCNA}}</div>
+        <div class="party-line"><strong>TRR:</strong> {{SELLER_TRR}}</div>
+      </div>
+      <div class="party">
+        <div class="party-label">Naročnik</div>
+        <div class="party-name">{{BUYER_NAME}}</div>
+        <div class="party-line">{{BUYER_ADDRESS}}</div>
+        <div class="party-line"><strong>V rokah:</strong> {{BUYER_CONTACT_NAME}}, {{BUYER_CONTACT_ROLE}}</div>
+        <div class="party-line"><strong>E-pošta:</strong> {{BUYER_CONTACT_EMAIL}}</div>
+      </div>
+    </div>
+
+    <div class="greeting">{{GREETING_HTML}}</div>
+
+    <div class="categories">
+      {{CATEGORIES_HTML}}
+    </div>
+
+    <div class="recap">
+      <div class="recap-head">Rekapitulacija ponudbe</div>
+      <div class="recap-body">
+        {{RECAP_LINES_HTML}}
+        <div class="recap-row"><span class="item-label">Skupaj brez DDV</span><span class="item-value">{{SUBTOTAL}}</span></div>
+        <div class="recap-row"><span class="item-label">DDV (22%)</span><span class="item-value">{{VAT}}</span></div>
+      </div>
+      <div class="recap-grand">
+        <span>SKUPAJ Z DDV</span>
+        <span class="rg-total">{{TOTAL}}</span>
+      </div>
+      <div class="recap-savings">
+        <span>Vaš prihranek (partnerska cena vs. spletna)</span>
+        <span>-{{SAVINGS}}</span>
+      </div>
+    </div>
+
+    <div class="cta-block">
+      <a href="#" class="cta-primary" data-track="offer-confirm">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        Potrjujem ponudbo
+      </a>
+      <div class="cta-note">S potrditvijo se strinjate s pogoji ponudbe.</div>
+    </div>
+
+    <div class="terms">
+      <div class="terms-grid">
+        <div class="terms-card">
+          <h4>Pogoji dostave</h4>
+          <ul>{{DELIVERY_TERMS_HTML}}</ul>
+        </div>
+        <div class="terms-card">
+          <h4>Plačilni pogoji</h4>
+          <ul>{{PAYMENT_TERMS_HTML}}</ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="msg-actions">
+      <div class="msg-grid">
+        <div class="msg-card">
+          <h4>Pošljite sporočilo</h4>
+          <input type="text" placeholder="Vaše ime" data-track="msg-name">
+          <input type="email" placeholder="E-pošta" data-track="msg-email">
+          <textarea placeholder="Vaše sporočilo ali vprašanje..." data-track="msg-text"></textarea>
+          <button class="msg-btn" data-track="msg-send">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            Pošlji sporočilo
+          </button>
+        </div>
+        <div class="msg-card actions-card">
+          <h4>Akcije</h4>
+          <button class="actions-btn" onclick="window.print();" data-track="action-print">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Shranite kot PDF
+          </button>
+          <button class="actions-btn" onclick="navigator.clipboard&&navigator.clipboard.writeText(window.location.href);" data-track="action-copy">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Kopirajte povezavo do ponudbe
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="progress">
+      <div class="progress-card">
+        <div class="progress-label">Potek ponudbe</div>
+        <ul class="progress-steps">{{PROGRESS_HTML}}</ul>
+      </div>
+    </div>
+
+    <div class="manager">
+      <div class="manager-avatar">{{MANAGER_INITIALS}}</div>
+      <div class="manager-info">
+        <div class="manager-info-label">Vaš skrbnik</div>
+        <div class="manager-name">{{MANAGER_NAME}}</div>
+        <div class="manager-role">{{MANAGER_ROLE}}</div>
+        <div class="manager-meta">
+          <span>{{MANAGER_PHONE}}</span>
+          <span>{{MANAGER_EMAIL}}</span>
+          <span>{{MANAGER_WEBSITE}}</span>
+        </div>
+      </div>
+      <a href="{{CALENDLY_URL}}" target="_blank" rel="noopener" class="manager-cta" data-track="manager-cta">
+        Rezervirajte termin
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+      </a>
+    </div>
+
+    {{EXPIRED_BLOCK_HTML}}
+
+  </article>
+
+  <footer class="foot">
+    <div class="foot-line">{{SELLER_FULL_NAME}} · {{SELLER_ADDRESS}}</div>
+    <div class="foot-line">Mat. št.: {{SELLER_MAT_ST}} · Davčna: {{SELLER_DAVCNA}}</div>
+    <div class="foot-brand"><span class="dot"></span> AIERA Generator ponudb</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var SLUG = '{{SLUG}}';
+  var TRACK_BASE = '{{TRACK_BASE}}';
+  var THEME = '{{THEME}}';
+  if (!SLUG || !TRACK_BASE) return;
+  function send(event, value) {
+    try {
+      navigator.sendBeacon
+        ? navigator.sendBeacon(TRACK_BASE + '/g-track', JSON.stringify({ slug: SLUG, event: event, value: value, theme: THEME }))
+        : fetch(TRACK_BASE + '/g-track', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: SLUG, event: event, value: value, theme: THEME }), keepalive: true });
+    } catch (e) {}
+  }
+  send('offer_view', { theme: THEME });
+  var maxScroll = 0;
+  window.addEventListener('scroll', function () {
+    var h = document.documentElement;
+    var b = document.body;
+    var st = h.scrollTop || b.scrollTop;
+    var sh = (h.scrollHeight || b.scrollHeight) - h.clientHeight;
+    var p = sh > 0 ? Math.round((st / sh) * 100) : 0;
+    if (p > maxScroll) maxScroll = p;
+  }, { passive: true });
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var depth = 0;
+    while (t && depth < 6) {
+      var track = t.getAttribute && t.getAttribute('data-track');
+      if (track) { send('offer_click', { id: track, theme: THEME }); break; }
+      t = t.parentNode; depth++;
+    }
+  }, { passive: true, capture: true });
+  window.addEventListener('beforeunload', function () { send('offer_unload', { maxScroll: maxScroll, theme: THEME }); });
+})();
+</script>
+</body>
+</html>

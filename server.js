@@ -55,6 +55,105 @@ const AT_LEADS = 'tblfobqavxfv7hqC2';
 const AT_MESSAGES = 'tblNvqZEFcNaOwbnO';
 const AT_PROPOSALS = 'tblHS9tAl7c1XAQpi';
 
+// ─── CENTRAL CONFIG (pricing, throttling, A/B, handoff delay, auth) ──────────
+// Single source of truth. Override via env where flagged.
+
+const PRICING = {
+  b2booster: { setup: 790, monthly: 890, currency: 'EUR' },
+  generator: { setup: 490, monthly: 290, currency: 'EUR' },
+  socialProof: 'Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev.',
+  // Formatted helpers (use in prompts)
+  b2boosterText: '790 EUR setup (enkratni fee) + 890 EUR na mesec',
+  generatorText: 'pilot od 290 EUR/mesec + 490 EUR setup (custom per segment)'
+};
+
+// Phone surfacing in approval mail (#1)
+const ZAN_PHONE_DISPLAY = '040 708 327';
+const ZAN_PHONE_E164 = '+38640708327';
+
+// Outflo dedup (#2): in-memory LRU, 24h window
+const OUTFLO_DEDUP = new Map(); // key: convId + sha1(text), value: timestamp
+const OUTFLO_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
+const OUTFLO_DEDUP_MAX = 2000;
+function outfloDedupKey(conversationId, messageText) {
+  const txt = (messageText || '').trim().substring(0, 1000);
+  const h = crypto.createHash('sha1').update(txt).digest('hex').slice(0, 16);
+  return `${conversationId || 'noconv'}::${h}`;
+}
+function isOutfloDuplicate(conversationId, messageText) {
+  const key = outfloDedupKey(conversationId, messageText);
+  const now = Date.now();
+  // Prune expired
+  if (OUTFLO_DEDUP.size > OUTFLO_DEDUP_MAX) {
+    for (const [k, t] of OUTFLO_DEDUP) {
+      if (now - t > OUTFLO_DEDUP_TTL_MS) OUTFLO_DEDUP.delete(k);
+    }
+  }
+  const seen = OUTFLO_DEDUP.get(key);
+  if (seen && now - seen < OUTFLO_DEDUP_TTL_MS) return true;
+  OUTFLO_DEDUP.set(key, now);
+  return false;
+}
+
+// Outbound throttle (#4): max 1 LI send per account per N min
+const LI_THROTTLE_MIN = parseInt(process.env.LI_THROTTLE_MIN || '20', 10);
+const LI_LAST_SEND = new Map(); // account key → epoch ms of last scheduled send
+function getThrottleExtraMs(accountKey) {
+  if (!accountKey) return 0;
+  const last = LI_LAST_SEND.get(accountKey);
+  const now = Date.now();
+  const windowMs = LI_THROTTLE_MIN * 60 * 1000;
+  if (last && now - last < windowMs) {
+    // Schedule after the window expires, plus small jitter 30-90s
+    return (windowMs - (now - last)) + (30 + Math.floor(Math.random() * 60)) * 1000;
+  }
+  return 0;
+}
+function markThrottleSlot(accountKey, sendAtMs) {
+  if (!accountKey) return;
+  // Track the latest scheduled send so we space the NEXT one accordingly
+  const prev = LI_LAST_SEND.get(accountKey) || 0;
+  LI_LAST_SEND.set(accountKey, Math.max(prev, sendAtMs));
+}
+
+// Vesna → Žan handoff delay (#5): random 60-180 min between Vesna LI confirm and Žan offer email
+const VESNA_HANDOFF_DELAY_MIN = parseInt(process.env.VESNA_HANDOFF_DELAY_MIN || '60', 10);
+const VESNA_HANDOFF_DELAY_MAX = parseInt(process.env.VESNA_HANDOFF_DELAY_MAX || '180', 10);
+function getVesnaHandoffDelayMs() {
+  const span = Math.max(0, VESNA_HANDOFF_DELAY_MAX - VESNA_HANDOFF_DELAY_MIN);
+  const min = VESNA_HANDOFF_DELAY_MIN * 60 * 1000;
+  return min + Math.floor(Math.random() * (span * 60 * 1000));
+}
+
+// A/B variant tagging (#6): random variant tag, light prompt nudge per variant
+const AB_TEST_ENABLED = (process.env.AB_TEST_ENABLED || 'true').toLowerCase() === 'true';
+const AB_VARIANTS = {
+  A: { tag: 'A-baseline', nudge: '' },
+  B: { tag: 'B-curiosity', nudge: '\nOPENING MODE: Start the reply with a concrete observation or one-line question about their role/industry. Avoid generic "hvala za sporočilo" opener.' },
+  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with a concrete number or outcome (50-100 odgovorov mesečno, X% manj manualnega dela). Skip greeting. Outcome first, CTA last.' }
+};
+function pickABVariant() {
+  if (!AB_TEST_ENABLED) return AB_VARIANTS.A;
+  const keys = Object.keys(AB_VARIANTS);
+  return AB_VARIANTS[keys[Math.floor(Math.random() * keys.length)]];
+}
+
+// Dashboard basic auth (#16)
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
+function dashboardAuth(req, res, next) {
+  if (!DASHBOARD_PASSWORD) return next(); // disabled if no password set
+  const auth = req.headers.authorization || '';
+  const [scheme, encoded] = auth.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    try {
+      const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':');
+      if (pass === DASHBOARD_PASSWORD || user === DASHBOARD_PASSWORD) return next();
+    } catch {}
+  }
+  res.set('WWW-Authenticate', 'Basic realm="B2Booster Dashboard"');
+  return res.status(401).send('Auth required');
+}
+
 async function airtableRequest(method, endpoint, body) {
   if (!AIRTABLE_PAT) return null;
   try {
@@ -103,7 +202,7 @@ async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, stat
   }
 }
 
-async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text, draft, sent) {
+async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text, draft, sent, variantTag = null) {
   if (!AIRTABLE_PAT) return;
   try {
     const fields = {
@@ -117,8 +216,9 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
       'Sent': sent || false,
       'Timestamp': new Date().toISOString()
     };
+    if (variantTag) fields['Variant'] = variantTag;
     await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }] });
-    console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}`);
+    console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}${variantTag ? ` | ${variantTag}` : ''}`);
   } catch (e) {
     console.error('[AIRTABLE] logMessage error:', e.message);
   }
@@ -428,28 +528,40 @@ function getCETHour() {
   );
 }
 
-function getSendAt(channel) {
+function getSendAt(channel, accountKey = null) {
+  let baseDate;
   // Email: no business hours, just 2-5 min delay
   if (channel === 'email') {
     const delayMin = 2 + Math.random() * 3;
-    return new Date(Date.now() + delayMin * 60 * 1000);
-  }
-
-  // LinkedIn: respect send window
-  const hour = getCETHour();
-
-  if (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END) {
-    const delayMin = 2 + Math.random() * 7;
-    return new Date(Date.now() + delayMin * 60 * 1000);
+    baseDate = new Date(Date.now() + delayMin * 60 * 1000);
   } else {
-    // Wait until 16:00 CET + random 1-8 min
-    const cetNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Ljubljana' }));
-    const target = new Date(cetNow);
-    if (hour >= SEND_WINDOW_END) target.setDate(target.getDate() + 1);
-    target.setHours(SEND_WINDOW_START, Math.floor(1 + Math.random() * 8), 0, 0);
-    const delayMs = Math.max(target - cetNow, 60000);
-    return new Date(Date.now() + delayMs);
+    // LinkedIn: respect send window
+    const hour = getCETHour();
+    if (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END) {
+      const delayMin = 2 + Math.random() * 7;
+      baseDate = new Date(Date.now() + delayMin * 60 * 1000);
+    } else {
+      // Wait until 16:00 CET + random 1-8 min
+      const cetNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Ljubljana' }));
+      const target = new Date(cetNow);
+      if (hour >= SEND_WINDOW_END) target.setDate(target.getDate() + 1);
+      target.setHours(SEND_WINDOW_START, Math.floor(1 + Math.random() * 8), 0, 0);
+      const delayMs = Math.max(target - cetNow, 60000);
+      baseDate = new Date(Date.now() + delayMs);
+    }
   }
+
+  // Throttle: if this account sent recently, push send out further to preserve deliverability.
+  // Applies to LinkedIn channels (linkedin, vesna, unipile). Email channel uses Instantly's own pacing.
+  if (channel !== 'email' && accountKey) {
+    const extra = getThrottleExtraMs(accountKey);
+    if (extra > 0) {
+      baseDate = new Date(Math.max(baseDate.getTime(), Date.now() + extra));
+      console.log(`[THROTTLE] ${accountKey}: pushed by ${Math.round(extra/60000)} min, sendAt=${baseDate.toISOString()}`);
+    }
+    markThrottleSlot(accountKey, baseDate.getTime());
+  }
+  return baseDate;
 }
 
 function formatDelay(sendAt) {
@@ -476,6 +588,29 @@ function formatSendTime(sendAt) {
 async function executeSend(id, item) {
   const { channel, leadData, draft } = item;
   try {
+    // Delayed Vesna→Žan offer email (handoff): scheduled email send after LI confirm went out.
+    if (item.kind === 'delayed_offer_email') {
+      await sendOfferEmailViaResend({
+        to: item.recipientEmail,
+        subject: item.emailSubject,
+        bodyText: item.emailBody
+      });
+      await airtableMarkOfferSent(
+        leadData.linkedinUrl,
+        `${leadData.firstName} ${leadData.lastName}`,
+        item.recipientEmail,
+        'teaser_v1_delayed'
+      );
+      airtableLogMessage(
+        `${leadData.firstName} ${leadData.lastName}`,
+        leadData.linkedinUrl, 'outbound', 'email_handoff',
+        `[EMAIL DELAYED → ${item.recipientEmail}] ${item.emailSubject}`,
+        item.emailBody, true
+      ).catch(() => {});
+      await deletePending(id);
+      console.log(`[QUEUE] Delayed Vesna handoff email sent: ${leadData.firstName} ${leadData.lastName} → ${item.recipientEmail}`);
+      return;
+    }
     if (channel === 'unipile') {
       await sendViaUnipile(leadData.chatId, leadData.accountId, draft);
     } else if (channel === 'linkedin') {
@@ -483,7 +618,19 @@ async function executeSend(id, item) {
     } else if (channel === 'vesna') {
       await sendViaOutflo(leadData.linkedinUrl, draft, VESNA_LINKEDIN_URL);
     } else {
-      await sendViaInstantly(leadData.emailUuid, draft, leadData.subject);
+      // Email send: prefer Instantly (if emailUuid is set = reply was polled from Instantly).
+      // Fallback to Resend reply when this came in via Gmail webhook (#14 reply-to-offer-email).
+      if (leadData.emailUuid) {
+        await sendViaInstantly(leadData.emailUuid, draft, leadData.subject);
+      } else if (leadData.email) {
+        await sendOfferEmailViaResend({
+          to: leadData.email,
+          subject: leadData.subject?.startsWith('Re:') ? leadData.subject : `Re: ${leadData.subject || 'Odgovor'}`,
+          bodyText: draft
+        });
+      } else {
+        throw new Error('Email channel but no emailUuid and no email - cannot send');
+      }
     }
     await deletePending(id);
     console.log(`[QUEUE] Sent & removed: ${leadData.firstName} ${leadData.lastName} (${channel})`);
@@ -981,6 +1128,10 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
 
   const trainingContext = buildTrainingContext();
 
+  // A/B variant pick (#6) - stamp variant onto leadData so caller can log it
+  const variant = pickABVariant();
+  if (leadData && !leadData.abVariant) leadData.abVariant = variant.tag;
+
   let prompt;
   const enrichmentContext = [
     leadData.title && `Title: ${leadData.title}`,
@@ -996,7 +1147,7 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation, references their specific context if relevant, and moves toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
+Write a reply that naturally continues the conversation, references their specific context if relevant, and moves toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1004,7 +1155,7 @@ Context: ${theirMessage}
 
 Write a short, natural opening message that acknowledges the connection and moves toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
-Be direct and confident. Start the conversation naturally.`;
+Be direct and confident. Start the conversation naturally.${variant.nudge}`;
   }
 
   const response = await anthropic.messages.create({
@@ -1100,6 +1251,53 @@ Return JSON only, no markdown, no commentary:
   "personalization_hook": "<1 short Slovenian sentence to use in the reply that ties to their specific situation>"
 }`;
 
+// Cache helper for classifyOffer (#3): per linkedinUrl, stored in Airtable Leads.
+// Field: "Offer Type Cached" (text). Skip cache if missing or env disable.
+const CLASSIFY_CACHE_ENABLED = (process.env.CLASSIFY_CACHE_ENABLED || 'true').toLowerCase() === 'true';
+async function getClassifyCache(linkedinUrl) {
+  if (!CLASSIFY_CACHE_ENABLED || !AIRTABLE_PAT || !linkedinUrl) return null;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&fields[]=Offer%20Type%20Cached&maxRecords=1`);
+    const cached = r?.records?.[0]?.fields?.['Offer Type Cached'];
+    if (cached && ['aiera', 'b2booster', 'generator'].includes(cached)) return cached;
+  } catch (e) {
+    console.warn('[CLASSIFY-CACHE] read error:', e.message);
+  }
+  return null;
+}
+async function setClassifyCache(linkedinUrl, offerType) {
+  if (!CLASSIFY_CACHE_ENABLED || !AIRTABLE_PAT || !linkedinUrl || !offerType) return;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const rec = r?.records?.[0];
+    if (rec) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Offer Type Cached': offerType } });
+    }
+  } catch (e) {
+    console.warn('[CLASSIFY-CACHE] write error:', e.message);
+  }
+}
+
+// Pivot detector (#10): lead says "not for this but interested in X" → bypass cache, re-classify.
+// Cheap keyword check first; only escalate to AI if keyword hit (low false-positive cost).
+const PIVOT_KEYWORDS = [
+  // SI
+  'ampak bi', 'ampak imamo', 'ampak nas zanima', 'ampak potrebujemo',
+  'tega ne potrebujemo, bi pa', 'nismo za to, bi pa',
+  'ni za nas, ampak', 'ne za to, ampak', 'drugačno potrebo',
+  'imamo pa drug', 'imamo drugačn',
+  // EN
+  'not for us but', 'not interested in this but', 'this isn\'t what we need but',
+  'we don\'t need this but', 'different need', 'something else though'
+];
+function hasPivotSignal(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return PIVOT_KEYWORDS.some(k => lower.includes(k.normalize('NFD').replace(/\p{Diacritic}/gu, '')));
+}
+
 async function classifyOffer(leadData, theirMessage) {
   // Safety: always pick a default before AI call
   const fallback = {
@@ -1110,6 +1308,29 @@ async function classifyOffer(leadData, theirMessage) {
     personalization_hook: ''
   };
   if (!process.env.ANTHROPIC_API_KEY) return fallback;
+
+  // Pivot check: if their reply signals a different need, invalidate cache & re-classify.
+  const isPivot = hasPivotSignal(theirMessage);
+  if (isPivot) {
+    console.log(`[CLASSIFY-PIVOT] Pivot signal detected for ${leadData?.linkedinUrl} - bypassing cache`);
+    // Invalidate cache so re-classification gets persisted
+    if (leadData?.linkedinUrl) setClassifyCache(leadData.linkedinUrl, '').catch(() => {});
+  }
+
+  // Check cache first (saves Haiku call on follow-up messages from same lead)
+  if (!isPivot) {
+    const cached = await getClassifyCache(leadData?.linkedinUrl);
+    if (cached) {
+      console.log(`[CLASSIFY-CACHE] HIT for ${leadData.linkedinUrl} → ${cached}`);
+      return {
+        offer: cached,
+        confidence: 0.95,
+        b2b_check: 'cached',
+        key_signal: 'cached from previous classification',
+        personalization_hook: ''
+      };
+    }
+  }
 
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -1124,7 +1345,8 @@ async function classifyOffer(leadData, theirMessage) {
       `Country: ${leadData.country || 'unknown'}`,
       `Campaign: ${leadData.campaignName || 'unknown'}`,
       `Their reply: "${(theirMessage || leadData.theirMessage || '').substring(0, 400)}"`,
-    ].join('\n');
+      isPivot ? `\nIMPORTANT: The lead signaled this is NOT the right fit for the previous offer but they have ANOTHER need. Re-classify based on what they actually want now, not the original campaign assumption.` : ''
+    ].filter(Boolean).join('\n');
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -1150,6 +1372,9 @@ async function classifyOffer(leadData, theirMessage) {
       parsed.offer = 'aiera';
       parsed.key_signal = '(generator disabled by env) ' + (parsed.key_signal || '');
     }
+
+    // Write to cache for future replies from this lead
+    setClassifyCache(leadData?.linkedinUrl, parsed.offer).catch(() => {});
 
     return parsed;
   } catch (err) {
@@ -1261,6 +1486,16 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
 
   const channelBadge = `<span style="background:${channelBadgeColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${channelLabel.toUpperCase()}</span>`;
 
+  // A/B variant badge (#6)
+  const variantBadge = leadData.abVariant
+    ? `<span style="background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">VAR ${leadData.abVariant}</span>`
+    : '';
+
+  // Offer-type badge (lets you see classifier choice at a glance)
+  const offerTypeBadge = leadData.offerType
+    ? `<span style="background:#ede9fe;color:#5b21b6;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">OFFER ${leadData.offerType.toUpperCase()}</span>`
+    : '';
+
   // Inbound message - always show, prominent. If empty say so.
   // Fallback to leadData.lastMessage (used by followup/cold crons that pull from Airtable's "Last Message" field).
   const inboundMessage = leadData.theirMessage || leadData.lastMessage || '';
@@ -1274,6 +1509,21 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
          <div style="border-left:3px solid #d1d5db;padding:14px 18px;color:#6b7280;background:#f9fafb;font-size:13px;font-style:italic;border-radius:4px">Besedilo ni bilo v notifikaciji (LinkedIn digest). Odpri profil za polni kontekst.</div>
        </div>`;
 
+  // HIGH-INTENT CALL BAR (#1): show big click-to-call when positive + phone available.
+  // Phone comes from Apollo enrichment (leadData.phone). Format E.164 if present.
+  const rawPhone = (leadData.phone || '').toString().trim();
+  const phoneE164 = rawPhone.replace(/[^\d+]/g, '');
+  const showCallBar = (leadData.intent === 'positive' || leadData.intent === 'question') && phoneE164.length >= 7;
+  const callBar = showCallBar
+    ? `<div style="background:#ecfdf5;border:2px solid #16a34a;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+         <div>
+           <p style="margin:0;color:#15803d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">High-intent lead - pokliči zdaj</p>
+           <p style="margin:4px 0 0;color:#065f46;font-size:13px">Klic v isti uri konvertira 3-5x bolje kot Calendly čez teden.</p>
+         </div>
+         <a href="tel:${phoneE164}" style="background:#16a34a;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;font-weight:700;font-size:18px;letter-spacing:0.3px;display:inline-block;white-space:nowrap">📞 ${rawPhone}</a>
+       </div>`
+    : '';
+
   // Context info panel - all the metadata we have
   const infoRows = [];
   const profileLink = leadData.linkedinUrl
@@ -1281,6 +1531,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
     : '';
 
   if (leadData.email) infoRows.push(['Email', `<a href="mailto:${leadData.email}" style="color:#2563eb;text-decoration:none">${leadData.email}</a>`]);
+  if (leadData.phone) infoRows.push(['Telefon', `<a href="tel:${phoneE164}" style="color:#16a34a;text-decoration:none;font-weight:600">${leadData.phone}</a>`]);
   if (profileLink) infoRows.push(['LinkedIn', profileLink]);
   if (leadData.title) infoRows.push(['Vloga', leadData.title]);
   if (leadData.company && leadData.company !== 'LinkedIn') infoRows.push(['Podjetje', leadData.company]);
@@ -1344,9 +1595,10 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
       ${autoSendBanner}
+      ${callBar}
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-          ${channelBadge}${intentBadge}${accountBadge}
+          ${channelBadge}${intentBadge}${accountBadge}${offerTypeBadge}${variantBadge}
         </div>
         <h2 style="margin:0;font-size:20px;color:#111;font-weight:700">${leadData.firstName} ${leadData.lastName} ${actionLabel}</h2>
       </div>
@@ -1408,7 +1660,8 @@ async function enqueueReply({ channel, leadData, draft, intent, hasRealMessage =
   const eligible = isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, isHandoff });
   if (eligible) {
     const minSendMs = Date.now() + AUTO_SEND_HOLD_MIN * 60 * 1000;
-    const naturalSendMs = getSendAt(channel).getTime();
+    const accountKey = `${channel}::${leadData?.accountFirstName || 'unknown'}`;
+    const naturalSendMs = getSendAt(channel, accountKey).getTime();
     const sendAtISO = new Date(Math.max(minSendMs, naturalSendMs)).toISOString();
     await storePending(id, { channel, leadData, draft, source: source || 'auto-send', ...extraData });
     await markScheduled(id, draft, sendAtISO);
@@ -1934,6 +2187,56 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
 
   try {
     if (mode === 'send_email') {
+      // Vesna channel (#5): LinkedIn confirm goes out NOW, offer email DELAYS 60-180 min.
+      // This makes it feel like Vesna coordinated with Žan, who then prepared the offer.
+      const isVesnaHandoff = channel === 'vesna';
+      const delayMs = isVesnaHandoff ? getVesnaHandoffDelayMs() : 0;
+      const emailSendAt = new Date(Date.now() + delayMs);
+
+      if (isVesnaHandoff) {
+        // 1. LinkedIn confirm in Vesna's name FIRST (immediate, acknowledging)
+        try {
+          await sendViaOutflo(leadData.linkedinUrl, liReply, VESNA_LINKEDIN_URL);
+        } catch (e) {
+          console.error('[HANDOFF] Vesna LinkedIn confirm failed:', e.message);
+        }
+        // 2. Schedule the offer email for later
+        const delayedId = uuidv4();
+        await storePending(delayedId, {
+          kind: 'delayed_offer_email',
+          channel: 'email',
+          leadData,
+          recipientEmail,
+          emailSubject,
+          emailBody,
+          source: 'vesna-handoff-delayed'
+        });
+        await markScheduled(delayedId, emailBody, emailSendAt.toISOString(), {
+          kind: 'delayed_offer_email',
+          channel: 'email',
+          leadData,
+          recipientEmail,
+          emailSubject,
+          emailBody
+        });
+        airtableLogMessage(
+          `${leadData.firstName} ${leadData.lastName}`,
+          leadData.linkedinUrl, 'outbound', 'email_handoff',
+          '[LINKEDIN confirm Vesna]', liReply, true
+        ).catch(() => {});
+        await deletePending(id);
+        return res.send(page('Vesna handoff', `
+          <div style="text-align:center;padding:40px 0">
+            <div style="font-size:48px;margin-bottom:16px">⏰✉️</div>
+            <h2 style="color:#15803d;margin:0 0 8px">Vesna confirm poslan, email v vrsti</h2>
+            <p style="color:#666;margin:0 0 4px">${leadData.firstName} ${leadData.lastName}</p>
+            <p style="color:#16a34a;font-weight:600;font-size:16px;margin:8px 0">${recipientEmail}</p>
+            <p style="color:#9a3412;font-size:14px;margin:8px 0">Email se pošlje ob ${formatSendTime(emailSendAt)} (delay ${Math.round(delayMs/60000)} min, da zveni naravno)</p>
+          </div>
+        `));
+      }
+
+      // Žan / direct flow: send immediately as before
       // 1. Send the offer email via Resend
       await sendOfferEmailViaResend({
         to: recipientEmail,
@@ -1943,11 +2246,7 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
 
       // 2. Send LinkedIn confirmation reply (via Outflo, respecting channel)
       try {
-        if (channel === 'vesna') {
-          await sendViaOutflo(leadData.linkedinUrl, liReply, VESNA_LINKEDIN_URL);
-        } else {
-          await sendViaOutflo(leadData.linkedinUrl, liReply, leadData.senderUrl || null);
-        }
+        await sendViaOutflo(leadData.linkedinUrl, liReply, leadData.senderUrl || null);
       } catch (e) {
         console.error('[HANDOFF] LinkedIn confirm send failed (email still sent):', e.message);
       }
@@ -2886,7 +3185,7 @@ app.post('/webhook/linkedin', async (req, res) => {
 
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, parsed.message);
-        const sendAt = getSendAt('linkedin');
+        const sendAt = getSendAt('linkedin', `linkedin::${leadData.accountFirstName || 'Žan'}`);
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft: closing });
         await markScheduled(id, closing, sendAt);
@@ -2970,7 +3269,7 @@ app.post('/webhook/vesna', async (req, res) => {
 
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, parsed.message);
-        const sendAt = getSendAt('linkedin');
+        const sendAt = getSendAt('linkedin', 'vesna::Vesna');
         const id = uuidv4();
         await storePending(id, { channel: 'vesna', leadData, draft: closing });
         await markScheduled(id, closing, sendAt);
@@ -3033,7 +3332,7 @@ app.get('/approve/:id', async (req, res) => {
   }
 
   const { channel, leadData, draft } = pending;
-  const sendAt = getSendAt(channel);
+  const sendAt = getSendAt(channel, `${channel}::${leadData?.accountFirstName || 'Žan'}`);
 
   await markScheduled(req.params.id, draft, sendAt.toISOString(), pending);
 
@@ -3146,7 +3445,7 @@ app.post('/edit/:id', async (req, res) => {
     saveTrainingExample(originalDraft, updatedDraft, leadData.theirMessage || '');
   }
 
-  const sendAt = getSendAt(channel);
+  const sendAt = getSendAt(channel, `${channel}::${leadData?.accountFirstName || 'Žan'}`);
   await markScheduled(req.params.id, updatedDraft, sendAt.toISOString(), pending);
 
   const hour = getCETHour();
@@ -3319,6 +3618,20 @@ async function airtableProposalLogEvent(slug, event, value, ua, ip) {
       if (!current['Max Scroll'] || maxScrollIn > current['Max Scroll']) fields['Max Scroll'] = maxScrollIn;
     }
     fields['Last Open At'] = now;
+  }
+  // Exit-intent: hot-signal that lead was about to leave (#15)
+  if (event === 'exit_intent') {
+    fields['Exit Intent'] = (current['Exit Intent'] || 0) + 1;
+    fields['Last Exit Intent At'] = now;
+  }
+  // Pricing dwell: lead spent meaningful time on pricing section
+  if (event === 'pricing_dwell') {
+    fields['Pricing Dwell Bucket'] = (value && value.bucket) || 'unknown';
+    fields['Pricing Dwell Ms'] = (value && value.ms) || 0;
+    fields['Last Pricing Dwell At'] = now;
+  }
+  if (event === 'pagehide') {
+    fields['Last Pagehide At'] = now;
   }
 
   await airtableProposalUpsert(slug, fields);
@@ -3720,6 +4033,7 @@ async function dashboardLatestMessages(limit = 10) {
       messageId: rec.fields['Message ID'] || '',
       timestamp: rec.fields['Timestamp'] || '',
       sent: !!rec.fields['Sent'],
+      variant: rec.fields['Variant'] || '',
       feedbackRating: rec.fields['Feedback Rating'] || '',
       feedbackTags: rec.fields['Feedback Tags'] || [],
       feedbackComment: rec.fields['Feedback Comment'] || '',
@@ -3767,7 +4081,7 @@ app.post('/api/feedback', async (req, res) => {
   }
 });
 
-app.get('/dashboard', async (req, res) => {
+app.get('/dashboard', dashboardAuth, async (req, res) => {
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -3783,7 +4097,14 @@ app.get('/dashboard', async (req, res) => {
     statusOfferSent,
     statusMeetingBooked,
     statusNoShow,
-    latestMessages
+    latestMessages,
+    // Funnel: 30d cohort drop-off
+    funnelReplies30d,
+    funnelOffersSent30d,
+    funnelOffersOpened30d,
+    funnelCalendlyClicked30d,
+    funnelBooked30d,
+    funnelShown30d
   ] = await Promise.all([
     loadPending(),
     dashboardCountLeads(`AND({Last Activity}!=BLANK(), IS_AFTER({Last Activity}, "${since7d.split('T')[0]}"))`),
@@ -3795,8 +4116,23 @@ app.get('/dashboard', async (req, res) => {
     dashboardCountLeads(`{Status}="Offer Sent (Email)"`),
     dashboardCountLeads(`{Status}="Meeting Booked"`),
     dashboardCountLeads(`{Status}="No Show"`),
-    dashboardLatestMessages(30)
+    dashboardLatestMessages(30),
+    // Funnel queries (30d window, all use Last Activity as the cohort anchor when possible)
+    dashboardCountLeads(`AND({Status}!="",IS_AFTER({Last Activity}, "${since30d.split('T')[0]}"))`),
+    dashboardCountLeads(`AND({Email Sent At}!=BLANK(),IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Offer Open Count}>0,IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Offer Calendly Clicked}=TRUE(),IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Booked At}!=BLANK(),IS_AFTER({Booked At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Meeting Status}="Shown",IS_AFTER({Booked At}, "${since30d}"))`)
   ]);
+
+  // Variant stats from in-memory latestMessages (cheap, no extra Airtable call)
+  const variantStats = { 'A-baseline': { sent: 0, booked: 0 }, 'B-curiosity': { sent: 0, booked: 0 }, 'C-direct-value': { sent: 0, booked: 0 } };
+  for (const m of latestMessages) {
+    const v = m.variant;
+    if (!v || !variantStats[v]) continue;
+    if (m.sent) variantStats[v].sent++;
+  }
 
   // Feedback filter via query string: ?filter=needs_feedback | flagged | all (default)
   const feedbackFilter = (req.query.filter || 'all').toString();
@@ -4013,6 +4349,60 @@ app.get('/dashboard', async (req, res) => {
         ${funnelBar('Offer Sent (Email)', statusOfferSent, '#7c3aed')}
         ${funnelBar('Meeting Booked', statusMeetingBooked, '#16a34a')}
         ${funnelBar('No Show', statusNoShow, '#dc2626')}
+      </div>
+
+      <h2>30d conversion funnel & drop-off</h2>
+      <div class="card">
+        ${(() => {
+          const stages = [
+            { label: 'Replied', count: funnelReplies30d, color: '#0a66c2' },
+            { label: 'Offer Email Sent', count: funnelOffersSent30d, color: '#7c3aed' },
+            { label: 'Offer Opened', count: funnelOffersOpened30d, color: '#a855f7' },
+            { label: 'Calendly Clicked', count: funnelCalendlyClicked30d, color: '#ec4899' },
+            { label: 'Meeting Booked', count: funnelBooked30d, color: '#16a34a' },
+            { label: 'Meeting Shown', count: funnelShown30d, color: '#15803d' }
+          ];
+          const top = Math.max(stages[0].count, 1);
+          return stages.map((s, i) => {
+            const prev = i === 0 ? top : (stages[i - 1].count || 1);
+            const pctFromTop = Math.round((s.count / top) * 100);
+            const dropFromPrev = i === 0 ? null : Math.round(((prev - s.count) / Math.max(prev, 1)) * 100);
+            const conversionFromPrev = i === 0 ? null : Math.round((s.count / Math.max(prev, 1)) * 100);
+            return `
+              <div style="margin-bottom:14px">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
+                  <span style="color:#374151;font-weight:600">${s.label}</span>
+                  <span style="color:#6b7280;font-size:12px">
+                    <strong>${s.count}</strong>
+                    ${conversionFromPrev !== null ? ` <span style="color:${conversionFromPrev >= 40 ? '#16a34a' : (conversionFromPrev >= 15 ? '#d97706' : '#dc2626')};font-weight:600;margin-left:8px">${conversionFromPrev}% prev</span>` : ''}
+                    ${dropFromPrev !== null && dropFromPrev > 0 ? ` <span style="color:#9ca3af;font-size:11px;margin-left:6px">−${dropFromPrev}%</span>` : ''}
+                  </span>
+                </div>
+                <div style="background:#f3f4f6;border-radius:4px;height:10px;overflow:hidden">
+                  <div style="background:${s.color};height:100%;width:${Math.max(pctFromTop, s.count > 0 ? 3 : 0)}%"></div>
+                </div>
+              </div>`;
+          }).join('');
+        })()}
+        <p style="margin:8px 0 0;color:#9ca3af;font-size:11px">Pct prev = conversion od prejšnje stopnje. Pct -X = drop-off. Cilj: vsak stage >40% konverzije.</p>
+      </div>
+
+      <h2>A/B variant performance (sent v zadnjih 30 sporočilih)</h2>
+      <div class="card">
+        <table style="width:100%;font-size:13px">
+          <thead><tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
+            <th style="padding:6px 8px">Variant</th><th style="padding:6px 8px">Sent</th><th style="padding:6px 8px">Note</th>
+          </tr></thead>
+          <tbody>
+            ${Object.entries(variantStats).map(([name, s]) => `
+              <tr style="border-top:1px solid #f3f4f6">
+                <td style="padding:6px 8px;font-weight:600">${name}</td>
+                <td style="padding:6px 8px">${s.sent}</td>
+                <td style="padding:6px 8px;color:#9ca3af;font-size:12px">${name === 'A-baseline' ? 'control (default style)' : name === 'B-curiosity' ? 'opens with observation/question' : 'leads with concrete outcome'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        <p style="margin:8px 0 0;color:#9ca3af;font-size:11px">Razširi okno z dodatnim 30d query-jem na Messages tabelo, ko bo dovolj podatkov za signifikantno primerjavo.</p>
       </div>
 
       <h2>Approval queue (${pendingItems.length})</h2>
@@ -4388,7 +4778,7 @@ async function pollLinkedInInbox() {
         const closing = await generateClosingReply(leadData, body);
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft: closing });
-        await markScheduled(id, closing, getSendAt('linkedin'));
+        await markScheduled(id, closing, getSendAt('linkedin', 'linkedin::Žan'));
         continue;
       }
 
@@ -4552,6 +4942,12 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
+    // Idempotence: dedup on conversation_id + sha1(message_text). Outflo re-sends events occasionally.
+    if (isOutfloDuplicate(payload.conversation_id || leadProfileUrl, messageText)) {
+      console.log(`[OUTFLO] Duplicate event skipped (conv=${payload.conversation_id || 'no-id'}, lead=${leadFullName})`);
+      return;
+    }
+
     // Detect which OUR account received the reply. Only Žan and Vesna are wired to the bot.
     // Mojca (and any other account) is handled manually - skip.
     const campaignName = payload.campaign?.name || acct.full_name || '';
@@ -4597,6 +4993,8 @@ app.post('/webhook/outflo', async (req, res) => {
       seniority: apolloData?.seniority || '',
       city: apolloData?.city || '',
       country: apolloData?.country || '',
+      email: apolloData?.email || '',
+      phone: apolloData?.phone || '',
       theirMessage: messageText,
       intent,
       campaignName,
@@ -4685,10 +5083,120 @@ app.post('/webhook/outflo', async (req, res) => {
     // Log to Airtable (non-blocking)
     airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText, apolloData || {}).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', intent, messageText, null, false).catch(() => {});
-    airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false).catch(() => {});
+    airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false, leadData.abVariant || null).catch(() => {});
 
   } catch (err) {
     console.error('[WEBHOOK] Error:', err.message);
+  }
+});
+
+// ─── REPLY-TO-OFFER-EMAIL WEBHOOK (#14) ───────────────────────────────────────
+// Fed by Make.com / Zapier scenario that watches Žan's Gmail for replies on
+// threads matching the offer email subjects (or replies-to to bot@b2booster.eu).
+// Expected payload: { from, fromName?, subject, body, inReplyTo?, threadId? }
+// Behavior:
+//   1. Dedup on (from email + sha1(subject+body))
+//   2. Look up lead in Airtable by email
+//   3. Classify intent
+//   4. Generate draft reply (handoff or offer-followup style)
+//   5. Send approval email to Žan (=his notification that reply is waiting)
+
+const EMAIL_REPLY_DEDUP = new Map();
+const EMAIL_REPLY_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function airtableFindLeadByEmailReply(email) {
+  if (!AIRTABLE_PAT || !email) return null;
+  try {
+    const filter = encodeURIComponent(`LOWER({Email})="${email.toLowerCase()}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    return r?.records?.[0] || null;
+  } catch (e) {
+    console.error('[EMAIL-REPLY] lookup error:', e.message);
+    return null;
+  }
+}
+
+app.post('/webhook/email-reply', async (req, res) => {
+  res.json({ ok: true }); // ack immediately
+
+  try {
+    const { from, fromName, subject, body, inReplyTo, threadId } = req.body || {};
+    if (!from || !body) {
+      console.warn('[EMAIL-REPLY] Missing from or body');
+      return;
+    }
+
+    // Dedup
+    const dedupKey = `${from}::${crypto.createHash('sha1').update((subject || '') + (body || '')).digest('hex').slice(0, 16)}`;
+    const now = Date.now();
+    const prev = EMAIL_REPLY_DEDUP.get(dedupKey);
+    if (prev && now - prev < EMAIL_REPLY_TTL_MS) {
+      console.log(`[EMAIL-REPLY] Duplicate skipped: ${from} | ${subject}`);
+      return;
+    }
+    EMAIL_REPLY_DEDUP.set(dedupKey, now);
+    // Prune
+    if (EMAIL_REPLY_DEDUP.size > 2000) {
+      for (const [k, t] of EMAIL_REPLY_DEDUP) if (now - t > EMAIL_REPLY_TTL_MS) EMAIL_REPLY_DEDUP.delete(k);
+    }
+
+    // Try to look up the lead (gives us context: name, company, LinkedIn url, offer type)
+    const leadRec = await airtableFindLeadByEmailReply(from);
+    const f = leadRec?.fields || {};
+    const leadName = f['Lead Name'] || fromName || from.split('@')[0];
+    const nameParts = leadName.trim().split(' ');
+    const firstName = nameParts[0] || 'Lead';
+    const lastName = nameParts.slice(1).join(' ');
+
+    const leadData = {
+      firstName,
+      lastName,
+      email: from,
+      company: f['Company'] || from.split('@')[1] || 'Unknown',
+      linkedinUrl: f['LinkedIn URL'] || '',
+      title: f['Title'] || '',
+      industry: f['Industry'] || '',
+      country: f['Country'] || '',
+      employees: f['Employees'] || '',
+      offerType: f['Offer Type Cached'] || f['Offer Type'] || '',
+      theirMessage: body,
+      subject: subject || '',
+      source: 'email-reply-webhook',
+      accountName: 'Žan Bagarič',
+      accountFirstName: 'Žan',
+      // Important: emailUuid is needed for sendViaInstantly. We don't have it here
+      // (reply came via Gmail webhook, not Instantly), so we route the approval
+      // path to also send via Resend reply if Žan clicks POŠLJI.
+      threadId: threadId || '',
+      inReplyTo: inReplyTo || ''
+    };
+
+    // Classify intent
+    const intent = await classifyIntent(body);
+    leadData.intent = intent;
+    console.log(`[EMAIL-REPLY] ${from} | intent=${intent} | subj="${subject}"`);
+
+    if (intent === 'negative') {
+      const draft = `Hvala za odgovor ${firstName}. Razumem, ostajamo na voljo če bi se kdaj situacija spremenila.\n\nLep pozdrav,\nŽan Bagarič`;
+      const id = uuidv4();
+      await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-negative' });
+      await sendApprovalEmail(id, leadData, draft, 'email');
+      return;
+    }
+
+    // Positive / neutral / question → generate full draft
+    const draft = await generateReply('email', leadData, body, true);
+    const id = uuidv4();
+    await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-webhook' });
+    await sendApprovalEmail(id, leadData, draft, 'email');
+
+    // Log
+    airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', intent, body, null, false).catch(() => {});
+    airtableLogMessage(leadName, leadData.linkedinUrl, 'outbound', intent, null, draft, false, leadData.abVariant || null).catch(() => {});
+
+    console.log(`[EMAIL-REPLY] Approval queued for ${firstName} ${lastName}`);
+  } catch (err) {
+    console.error('[EMAIL-REPLY] Error:', err.message);
   }
 });
 

@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+pending.json
+seen_conversations.json
+training_examples.json
+lastpoll.json
+offer-files.json

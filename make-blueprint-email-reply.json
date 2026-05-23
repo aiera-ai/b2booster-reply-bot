@@ -1,0 +1,118 @@
+{
+  "name": "B2Booster · Email reply → Bot",
+  "flow": [
+    {
+      "id": 1,
+      "module": "google-email:TriggerWatchEmails",
+      "version": 4,
+      "parameters": {
+        "account": "__IMPORT_AFTER_PASTE__",
+        "folder": "INBOX",
+        "criteria": "all",
+        "sentFolder": "[Gmail]/Sent Mail",
+        "watchedItems": "messages",
+        "maxResults": 10,
+        "markSeen": false,
+        "filter": "subject:(Re OR FW OR FWD) newer_than:1d"
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {
+          "parameters": {
+            "folder": { "mode": "chose", "label": "INBOX" },
+            "criteria": { "label": "All emails" }
+          }
+        },
+        "expect": [
+          { "name": "folder", "type": "folder", "label": "Folder", "required": true },
+          { "name": "criteria", "type": "select", "label": "Criteria", "required": true },
+          { "name": "filter", "type": "text", "label": "Sender email address" },
+          { "name": "maxResults", "type": "uinteger", "label": "Maximum number of results" }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "util:SetVariable2",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "name": "skip_self",
+        "scope": "roundtrip",
+        "value": "{{if(or(contains(lower(1.from.address); \"zan.bagaric@\"); contains(lower(1.from.address); \"zan@aiera.si\"); contains(lower(1.from.address); \"bot@b2booster.eu\"); contains(lower(1.from.address); \"vesna\")); 1; 0)}}"
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 }
+      }
+    },
+    {
+      "id": 3,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "mapper": null,
+      "metadata": { "designer": { "x": 600, "y": 0 } },
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 4,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "parameters": { "handleErrors": false, "useNewZLibDeCompress": true },
+              "filter": {
+                "name": "not from us",
+                "conditions": [[
+                  { "a": "{{2.skip_self}}", "o": "text:equal", "b": "0" }
+                ]]
+              },
+              "mapper": {
+                "url": "https://b2booster-reply-bot.onrender.com/webhook/email-reply",
+                "serializeUrl": false,
+                "method": "post",
+                "headers": [
+                  { "name": "Content-Type", "value": "application/json" }
+                ],
+                "qs": [],
+                "bodyType": "raw",
+                "parseResponse": false,
+                "authUser": "",
+                "authPass": "",
+                "timeout": "",
+                "shareCookies": false,
+                "ca": "",
+                "rejectUnauthorized": true,
+                "followRedirect": true,
+                "useQuerystring": false,
+                "gzip": true,
+                "useMtls": false,
+                "contentType": "application/json",
+                "data": "{\n  \"from\": \"{{1.from.address}}\",\n  \"fromName\": \"{{1.from.name}}\",\n  \"subject\": \"{{1.subject}}\",\n  \"body\": \"{{1.text}}\",\n  \"threadId\": \"{{1.threadId}}\",\n  \"inReplyTo\": \"{{1.headers.`in-reply-to`}}\"\n}",
+                "followAllRedirects": false
+              },
+              "metadata": { "designer": { "x": 900, "y": -100 } }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false
+    },
+    "designer": { "orphans": [] },
+    "zone": "eu1.make.com",
+    "notes": []
+  }
+}
