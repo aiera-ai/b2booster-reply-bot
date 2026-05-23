@@ -1262,10 +1262,12 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
   const channelBadge = `<span style="background:${channelBadgeColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${channelLabel.toUpperCase()}</span>`;
 
   // Inbound message - always show, prominent. If empty say so.
-  const messageSection = leadData.theirMessage
+  // Fallback to leadData.lastMessage (used by followup/cold crons that pull from Airtable's "Last Message" field).
+  const inboundMessage = leadData.theirMessage || leadData.lastMessage || '';
+  const messageSection = inboundMessage
     ? `<div style="margin-bottom:24px">
          <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
-         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
+         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${inboundMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
        </div>`
     : `<div style="margin-bottom:24px">
          <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
@@ -1731,10 +1733,11 @@ async function sendHandoffApprovalEmail(id, leadData, payload) {
     ? `<span style="background:#eef2ff;color:#4338ca;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">→ ${leadData.accountName}</span>`
     : '';
 
-  const messageSection = leadData.theirMessage
+  const inboundMessage = leadData.theirMessage || leadData.lastMessage || '';
+  const messageSection = inboundMessage
     ? `<div style="margin-bottom:24px">
          <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
-         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
+         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${inboundMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
        </div>`
     : '';
 
@@ -4645,6 +4648,19 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] Generated reply: "${draft}"`);
 
+    // Deploy personalized offer page (aiera/generator/b2booster picked by classifier above).
+    // Skip for negative intent. Failure is non-blocking - approval email still goes out.
+    let offerUrl = null;
+    if (intent !== 'negative') {
+      try {
+        offerUrl = await createAndDeployOffer(leadData);
+        if (offerUrl) console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
+        else console.log(`[${senderLabel}] Offer deploy returned null - approval email will have no link`);
+      } catch (e) {
+        console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
+      }
+    }
+
     // Route through enqueueReply: positive Žan replies may auto-send (15-min hold),
     // everything else (Vesna, negative, neutral) still goes to manual approval.
     if (intent === 'negative') {
@@ -4659,6 +4675,7 @@ app.post('/webhook/outflo', async (req, res) => {
         draft,
         intent,
         hasRealMessage: true,
+        offerUrl,
         source: 'outflo-webhook'
       });
     }
