@@ -5748,14 +5748,22 @@ app.listen(PORT, () => {
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
 
-  // Self-ping every 14 min to prevent Render free tier spin-down
+  // Self-ping every 10 min to prevent Render free tier spin-down.
+  // Render's idle timeout is ~15 min; pinging at 10 min leaves margin to survive a
+  // single failed/slow ping. (Definitive fix: upgrade to Render Starter so spin-down
+  // stops entirely - see project_render_upgrade_pending.) One retry on failure.
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
-  setInterval(async () => {
+  async function selfPing() {
     try {
       await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) });
       console.log('[KEEPALIVE] Self-ping OK');
     } catch(e) {
-      console.error('[KEEPALIVE] Self-ping failed:', e.message);
+      console.error('[KEEPALIVE] Self-ping failed, retrying in 20s:', e.message);
+      setTimeout(async () => {
+        try { await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) }); console.log('[KEEPALIVE] Self-ping retry OK'); }
+        catch(e2) { console.error('[KEEPALIVE] Self-ping retry failed:', e2.message); }
+      }, 20 * 1000);
     }
-  }, 14 * 60 * 1000);
+  }
+  setInterval(selfPing, 10 * 60 * 1000);
 });
