@@ -722,6 +722,7 @@ function isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, 
   if (intent !== 'positive') return false;           // only clearly positive replies
   if (!hasRealMessage) return false;                 // need real inbound text
   if (isHandoff) return false;                       // handoff has its own approval flow
+  if (leadData?.wantsCall) return false;             // lead wants a call - never auto-send a Calendly reply
   if (!leadData?.firstName) return false;            // need at least a name
   if (leadData.accountFirstName && leadData.accountFirstName.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '') !== 'zan') return false;
   if (!draft || draft.length > AUTO_SEND_MAX_DRAFT_CHARS) return false;
@@ -801,7 +802,15 @@ EMAIL TONE:
 - Professional but warm
 - One clear Calendly CTA at the end
 
-GOAL: Move the lead toward booking a Calendly call. Never be pushy. Be helpful and confident.
+OBJECTION HANDLING (critical - this is the #1 reason leads say no):
+- The most common rejection is "že imamo AI" / "to rešujemo interno" / "že uporabljamo AI". Do NOT re-pitch generic "AI" at them and do NOT give up.
+- Reframe to the OUTCOME, which using AI internally does not solve: a steady flow of booked conversations with the right decision-makers, done-for-you, without anyone on their side prospecting manually.
+- Make it impossible to answer "to že imamo": lead with a concrete result ("X pogovorov z odločevalci na mesec"), not with the technology.
+- Example reframe: "Super, da AI že uporabljate interno. Mi ne prodajamo orodja, ampak rezultat: vsak mesec vam pripeljemo 50-100 pogovorov z odločevalci iz vaših ciljnih podjetij, brez da kdorkoli pri vas išče leade ročno."
+
+VALUE PROP RULE: Never sell "AI" or "avtomatizacija" as the headline. Sell the business outcome (booked meetings, new pipeline, access to decision-makers). AI is just how we do it, never the pitch.
+
+GOAL: Move the lead toward booking a Calendly call (or opening the offer page if one is prepared). Never be pushy. Be helpful and confident.
 
 OUTPUT: Return only the message text. No subject lines, no labels, no formatting notes.
 `;
@@ -1143,19 +1152,29 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     leadData.seniority && `Seniority: ${leadData.seniority}`
   ].filter(Boolean).join('\n');
 
+  // When a personalized offer page exists and the lead is interested, the reply
+  // should drive them to OPEN that page (it holds details + booking) instead of
+  // cold-pushing a Calendly link. This is the missing step that left hot leads
+  // ("kako bi to naredili?", "kaj ponujate?") with nothing but a calendar link.
+  const offerUrl = leadData.offerUrl || null;
+  const useOfferCta = offerUrl && leadData.intent === 'positive';
+
   if (hasRealMessage) {
+    const ctaInstruction = useOfferCta
+      ? `They are clearly interested. Briefly answer their question in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so do NOT also paste a separate Calendly link. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
+      : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation, references their specific context if relevant, and moves toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.${variant.nudge}`;
+Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 Context: ${theirMessage}
 
-Write a short, natural opening message that acknowledges the connection and moves toward a Calendly booking.
+Write a short, natural opening message. Lead with a concrete business OUTCOME (e.g. booked conversations with decision-makers each month), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". Then move toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
 Be direct and confident. Start the conversation naturally.${variant.nudge}`;
   }
@@ -1170,6 +1189,9 @@ Be direct and confident. Start the conversation naturally.${variant.nudge}`;
   let text = response.content[0].text.trim();
   // Lektorski pass before placeholder swap so the proofreader sees the clean text.
   text = (await polishSlovenian(text, { signature: 'Žan Bagarič' })) || text;
+  // Offer link takes priority. If the model emitted [OFFER LINK] but no offer
+  // exists, fall back to Calendly so we never ship a broken placeholder.
+  text = text.replace(/\[OFFER LINK\]/g, offerUrl || CALENDLY_LINK);
   text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
   return text;
 }
@@ -1196,7 +1218,7 @@ async function polishSlovenian(text, opts = {}) {
 HARD RULES:
 - Keep the SAME language as the input. If the message is in English, German or Czech, proofread it in that language and do NOT translate.
 - Do NOT change the meaning, the offer, prices, or the length materially. Same number of sentences, same intent.
-- Preserve EXACTLY, character for character: any URL, email address, and the literal token [CALENDLY LINK]. Never rewrite, remove, or reformat them.
+- Preserve EXACTLY, character for character: any URL, email address, and the literal tokens [CALENDLY LINK] and [OFFER LINK]. Never rewrite, remove, or reformat them.
 - Fix Slovenian grammar: correct case endings (skloni), verb conjugation, agreement, and word order. Restore missing šumniki (č, š, ž).
 - Remove dvojina (1st person dual: "pošljeva", "pogledava", "se slišiva", "sva", "midva") and replace with 1st person plural ("pošljemo", "pogledamo", "se slišimo").
 - Replace every em dash or en dash (— –) with a comma or a regular hyphen "-".
@@ -1210,8 +1232,9 @@ OUTPUT: only the corrected message text.`,
     });
     const out = response.content?.[0]?.text?.trim();
     if (!out || out.length < 3) return null;
-    // Guard: never let the polisher drop the Calendly placeholder if the input had it.
+    // Guard: never let the polisher drop a link placeholder if the input had it.
     if (text.includes('[CALENDLY LINK]') && !out.includes('[CALENDLY LINK]')) return null;
+    if (text.includes('[OFFER LINK]') && !out.includes('[OFFER LINK]')) return null;
     return out;
   } catch (e) {
     console.warn('[POLISH] failed, using raw draft:', e.message);
@@ -1503,6 +1526,22 @@ async function sendViaInstantly(replyToUuid, emailBody, subject) {
   return data;
 }
 
+// ─── CALL-REQUEST DETECTION ───────────────────────────────────────────────────
+// A lead who drops a phone number or says "pokliči me" is the hottest signal we get.
+// Those must NOT get an auto Calendly/offer reply - they need a personal call from Žan.
+// Returns { wantsCall, phone } where phone is the number found in their message (if any).
+function detectCallRequest(text) {
+  if (!text) return { wantsCall: false, phone: '' };
+  const callIntent = /(pokli[čc]|na\s+(mojo\s+)?(tel|[šs]tevilk)|moja\s+(tel|[šs]tevilk)|call me|give me a call|reach me at|ring me|tel[:.]?\s*\+?\d)/i.test(text);
+  let phone = '';
+  const candidates = text.match(/\+?\d[\d\s\/().\-]{6,}\d/g) || [];
+  for (const cand of candidates) {
+    const digits = cand.replace(/[^\d]/g, '');
+    if (digits.length >= 8 && digits.length <= 15) { phone = cand.trim().replace(/\s+/g, ' '); break; }
+  }
+  return { wantsCall: callIntent || !!phone, phone };
+}
+
 // ─── SEND APPROVAL EMAIL VIA RESEND ───────────────────────────────────────────
 
 async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, autoSendAt = null) {
@@ -1562,12 +1601,14 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
   // HIGH-INTENT CALL BAR (#1): show big click-to-call when positive + a number exists.
   // Prefer the lead's personal phone; fall back to the company main line (Apollo almost
   // always returns the org number even when no personal mobile is revealed).
+  const messagePhone = (leadData.messagePhone || '').toString().trim();
   const personalPhone = (leadData.phone || '').toString().trim();
   const companyPhone = (leadData.companyPhone || '').toString().trim();
-  const callPhone = personalPhone || companyPhone;
-  const callPhoneLabel = personalPhone ? 'osebni' : 'podjetje';
+  // A number the lead typed in their own message beats anything Apollo guessed.
+  const callPhone = messagePhone || personalPhone || companyPhone;
+  const callPhoneLabel = messagePhone ? 'iz sporočila' : (personalPhone ? 'osebni' : 'podjetje');
   const phoneE164 = callPhone.replace(/[^\d+]/g, '');
-  const showCallBar = (leadData.intent === 'positive' || leadData.intent === 'question') && phoneE164.length >= 7;
+  const showCallBar = (leadData.wantsCall || leadData.intent === 'positive' || leadData.intent === 'question') && phoneE164.length >= 7;
   const callBar = showCallBar
     ? `<div style="background:#ecfdf5;border:2px solid #16a34a;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
          <div>
@@ -1631,6 +1672,15 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
         ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
         : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
 
+  // CALL-REQUEST ALARM (#5): lead asked to be called or gave a number. Loudest banner,
+  // sits above everything. Do NOT just fire the drafted Calendly/offer reply - call them.
+  const callAlarm = leadData.wantsCall
+    ? `<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+         <p style="margin:0;color:#9a3412;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">⚠️ Lead želi klic${messagePhone ? ` · ${messagePhone}` : ''}</p>
+         <p style="margin:6px 0 0;color:#7c2d12;font-size:13px">Pokliči ga osebno, ne zanašaj se samo na predlagani odgovor. To je najtoplejši signal, ki ga dobiš.</p>
+       </div>`
+    : '';
+
   // Auto-send banner at the top (clearly different from manual approval)
   const autoSendBanner = isAutoSend
     ? `<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:14px 18px;margin-bottom:20px">
@@ -1658,6 +1708,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
 
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+      ${callAlarm}
       ${autoSendBanner}
       ${callBar}
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
@@ -5064,7 +5115,10 @@ app.post('/webhook/outflo', async (req, res) => {
     const leadData = {
       firstName,
       lastName,
-      company: apolloData?.companyName || campaignName || '',
+      // NEVER fall back to campaignName here: campaigns are named after the SENDER
+      // ("Zan Bagaric" / "Vesna Pevec"), which leaked into slugs and message text
+      // ("kako bi izgledalo za Zan Bagaric"). Empty is safer than the wrong name.
+      company: apolloData?.companyName || '',
       linkedinUrl: leadProfileUrl,
       title: apolloData?.title || '',
       industry: apolloData?.industry || '',
@@ -5086,6 +5140,15 @@ app.post('/webhook/outflo', async (req, res) => {
       source: isVesna ? 'outflo-vesna' : 'outflo-zan'
     };
 
+    // Flag call requests (phone in message or "pokliči me") so the approval email
+    // alarms instead of quietly auto-drafting a Calendly reply to a hot lead.
+    const callReq = detectCallRequest(messageText);
+    if (callReq.wantsCall) {
+      leadData.wantsCall = true;
+      if (callReq.phone) leadData.messagePhone = callReq.phone;
+      console.log(`[${senderLabel}] CALL REQUEST detected${callReq.phone ? ` (${callReq.phone})` : ''} - approval email will alarm`);
+    }
+
     // Offer classification (aiera vs b2booster). Skip for negative intent (saves API call).
     if (intent !== 'negative') {
       const classification = await classifyOffer(leadData, messageText);
@@ -5096,6 +5159,7 @@ app.post('/webhook/outflo', async (req, res) => {
     }
 
     let draft;
+    let offerUrl = null;
     const channel = isVesna ? 'vesna' : 'linkedin';
 
     if (intent === 'negative') {
@@ -5106,6 +5170,20 @@ app.post('/webhook/outflo', async (req, res) => {
       // Check for email handoff before drafting normal reply
       const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
       if (handoffTriggered) return;
+
+      // Deploy the personalized offer page BEFORE drafting, so a Žan reply can link
+      // straight to it. Failure is non-blocking - the draft then falls back to Calendly.
+      try {
+        offerUrl = await createAndDeployOffer(leadData);
+        if (offerUrl) {
+          leadData.offerUrl = offerUrl;
+          console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
+        } else {
+          console.log(`[${senderLabel}] Offer deploy returned null - reply will use Calendly only`);
+        }
+      } catch (e) {
+        console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
+      }
 
       if (isVesna) {
         // Vesna replies from her own profile, always signed Vesna; handoff goes by email.
@@ -5126,19 +5204,6 @@ app.post('/webhook/outflo', async (req, res) => {
     }
 
     console.log(`[${senderLabel}] Generated reply: "${draft}"`);
-
-    // Deploy personalized offer page (aiera/generator/b2booster picked by classifier above).
-    // Skip for negative intent. Failure is non-blocking - approval email still goes out.
-    let offerUrl = null;
-    if (intent !== 'negative') {
-      try {
-        offerUrl = await createAndDeployOffer(leadData);
-        if (offerUrl) console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
-        else console.log(`[${senderLabel}] Offer deploy returned null - approval email will have no link`);
-      } catch (e) {
-        console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
-      }
-    }
 
     // Route through enqueueReply: positive Žan replies may auto-send (15-min hold),
     // everything else (Vesna, negative, neutral) still goes to manual approval.
