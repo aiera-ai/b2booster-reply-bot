@@ -5748,12 +5748,23 @@ app.listen(PORT, () => {
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
 
-  // Self-ping every 10 min to prevent Render free tier spin-down.
-  // Render's idle timeout is ~15 min; pinging at 10 min leaves margin to survive a
-  // single failed/slow ping. (Definitive fix: upgrade to Render Starter so spin-down
-  // stops entirely - see project_render_upgrade_pending.) One retry on failure.
+  // DAYTIME-ONLY keepalive (free-tier hour saver).
+  // Render free = 750 instance hours/month; staying warm 24/7 (~730h) is right at the
+  // cap and risks suspension. Since we work the Slovenian market (CET), we keep the bot
+  // warm only during active hours and let it sleep overnight. ~17h/day ≈ 510h/month,
+  // safely under the cap, with real-time approvals when leads actually reply. A rare
+  // night reply just cold-starts (30-60s) - you're asleep anyway, and queued work is
+  // recovered on wake via processScheduledSends. (When we expand to EU/US, widen this
+  // window or move to Render Starter - see project_render_upgrade_pending.)
+  const KEEPALIVE_START = parseInt(process.env.KEEPALIVE_START_HOUR || '6', 10);   // CET
+  const KEEPALIVE_END = parseInt(process.env.KEEPALIVE_END_HOUR || '23', 10);      // CET
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
+  function inKeepaliveWindow() {
+    const h = getCETHour();
+    return h >= KEEPALIVE_START && h < KEEPALIVE_END;
+  }
   async function selfPing() {
+    if (!inKeepaliveWindow()) return; // let it spin down overnight to save free hours
     try {
       await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) });
       console.log('[KEEPALIVE] Self-ping OK');
@@ -5765,5 +5776,6 @@ app.listen(PORT, () => {
       }, 20 * 1000);
     }
   }
+  console.log(`[KEEPALIVE] Daytime window ${KEEPALIVE_START}:00-${KEEPALIVE_END}:00 CET (sleeps overnight to save free-tier hours)`);
   setInterval(selfPing, 10 * 60 * 1000);
 });
