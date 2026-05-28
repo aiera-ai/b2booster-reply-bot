@@ -806,47 +806,56 @@ GOAL: Move the lead toward booking a Calendly call. Never be pushy. Be helpful a
 OUTPUT: Return only the message text. No subject lines, no labels, no formatting notes.
 `;
 
+// Vesna's profile sent the first cold outreach. When a lead REPLIES, Žan personally
+// takes over the conversation from Vesna's LinkedIn inbox. The reply is therefore
+// written and SIGNED by Žan, bridging the name change naturally on the first touch.
 const VESNA_STYLE_GUIDE = `
-You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster / AIERA (b2booster.eu, aiera.si).
+The reply goes out FROM Vesna Pevec's LinkedIn profile, but it is written and signed by Žan Bagarič, founder of B2Booster / AIERA (b2booster.eu, aiera.si). Vesna did the first cold outreach. Now that the lead has replied, Žan personally takes over the conversation.
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored offer that gets sent by email.
+
+IDENTITY BRIDGE (important):
+- The lead sees the message under Vesna's name, so the FIRST reply must bridge this in ONE short, natural clause. Examples:
+  - "Pozdravljeni, tukaj Žan, sodelujem z Vesno in od tu prevzemam najin pogovor."
+  - "Pozdravljeni, Žan tukaj, kolega Vesne. Hvala za odgovor."
+- Do NOT over-explain the handoff. One short clause, then straight to the point.
+- Sign as: Žan Bagarič
 
 WRITING RULES:
-- Short, warm, professional Slovenian
-- Maximum 3 sentences
+- Short, warm, professional Slovenian. Maximum 3-4 sentences.
 - Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
-- Use correct Slovenian spelling with šumniki (č, š, ž)
-- Slovnično pravilno
-- Never use negative or low-energy words
-- No bullet points
-- Sign as: Vesna Pevec
-- Never include a Calendly link or phone number
-- Never promise specifics about price or timeline
+- Use correct Slovenian spelling with šumniki (č, š, ž).
+- Slovnično pravilno (correct case endings, verb conjugation).
+- Never use negative or low-energy words (problem, težava, izziv). Frame as opportunity.
+- No bullet points.
+- Never include a phone number.
 
 LANGUAGE / TONE RULES (CRITICAL):
 - DEFAULT: vikanje (formal "vi" form). Always start with vikanje.
 - SWITCH to tikanje ONLY if the lead's own message uses tikanje.
 - NEVER use dvojina (1st dual): "pripraviva", "pošljeva", "pogledava", "sva". Use 1st plural: "pripravimo", "pošljemo".
+- Match the lead's length and tone: short reply gets a short answer.
 
-CRITICAL HANDOFF RULE - NEVER mention "Žan" or any director by name in your reply.
-- WRONG: "Skupaj s kolegom Žanom bova pregledala vaš primer in Žan vas bo kmalu kontaktiral"
-- WRONG: "direktor Žan bo stopil v stik"
-- WRONG: "kolega Žan"
-- RIGHT: Speak as "mi/aiera/B2Booster team", neutrally.
-- Use natural variations like:
-  - "Pripravimo vam ponudbo, ki vam jo pošljemo na email v naslednjih dneh."
-  - "Pogledamo vaš primer in vam pošljemo konkretno ponudbo na email."
-  - "Skupaj pripravimo ponudbo, prilagojeno vašim potrebam, in jo pošljemo na email."
-- Why: It feels more professional that "the team" is preparing the offer rather than naming the director. The director's email itself will then naturally reference "kot ste se dogovorili z Vesno Pevec".
+GOAL: warmly confirm interest, then move toward sending a tailored offer. Naturally ask where to send it (email) so the offer email can follow, e.g. "Z veseljem vam pripravim konkreten predlog. Kam vam ga lahko pošljem?"
 
-TONE:
-- Friendly and professional, like a capable coordinator
-- Acknowledge their reply positively but briefly
-- Hand off smoothly to the team / next steps without mentioning specific names
-- The lead should feel they are being taken care of personally
+OUTPUT: Return only the message text. No labels, no formatting notes.
+`;
 
-GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff that the email outreach will then continue.
+// Opener for a freshly accepted connection (no reply yet): this is still Vesna's
+// own first touch, signed by Vesna. Žan only enters once the lead replies.
+const VESNA_OPENER_GUIDE = `
+You are drafting a short, warm LinkedIn OPENER on behalf of Vesna Pevec, who handles first contact for B2Booster / AIERA (b2booster.eu, aiera.si). The lead just accepted Vesna's connection request and has not replied yet.
+
+WRITING RULES:
+- Short, warm, professional Slovenian. Maximum 2-3 sentences.
+- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
+- Use correct Slovenian spelling with šumniki (č, š, ž). Slovnično pravilno.
+- DEFAULT: vikanje. NEVER use dvojina (use 1st plural).
+- No bullet points, no Calendly link, no phone number.
+- Sign as: Vesna Pevec
+- Do NOT mention Žan yet (he enters once the lead replies).
+
+GOAL: open a warm, low-pressure conversation that invites a reply.
 
 OUTPUT: Return only the message text. No labels, no formatting notes.
 `;
@@ -1166,8 +1175,55 @@ Be direct and confident. Start the conversation naturally.${variant.nudge}`;
   });
 
   let text = response.content[0].text.trim();
+  // Lektorski pass before placeholder swap so the proofreader sees the clean text.
+  text = (await polishSlovenian(text, { signature: 'Žan Bagarič' })) || text;
   text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
   return text;
+}
+
+// ─── LEKTORSKI / POLISH PASS ──────────────────────────────────────────────────
+// Final proofreading layer over any generated message. Fixes grammar (case
+// endings, conjugation), restores šumniki, removes dvojina + em dashes, tightens
+// awkward phrasing, and enforces the correct sign-off - WITHOUT changing meaning,
+// language, links, or the [CALENDLY LINK] placeholder. Returns null on failure so
+// callers fall back to the unpolished draft (never block a send on the polisher).
+async function polishSlovenian(text, opts = {}) {
+  if (!text || text.trim().length < 3) return null;
+  const signature = opts.signature || null;
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const sigRule = signature
+      ? `- The message MUST be signed off by "${signature}". If it is signed with a different name, no name, or "Vesna", replace the sign-off with "${signature}". Keep any natural greeting at the start.`
+      : `- Keep the existing sign-off name unchanged.`;
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 400,
+      system: `You are a meticulous Slovenian proofreader for short B2B outreach messages. You return a corrected version of the message and NOTHING else.
+
+HARD RULES:
+- Keep the SAME language as the input. If the message is in English, German or Czech, proofread it in that language and do NOT translate.
+- Do NOT change the meaning, the offer, prices, or the length materially. Same number of sentences, same intent.
+- Preserve EXACTLY, character for character: any URL, email address, and the literal token [CALENDLY LINK]. Never rewrite, remove, or reformat them.
+- Fix Slovenian grammar: correct case endings (skloni), verb conjugation, agreement, and word order. Restore missing šumniki (č, š, ž).
+- Remove dvojina (1st person dual: "pošljeva", "pogledava", "se slišiva", "sva", "midva") and replace with 1st person plural ("pošljemo", "pogledamo", "se slišimo").
+- Replace every em dash or en dash (— –) with a comma or a regular hyphen "-".
+- Remove invented or non-existent words and clumsy phrasing; make it read like a fluent native speaker wrote it.
+- Keep vikanje unless the message clearly uses tikanje already (then keep tikanje).
+- Do not add bullet points, headings, labels, quotes around the message, or any commentary.
+${sigRule}
+
+OUTPUT: only the corrected message text.`,
+      messages: [{ role: 'user', content: text }]
+    });
+    const out = response.content?.[0]?.text?.trim();
+    if (!out || out.length < 3) return null;
+    // Guard: never let the polisher drop the Calendly placeholder if the input had it.
+    if (text.includes('[CALENDLY LINK]') && !out.includes('[CALENDLY LINK]')) return null;
+    return out;
+  } catch (e) {
+    console.warn('[POLISH] failed, using raw draft:', e.message);
+    return null;
+  }
 }
 
 // ─── INTENT CLASSIFICATION ────────────────────────────────────────────────────
@@ -1409,7 +1465,8 @@ Their message: "${theirMessage}"
 Generate closing reply.`
     }]
   });
-  return response.content[0].text.trim();
+  const raw = response.content[0].text.trim();
+  return (await polishSlovenian(raw)) || raw;
 }
 
 // ─── SEND VIA OUTFLO (LinkedIn) ───────────────────────────────────────────────
@@ -1509,18 +1566,22 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
          <div style="border-left:3px solid #d1d5db;padding:14px 18px;color:#6b7280;background:#f9fafb;font-size:13px;font-style:italic;border-radius:4px">Besedilo ni bilo v notifikaciji (LinkedIn digest). Odpri profil za polni kontekst.</div>
        </div>`;
 
-  // HIGH-INTENT CALL BAR (#1): show big click-to-call when positive + phone available.
-  // Phone comes from Apollo enrichment (leadData.phone). Format E.164 if present.
-  const rawPhone = (leadData.phone || '').toString().trim();
-  const phoneE164 = rawPhone.replace(/[^\d+]/g, '');
+  // HIGH-INTENT CALL BAR (#1): show big click-to-call when positive + a number exists.
+  // Prefer the lead's personal phone; fall back to the company main line (Apollo almost
+  // always returns the org number even when no personal mobile is revealed).
+  const personalPhone = (leadData.phone || '').toString().trim();
+  const companyPhone = (leadData.companyPhone || '').toString().trim();
+  const callPhone = personalPhone || companyPhone;
+  const callPhoneLabel = personalPhone ? 'osebni' : 'podjetje';
+  const phoneE164 = callPhone.replace(/[^\d+]/g, '');
   const showCallBar = (leadData.intent === 'positive' || leadData.intent === 'question') && phoneE164.length >= 7;
   const callBar = showCallBar
     ? `<div style="background:#ecfdf5;border:2px solid #16a34a;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
          <div>
-           <p style="margin:0;color:#15803d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">High-intent lead - pokliči zdaj</p>
+           <p style="margin:0;color:#15803d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">High-intent lead - pokliči zdaj (${callPhoneLabel})</p>
            <p style="margin:4px 0 0;color:#065f46;font-size:13px">Klic v isti uri konvertira 3-5x bolje kot Calendly čez teden.</p>
          </div>
-         <a href="tel:${phoneE164}" style="background:#16a34a;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;font-weight:700;font-size:18px;letter-spacing:0.3px;display:inline-block;white-space:nowrap">📞 ${rawPhone}</a>
+         <a href="tel:${phoneE164}" style="background:#16a34a;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;font-weight:700;font-size:18px;letter-spacing:0.3px;display:inline-block;white-space:nowrap">📞 ${callPhone}</a>
        </div>`
     : '';
 
@@ -1531,7 +1592,17 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
     : '';
 
   if (leadData.email) infoRows.push(['Email', `<a href="mailto:${leadData.email}" style="color:#2563eb;text-decoration:none">${leadData.email}</a>`]);
-  if (leadData.phone) infoRows.push(['Telefon', `<a href="tel:${phoneE164}" style="color:#16a34a;text-decoration:none;font-weight:600">${leadData.phone}</a>`]);
+  // Telefon: always show a row so it's never silently missing. Personal + company line
+  // when available, otherwise an explicit note so you know nothing was found.
+  if (personalPhone) {
+    infoRows.push(['Telefon (osebni)', `<a href="tel:${personalPhone.replace(/[^\d+]/g, '')}" style="color:#16a34a;text-decoration:none;font-weight:600">${personalPhone}</a>`]);
+  }
+  if (companyPhone) {
+    infoRows.push(['Telefon (podjetje)', `<a href="tel:${companyPhone.replace(/[^\d+]/g, '')}" style="color:#16a34a;text-decoration:none;font-weight:600">${companyPhone}</a>`]);
+  }
+  if (!personalPhone && !companyPhone) {
+    infoRows.push(['Telefon', `<span style="color:#9ca3af">ni v Apollu, odpri LinkedIn profil</span>`]);
+  }
   if (profileLink) infoRows.push(['LinkedIn', profileLink]);
   if (leadData.title) infoRows.push(['Vloga', leadData.title]);
   if (leadData.company && leadData.company !== 'LinkedIn') infoRows.push(['Podjetje', leadData.company]);
@@ -1879,6 +1950,8 @@ Write the handoff email.`
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
+  // Lektorski pass on the body (URLs are preserved verbatim by the polisher).
+  body = (await polishSlovenian(body, { signature: 'Žan Bagarič' })) || body;
   return { subject, body };
 }
 
@@ -3284,22 +3357,21 @@ app.post('/webhook/vesna', async (req, res) => {
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
 
-    // Generate reply in Vesna's style
+    // Lead replied → Žan takes over (signed Žan). Fresh accept → Vesna opener.
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 200,
-      system: VESNA_STYLE_GUIDE,
+      max_tokens: 220,
+      system: hasRealMessage ? VESNA_STYLE_GUIDE : VESNA_OPENER_GUIDE,
       messages: [{
         role: 'user',
-        content: `Lead name: ${leadData.firstName} ${leadData.lastName}
-${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
-
-Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the director (Žan) reaching out with a tailored offer.`
+        content: hasRealMessage
+          ? `Lead name: ${leadData.firstName} ${leadData.lastName}\nTheir message: "${messageForAI}"\n\nWrite Žan's short LinkedIn reply (from Vesna's profile). Bridge the identity in one short clause on this first reply, warmly acknowledge their interest, and move toward sending a tailored offer.`
+          : `Lead name: ${leadData.firstName} ${leadData.lastName}\nContext: ${messageForAI}\n\nWrite Vesna's short, warm opener.`
       }]
     });
 
-    const draft = response.content[0].text.trim();
+    let draft = (await polishSlovenian(response.content[0].text.trim(), { signature: hasRealMessage ? 'Žan Bagarič' : 'Vesna Pevec' })) || response.content[0].text.trim();
     const offerUrl = await createAndDeployOffer(leadData);
     const id = uuidv4();
     await storePending(id, { channel: 'vesna', leadData, draft });
@@ -4844,17 +4916,30 @@ async function enrichLeadWithApollo(linkedinUrl) {
       return null;
     }
     const email = p.email || p.personal_emails?.[0] || '';
-    const phone = p.phone_numbers?.[0]?.sanitized_number || '';
+    // Personal phone: Apollo exposes it across a few fields depending on reveal status.
+    const phone = p.phone_numbers?.[0]?.sanitized_number
+      || p.phone_numbers?.[0]?.raw_number
+      || p.sanitized_phone
+      || p.mobile_phone
+      || '';
+    // Company phone fallback: Apollo almost always returns the org's main line, which
+    // gives Žan a number to call even when no personal mobile is revealed.
+    const org = p.organization || {};
+    const companyPhone = org.primary_phone?.number
+      || org.sanitized_phone
+      || org.phone
+      || '';
     return {
       title: p.title || '',
       seniority: p.seniority || '',
-      companyName: p.organization?.name || '',
-      industry: p.organization?.industry || '',
-      employees: p.organization?.estimated_num_employees || '',
+      companyName: org.name || '',
+      industry: org.industry || '',
+      employees: org.estimated_num_employees || '',
       city: p.city || '',
       country: p.country || '',
       email,
-      phone
+      phone,
+      companyPhone
     };
   } catch (e) {
     console.log('[APOLLO] Enrichment failed:', e.message);
@@ -4995,6 +5080,7 @@ app.post('/webhook/outflo', async (req, res) => {
       country: apolloData?.country || '',
       email: apolloData?.email || '',
       phone: apolloData?.phone || '',
+      companyPhone: apolloData?.companyPhone || '',
       theirMessage: messageText,
       intent,
       campaignName,
@@ -5019,26 +5105,27 @@ app.post('/webhook/outflo', async (req, res) => {
     const channel = isVesna ? 'vesna' : 'linkedin';
 
     if (intent === 'negative') {
-      const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
-      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
+      // Reply goes out from Vesna's or Žan's profile; in both cases Žan is the one
+      // handling the conversation now, so sign Žan.
+      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
     } else {
       // Check for email handoff before drafting normal reply
       const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
       if (handoffTriggered) return;
 
       if (isVesna) {
-        // Vesna style: warm, hands off to Žan, no Calendly, no email
+        // Lead replied to Vesna's outreach → Žan takes over from Vesna's profile (signed Žan).
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
         const response = await anthropic.messages.create({
           model: 'claude-sonnet-4-6',
-          max_tokens: 150,
+          max_tokens: 220,
           system: VESNA_STYLE_GUIDE,
           messages: [{
             role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name.`
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite Žan's short LinkedIn reply (sent from Vesna's profile). Bridge the identity in one short clause on this first reply, then move toward sending a tailored offer.`
           }]
         });
-        draft = response.content[0].text.trim();
+        draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Žan Bagarič' })) || response.content[0].text.trim();
       } else {
         draft = await generateReply('linkedin', leadData, messageText, true);
       }
