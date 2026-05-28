@@ -806,56 +806,49 @@ GOAL: Move the lead toward booking a Calendly call. Never be pushy. Be helpful a
 OUTPUT: Return only the message text. No subject lines, no labels, no formatting notes.
 `;
 
-// Vesna's profile sent the first cold outreach. When a lead REPLIES, Žan personally
-// takes over the conversation from Vesna's LinkedIn inbox. The reply is therefore
-// written and SIGNED by Žan, bridging the name change naturally on the first touch.
+// Vesna handles first contact AND the replies, always from her own LinkedIn profile,
+// always signed by Vesna. The handoff to Žan happens later via the offer EMAIL - Vesna
+// herself never signs as Žan (a message from her profile signed "Žan" makes no sense).
 const VESNA_STYLE_GUIDE = `
-The reply goes out FROM Vesna Pevec's LinkedIn profile, but it is written and signed by Žan Bagarič, founder of B2Booster / AIERA (b2booster.eu, aiera.si). Vesna did the first cold outreach. Now that the lead has replied, Žan personally takes over the conversation.
+You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster / AIERA (b2booster.eu, aiera.si).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-
-IDENTITY BRIDGE (important):
-- The lead sees the message under Vesna's name, so the FIRST reply must bridge this in ONE short, natural clause. Examples:
-  - "Pozdravljeni, tukaj Žan, sodelujem z Vesno in od tu prevzemam najin pogovor."
-  - "Pozdravljeni, Žan tukaj, kolega Vesne. Hvala za odgovor."
-- Do NOT over-explain the handoff. One short clause, then straight to the point.
-- Sign as: Žan Bagarič
+Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored offer that gets sent by email.
 
 WRITING RULES:
-- Short, warm, professional Slovenian. Maximum 3-4 sentences.
+- Short, warm, professional Slovenian
+- Maximum 3 sentences
 - Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
-- Use correct Slovenian spelling with šumniki (č, š, ž).
-- Slovnično pravilno (correct case endings, verb conjugation).
-- Never use negative or low-energy words (problem, težava, izziv). Frame as opportunity.
-- No bullet points.
-- Never include a phone number.
+- Use correct Slovenian spelling with šumniki (č, š, ž)
+- Slovnično pravilno
+- Never use negative or low-energy words
+- No bullet points
+- Sign as: Vesna Pevec
+- Never include a Calendly link or phone number
+- Never promise specifics about price or timeline
 
 LANGUAGE / TONE RULES (CRITICAL):
 - DEFAULT: vikanje (formal "vi" form). Always start with vikanje.
 - SWITCH to tikanje ONLY if the lead's own message uses tikanje.
 - NEVER use dvojina (1st dual): "pripraviva", "pošljeva", "pogledava", "sva". Use 1st plural: "pripravimo", "pošljemo".
-- Match the lead's length and tone: short reply gets a short answer.
 
-GOAL: warmly confirm interest, then move toward sending a tailored offer. Naturally ask where to send it (email) so the offer email can follow, e.g. "Z veseljem vam pripravim konkreten predlog. Kam vam ga lahko pošljem?"
+CRITICAL HANDOFF RULE - NEVER mention "Žan" or any director by name, and NEVER sign as anyone other than Vesna.
+- WRONG: "Skupaj s kolegom Žanom bova pregledala vaš primer in Žan vas bo kmalu kontaktiral"
+- WRONG: signing the message "Žan" or "Žan Bagarič" (the message comes from Vesna's profile)
+- WRONG: "direktor Žan bo stopil v stik", "kolega Žan"
+- RIGHT: Speak as "mi/aiera/B2Booster team", neutrally, and sign as Vesna Pevec.
+- Use natural variations like:
+  - "Pripravimo vam ponudbo, ki vam jo pošljemo na email v naslednjih dneh."
+  - "Pogledamo vaš primer in vam pošljemo konkretno ponudbo na email."
+- Why: It feels professional that "the team" prepares the offer. The offer email itself will then naturally reference "kot ste se dogovorili z Vesno Pevec".
 
-OUTPUT: Return only the message text. No labels, no formatting notes.
-`;
+TONE:
+- Friendly and professional, like a capable coordinator
+- Acknowledge their reply positively but briefly
+- Hand off smoothly to the team / next steps without naming anyone
+- The lead should feel they are being taken care of personally
 
-// Opener for a freshly accepted connection (no reply yet): this is still Vesna's
-// own first touch, signed by Vesna. Žan only enters once the lead replies.
-const VESNA_OPENER_GUIDE = `
-You are drafting a short, warm LinkedIn OPENER on behalf of Vesna Pevec, who handles first contact for B2Booster / AIERA (b2booster.eu, aiera.si). The lead just accepted Vesna's connection request and has not replied yet.
-
-WRITING RULES:
-- Short, warm, professional Slovenian. Maximum 2-3 sentences.
-- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
-- Use correct Slovenian spelling with šumniki (č, š, ž). Slovnično pravilno.
-- DEFAULT: vikanje. NEVER use dvojina (use 1st plural).
-- No bullet points, no Calendly link, no phone number.
-- Sign as: Vesna Pevec
-- Do NOT mention Žan yet (he enters once the lead replies).
-
-GOAL: open a warm, low-pressure conversation that invites a reply.
+GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff that the email outreach will then continue.
 
 OUTPUT: Return only the message text. No labels, no formatting notes.
 `;
@@ -3357,21 +3350,22 @@ app.post('/webhook/vesna', async (req, res) => {
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
 
-    // Lead replied → Žan takes over (signed Žan). Fresh accept → Vesna opener.
+    // Reply in Vesna's style - always signed Vesna, handoff to the team via email.
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 220,
-      system: hasRealMessage ? VESNA_STYLE_GUIDE : VESNA_OPENER_GUIDE,
+      max_tokens: 200,
+      system: VESNA_STYLE_GUIDE,
       messages: [{
         role: 'user',
-        content: hasRealMessage
-          ? `Lead name: ${leadData.firstName} ${leadData.lastName}\nTheir message: "${messageForAI}"\n\nWrite Žan's short LinkedIn reply (from Vesna's profile). Bridge the identity in one short clause on this first reply, warmly acknowledge their interest, and move toward sending a tailored offer.`
-          : `Lead name: ${leadData.firstName} ${leadData.lastName}\nContext: ${messageForAI}\n\nWrite Vesna's short, warm opener.`
+        content: `Lead name: ${leadData.firstName} ${leadData.lastName}
+${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
+
+Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.`
       }]
     });
 
-    let draft = (await polishSlovenian(response.content[0].text.trim(), { signature: hasRealMessage ? 'Žan Bagarič' : 'Vesna Pevec' })) || response.content[0].text.trim();
+    let draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
     const offerUrl = await createAndDeployOffer(leadData);
     const id = uuidv4();
     await storePending(id, { channel: 'vesna', leadData, draft });
@@ -5105,27 +5099,27 @@ app.post('/webhook/outflo', async (req, res) => {
     const channel = isVesna ? 'vesna' : 'linkedin';
 
     if (intent === 'negative') {
-      // Reply goes out from Vesna's or Žan's profile; in both cases Žan is the one
-      // handling the conversation now, so sign Žan.
-      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+      // Sign as whoever owns the profile the reply goes out from (Vesna stays Vesna).
+      const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
+      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
     } else {
       // Check for email handoff before drafting normal reply
       const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
       if (handoffTriggered) return;
 
       if (isVesna) {
-        // Lead replied to Vesna's outreach → Žan takes over from Vesna's profile (signed Žan).
+        // Vesna replies from her own profile, always signed Vesna; handoff goes by email.
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
         const response = await anthropic.messages.create({
           model: 'claude-sonnet-4-6',
-          max_tokens: 220,
+          max_tokens: 200,
           system: VESNA_STYLE_GUIDE,
           messages: [{
             role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite Žan's short LinkedIn reply (sent from Vesna's profile). Bridge the identity in one short clause on this first reply, then move toward sending a tailored offer.`
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.`
           }]
         });
-        draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Žan Bagarič' })) || response.content[0].text.trim();
+        draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
       } else {
         draft = await generateReply('linkedin', leadData, messageText, true);
       }
