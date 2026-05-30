@@ -47,9 +47,8 @@ function randomHash(len = 4) {
 }
 
 function createSlug(leadData) {
-  const company = leadData.company && leadData.company !== 'LinkedIn'
-    ? leadData.company
-    : `${leadData.firstName || ''}-${leadData.lastName || ''}`;
+  // URL slug = company only. NEVER the person's name. Empty -> "ponudba-<hash>".
+  const company = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : '';
   return `${slugifyCompany(company)}-${randomHash(4)}`;
 }
 

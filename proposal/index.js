@@ -126,7 +126,11 @@ async function buildProposalHTML(leadData) {
 
   const recipientShort = `${titlePrefix} ${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
 
-  const slug = createSlug(company || fullName);
+  // URL slug = company. NEVER the person's name (privacy + cleaner links).
+  // When company is unknown, use a neutral stable hash instead of the name.
+  const slug = company
+    ? createSlug(company)
+    : `ponudba-${sha1((fullName || '') + (leadData.linkedinUrl || '')).slice(0, 6)}`;
 
   const meta = {
     company,

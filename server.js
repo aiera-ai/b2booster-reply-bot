@@ -61,7 +61,8 @@ const AT_PROPOSALS = 'tblHS9tAl7c1XAQpi';
 const PRICING = {
   b2booster: { setup: 790, monthly: 890, currency: 'EUR' },
   generator: { setup: 490, monthly: 290, currency: 'EUR' },
-  socialProof: 'Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev.',
+  // Soft proof - NO promised numbers (we never guarantee a count we might not hit).
+  socialProof: 'Za stranke prevzamemo celoten outreach do pravih odločevalcev v njihovih ciljnih podjetjih, tako da se ukvarjajo le z dogovorjenimi pogovori.',
   // Formatted helpers (use in prompts)
   b2boosterText: '790 EUR setup (enkratni fee) + 890 EUR na mesec',
   generatorText: 'pilot od 290 EUR/mesec + 490 EUR setup (custom per segment)'
@@ -167,7 +168,7 @@ const AB_TEST_ENABLED = (process.env.AB_TEST_ENABLED || 'true').toLowerCase() ==
 const AB_VARIANTS = {
   A: { tag: 'A-baseline', nudge: '' },
   B: { tag: 'B-curiosity', nudge: '\nOPENING MODE: Start the reply with a concrete observation or one-line question about their role/industry. Avoid generic "hvala za sporočilo" opener.' },
-  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with a concrete number or outcome (50-100 odgovorov mesečno, X% manj manualnega dela). Skip greeting. Outcome first, CTA last.' }
+  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with the concrete outcome (prevzamemo outreach do pravih odločevalcev, oni se ukvarjajo le z dogovorjenimi pogovori). NEVER promise a specific number of replies/meetings. Skip greeting. Value first, CTA last.' }
 };
 function pickABVariant() {
   if (!AB_TEST_ENABLED) return AB_VARIANTS.A;
@@ -785,7 +786,9 @@ LANGUAGE RULES (always apply, hard constraints):
 
 FACTS to use when relevant (do NOT invent others):
 - Pricing if asked: 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
-- Social proof: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
+- Soft proof (use sparingly): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
+- NEVER promise specific numbers of replies, meetings, or results (e.g. "50-100 odgovorov mesečno"). We do not guarantee counts. Speak about the process and what we take off their plate, not a guaranteed outcome number.
+- TONE: confident but humble. NEVER cocky, salesy or boastful. Do NOT use punchy "Mi ne prodajamo orodja, ampak rezultat" style lines.
 - Slovenia: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies within a few months of cooperation, after which we often expand abroad. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
 `;
 
@@ -794,7 +797,8 @@ You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Boost
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
 Pricing (use EXACTLY these numbers if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges like "900-1200 EUR".
-Social proof to weave in when relevant: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
+Soft proof (use sparingly, NEVER as a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
+CRITICAL: NEVER promise a specific number of replies, meetings or results (no "50-100 odgovorov mesečno"). We do not guarantee counts and an unmet number burns trust. Talk about what we take off their plate, not a guaranteed outcome.
 Target: B2B companies that want to expand internationally or automate their sales outreach.
 Slovenia market rule: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies in a few months of cooperation, after which we often expand to foreign markets. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
 
@@ -840,12 +844,13 @@ EMAIL TONE:
 - One clear Calendly CTA at the end
 
 OBJECTION HANDLING (critical - this is the #1 reason leads say no):
-- The most common rejection is "že imamo AI" / "to rešujemo interno" / "že uporabljamo AI". Do NOT re-pitch generic "AI" at them and do NOT give up.
-- Reframe to the OUTCOME, which using AI internally does not solve: a steady flow of booked conversations with the right decision-makers, done-for-you, without anyone on their side prospecting manually.
-- Make it impossible to answer "to že imamo": lead with a concrete result ("X pogovorov z odločevalci na mesec"), not with the technology.
-- Example reframe: "Super, da AI že uporabljate interno. Mi ne prodajamo orodja, ampak rezultat: vsak mesec vam pripeljemo 50-100 pogovorov z odločevalci iz vaših ciljnih podjetij, brez da kdorkoli pri vas išče leade ročno."
+- The most common rejection is "že imamo AI" / "to rešujemo interno" / "že uporabljamo AI". Do NOT re-pitch generic "AI" and do NOT give up, but stay humble.
+- Reframe gently to what internal AI does NOT cover: that WE take the whole outreach to the right decision-makers off their plate, so nobody on their side has to prospect manually.
+- Do NOT be cocky or boastful. FORBIDDEN style: "Mi ne prodajamo orodja, ampak rezultat", "naredimo to bolje kot vi", any line that implies their setup is inferior.
+- NEVER promise a number ("X pogovorov na mesec").
+- Example reframe (humble tone): "Super, da AI že uporabljate interno. Pri nas ne gre za še eno orodje, ampak za to, da celoten stik s pravimi odločevalci prevzamemo mi, brez dodatnega dela na vaši strani. Če želite, vam na kratko pokažem, kako bi to izgledalo pri vas."
 
-VALUE PROP RULE: Never sell "AI" or "avtomatizacija" as the headline. Sell the business outcome (booked meetings, new pipeline, access to decision-makers). AI is just how we do it, never the pitch.
+VALUE PROP RULE: Never sell "AI" or "avtomatizacija" as the headline. Sell what we take off their plate (we run the outreach to decision-makers for them). AI is just how we do it, never the pitch. Stay humble, never boastful.
 
 GOAL: Move the lead toward booking a Calendly call (or opening the offer page if one is prepared). Never be pushy. Be helpful and confident.
 
@@ -1202,7 +1207,17 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     ? '\nADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently. Never switch to vikanje mid-message.'
     : '\nADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje, never mix the two.';
 
-  if (hasRealMessage) {
+  if (hasRealMessage && leadData.wantsCall) {
+    // Lead asked to be called / left a number. A call is the hottest signal:
+    // do NOT send any link. Just arrange the call.
+    const phoneNote = leadData.messagePhone ? ` They left their number: ${leadData.messagePhone}.` : '';
+    prompt = `Channel: ${channelNote}
+Lead name: ${leadData.firstName} ${leadData.lastName}
+${enrichmentContext}
+Their message: "${theirMessage}"
+
+The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}`;
+  } else if (hasRealMessage) {
     const ctaInstruction = useOfferCta
       ? `They are clearly interested. Briefly answer their question in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so do NOT also paste a separate Calendly link. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
       : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
@@ -1217,9 +1232,9 @@ Write a reply that naturally continues the conversation and references their spe
 Lead name: ${leadData.firstName} ${leadData.lastName}
 Context: ${theirMessage}
 
-Write a short, natural opening message. Lead with a concrete business OUTCOME (e.g. booked conversations with decision-makers each month), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". Then move toward a Calendly booking.
+Write a short, natural opening message. Lead with what we take off their plate (we run the outreach to the right decision-makers for them), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". NEVER promise a specific number of replies or meetings. Then move toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
-Be direct and confident. Start the conversation naturally.${variant.nudge}`;
+Be confident but humble, never cocky. Start the conversation naturally.${variant.nudge}`;
   }
 
   const response = await anthropic.messages.create({
@@ -1284,6 +1299,14 @@ function detectAddressing(text) {
   const ti = /\b(tebe|tebi|tvoj|tvoja|tvoje|tvojo|tvojega|tvojem|pokli?ci me|povej|javi mi|posiljas|imas|lahko mi poves|ti)\b/.test(t);
   if (ti && !vi) return 'ti';
   return 'vi'; // default + when both present, stay formal
+}
+
+// Hard addressing instruction string, derived from the lead's own message.
+function addressingRuleFor(leadData) {
+  const addr = detectAddressing((leadData && leadData.theirMessage) || '');
+  return addr === 'ti'
+    ? 'ADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently.'
+    : 'ADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje.';
 }
 
 // ─── LEKTORSKI / POLISH PASS ──────────────────────────────────────────────────
@@ -2023,7 +2046,7 @@ ABOUT AIERA / B2Booster:
 AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
 
 Pricing (only if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
-Social proof to use when relevant: "Naše stranke prejmejo 50-100 odgovorov mesečno od ciljnih podjetij oz. odločevalcev."
+Soft proof (use sparingly, NEVER a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori." NEVER promise a specific number of replies or meetings. Tone stays humble, never cocky.
 Slovenia rule: We work the Slovenian market normally; the small market means we reach all target companies within a few months, and then often expand to foreign markets. NEVER imply we skip Slovenia.
 
 WRITING RULES (strict):
@@ -2114,10 +2137,11 @@ async function generateHandoffLinkedInReply(leadData, providedEmail) {
     system: HANDOFF_LI_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.`
+      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.\n${addressingRuleFor(leadData)}`
     }]
   });
-  return cleanArtifacts(response.content[0].text.trim());
+  const raw = response.content[0].text.trim();
+  return cleanArtifacts((await polishSlovenian(raw, { signature: 'Žan Bagarič' })) || raw);
 }
 
 const ASK_EMAIL_LI_PROMPT = `You write very short Slovenian LinkedIn replies (1 sentence) that ask the prospect for their work email so we can send a tailored offer.
@@ -2139,10 +2163,11 @@ async function generateAskForEmailReply(leadData) {
     system: ASK_EMAIL_LI_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.`
+      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.\n${addressingRuleFor(leadData)}`
     }]
   });
-  return cleanArtifacts(response.content[0].text.trim());
+  const raw = response.content[0].text.trim();
+  return cleanArtifacts((await polishSlovenian(raw, { signature: 'Žan Bagarič' })) || raw);
 }
 
 async function sendOfferEmailViaResend({ to, subject, bodyText }) {
@@ -5330,16 +5355,21 @@ app.post('/webhook/outflo', async (req, res) => {
 
       // Deploy the personalized offer page BEFORE drafting, so a Žan reply can link
       // straight to it. Failure is non-blocking - the draft then falls back to Calendly.
-      try {
-        offerUrl = await createAndDeployOffer(leadData);
-        if (offerUrl) {
-          leadData.offerUrl = offerUrl;
-          console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
-        } else {
-          console.log(`[${senderLabel}] Offer deploy returned null - reply will use Calendly only`);
+      // SKIP entirely when the lead wants a call: no link belongs in a call-arranging reply.
+      if (leadData.wantsCall) {
+        console.log(`[${senderLabel}] Call request - skipping offer deploy (reply will arrange a call, no link)`);
+      } else {
+        try {
+          offerUrl = await createAndDeployOffer(leadData);
+          if (offerUrl) {
+            leadData.offerUrl = offerUrl;
+            console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
+          } else {
+            console.log(`[${senderLabel}] Offer deploy returned null - reply will use Calendly only`);
+          }
+        } catch (e) {
+          console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
         }
-      } catch (e) {
-        console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
       }
 
       if (isVesna) {
