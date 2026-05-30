@@ -1196,6 +1196,12 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
   const offerUrl = leadData.offerUrl || null;
   const useOfferCta = offerUrl && leadData.intent === 'positive';
 
+  // Pin addressing deterministically from the lead's own message (model kept mixing).
+  const addressing = detectAddressing(hasRealMessage ? theirMessage : '');
+  const addressingRule = addressing === 'ti'
+    ? '\nADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently. Never switch to vikanje mid-message.'
+    : '\nADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje, never mix the two.';
+
   if (hasRealMessage) {
     const ctaInstruction = useOfferCta
       ? `They are clearly interested. Briefly answer their question in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so do NOT also paste a separate Calendly link. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
@@ -1205,7 +1211,7 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${variant.nudge}`;
+Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${addressingRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1230,7 +1236,54 @@ Be direct and confident. Start the conversation naturally.${variant.nudge}`;
   // exists, fall back to Calendly so we never ship a broken placeholder.
   text = text.replace(/\[OFFER LINK\]/g, offerUrl || CALENDLY_LINK);
   text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
-  return text;
+  return cleanArtifacts(text);
+}
+
+// ─── DETERMINISTIC TEXT GUARDS ────────────────────────────────────────────────
+// The LLM polish pass is not reliable for hard typographic/grammar rules: em/en
+// dashes and dvojina kept leaking into sent messages. These run AFTER every
+// generator so the rule is enforced 100% of the time, not "usually".
+
+// Common dvojina (1st person dual) verb forms -> 1st person plural. Conservative,
+// word-boundary, only unambiguous dual verbs so we never break valid grammar.
+const DVOJINA_MAP = {
+  'slišiva': 'slišimo', 'sliševa': 'slišimo', 'pogledava': 'pogledamo',
+  'pošljeva': 'pošljemo', 'posljeva': 'posljemo', 'vidiva': 'vidimo',
+  'pripraviva': 'pripravimo', 'narediva': 'naredimo', 'uskladiva': 'uskladimo',
+  'dogovoriva': 'dogovorimo', 'pokličeva': 'pokličemo', 'pokliceva': 'poklicemo',
+  'srečava': 'srečamo', 'srecava': 'srecamo', 'greva': 'gremo',
+  'začneva': 'začnemo', 'zacneva': 'zacnemo', 'preveriva': 'preverimo',
+  'lahko se slišiva': 'lahko se slišimo', 'midva': 'mi'
+};
+
+function cleanArtifacts(text) {
+  if (!text) return text;
+  let t = text;
+  // 1) Kill every dash variant (em, en, figure, minus, etc.) -> regular hyphen.
+  t = t.replace(/[‐‑‒–—―−]/g, '-');
+  // 2) Unicode ellipsis -> plain dots.
+  t = t.replace(/…/g, '...');
+  // 3) Fancy quotes -> straight quotes (keeps copy clean, matches SaaS style).
+  t = t.replace(/[“”„‟]/g, '"').replace(/[‘’‚]/g, "'");
+  // 4) Dvojina -> plural (case-insensitive, word boundaries).
+  for (const [dual, plural] of Object.entries(DVOJINA_MAP)) {
+    t = t.replace(new RegExp(`\\b${dual}\\b`, 'gi'), plural);
+  }
+  // 5) Collapse accidental double spaces left by replacements.
+  t = t.replace(/ {2,}/g, ' ');
+  return t;
+}
+
+// Detect how the lead addressed us so we can pin vikanje/tikanje deterministically
+// instead of letting the model guess (it often mixed both in one message).
+function detectAddressing(text) {
+  if (!text) return 'vi';
+  const t = ' ' + text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '') + ' ';
+  const vi = /\b(vas|vam|vase|vasega|vasi|vaso|vi|prosim vas|poslji?te|povejte|pokli?cite|lahko mi poveste|ste|boste)\b/.test(t)
+    || /\bvas[ae]?\b/.test(t);
+  const ti = /\b(tebe|tebi|tvoj|tvoja|tvoje|tvojo|tvojega|tvojem|pokli?ci me|povej|javi mi|posiljas|imas|lahko mi poves|ti)\b/.test(t);
+  if (ti && !vi) return 'ti';
+  return 'vi'; // default + when both present, stay formal
 }
 
 // ─── LEKTORSKI / POLISH PASS ──────────────────────────────────────────────────
@@ -1272,7 +1325,8 @@ OUTPUT: only the corrected message text.`,
     // Guard: never let the polisher drop a link placeholder if the input had it.
     if (text.includes('[CALENDLY LINK]') && !out.includes('[CALENDLY LINK]')) return null;
     if (text.includes('[OFFER LINK]') && !out.includes('[OFFER LINK]')) return null;
-    return out;
+    // Deterministic final guard: dashes/dvojina the LLM may still have left.
+    return cleanArtifacts(out);
   } catch (e) {
     console.warn('[POLISH] failed, using raw draft:', e.message);
     return null;
@@ -1525,6 +1579,7 @@ Generate closing reply.`
 // ─── SEND VIA OUTFLO (LinkedIn) ───────────────────────────────────────────────
 
 async function sendViaOutflo(receiverLinkedInUrl, text, senderUrl = null) {
+  text = cleanArtifacts(text); // final backstop: no dashes/dvojina ever leave
   const res = await fetch('https://live.outflo.in/api/public/conversations/reply', {
     method: 'POST',
     headers: {
@@ -1545,6 +1600,7 @@ async function sendViaOutflo(receiverLinkedInUrl, text, senderUrl = null) {
 // ─── SEND VIA INSTANTLY (Email) ───────────────────────────────────────────────
 
 async function sendViaInstantly(replyToUuid, emailBody, subject) {
+  emailBody = cleanArtifacts(emailBody); // final backstop
   const res = await fetch('https://api.instantly.ai/api/v1/unibox/emails/reply', {
     method: 'POST',
     headers: {
@@ -2061,7 +2117,7 @@ async function generateHandoffLinkedInReply(leadData, providedEmail) {
       content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.`
     }]
   });
-  return response.content[0].text.trim();
+  return cleanArtifacts(response.content[0].text.trim());
 }
 
 const ASK_EMAIL_LI_PROMPT = `You write very short Slovenian LinkedIn replies (1 sentence) that ask the prospect for their work email so we can send a tailored offer.
@@ -2086,10 +2142,12 @@ async function generateAskForEmailReply(leadData) {
       content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.`
     }]
   });
-  return response.content[0].text.trim();
+  return cleanArtifacts(response.content[0].text.trim());
 }
 
 async function sendOfferEmailViaResend({ to, subject, bodyText }) {
+  bodyText = cleanArtifacts(bodyText); // final backstop
+  subject = cleanArtifacts(subject || '');
   const htmlBody = bodyText
     .split('\n')
     .map(line => line.trim() === '' ? '<br>' : `<p style="margin:0 0 10px 0;font-family:Arial,sans-serif;font-size:14px;color:#111827;line-height:1.6">${line}</p>`)
@@ -2659,7 +2717,7 @@ Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, 
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  return { subject, body, step: stepNum };
+  return { subject: cleanArtifacts(subject), body: cleanArtifacts(body), step: stepNum };
 }
 
 async function airtableFindLeadsForFollowup() {
@@ -3111,7 +3169,7 @@ async function generateLiFollowupMessage(leadData) {
     system: LI_FOLLOWUP_PROMPT + SHARED_LANG_RULES,
     messages: [{ role: 'user', content: `Lead: ${leadData.firstName} ${leadData.lastName}\nCompany: ${leadData.company || 'unknown'}\nLast message from them: "${leadData.lastMessage || '(no message)'}"\n\nWrite the LinkedIn nudge.` }]
   });
-  return response.content[0].text.trim();
+  return cleanArtifacts(response.content[0].text.trim());
 }
 
 async function airtableFindSilentLeads() {
@@ -3123,14 +3181,20 @@ async function airtableFindSilentLeads() {
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
     if (!r?.records) return [];
-    return r.records.map(rec => ({
-      recordId: rec.id,
-      leadName: rec.fields['Lead Name'] || '',
-      linkedinUrl: rec.fields['LinkedIn URL'] || '',
-      company: rec.fields['Campaign'] || '',
-      lastMessage: rec.fields['Last Message'] || '',
-      channel: rec.fields['Channel'] || 'linkedin'
-    })).filter(x => x.linkedinUrl);
+    return r.records.map(rec => {
+      // Campaign is named after the SENDER (Zan/Vesna), never the lead's company.
+      // Using it as "company" leaked "Zan Bagaric" into nudges. Drop those values.
+      const campaign = rec.fields['Campaign'] || '';
+      const company = /zan|vesna|bagaric|pevec/i.test(campaign) ? '' : campaign;
+      return {
+        recordId: rec.id,
+        leadName: rec.fields['Lead Name'] || '',
+        linkedinUrl: rec.fields['LinkedIn URL'] || '',
+        company,
+        lastMessage: rec.fields['Last Message'] || '',
+        channel: rec.fields['Channel'] || 'linkedin'
+      };
+    }).filter(x => x.linkedinUrl);
   } catch (e) {
     console.error('[LI-FOLLOWUP] find error:', e.message);
     return [];
@@ -3145,6 +3209,19 @@ async function processLiFollowups() {
 
     for (const c of candidates) {
       try {
+        // Intent guard: never nudge someone whose last message was a rejection
+        // ("Tema ni aktualna", "ne zanima", "morda kdaj"). Mark them so we stop re-checking.
+        if (c.lastMessage && c.lastMessage.trim().length > 3) {
+          const lastIntent = await classifyIntent(c.lastMessage);
+          if (lastIntent === 'negative' || lastIntent === 'soft_negative') {
+            console.log(`[LI-FOLLOWUP] Skipping ${c.leadName} - last message intent=${lastIntent}`);
+            await airtableRequest('PATCH', `${AT_LEADS}/${c.recordId}`, {
+              fields: { 'LI Followup Sent At': new Date().toISOString() }
+            }).catch(() => {});
+            continue;
+          }
+        }
+
         const nameParts = c.leadName.trim().split(' ');
         const leadData = {
           firstName: nameParts[0] || 'Lead',
@@ -5586,7 +5663,7 @@ Write the no-show recovery email.`
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  return { subject, body };
+  return { subject: cleanArtifacts(subject), body: cleanArtifacts(body) };
 }
 
 async function fetchCalendlyInvitee(inviteeUri) {
