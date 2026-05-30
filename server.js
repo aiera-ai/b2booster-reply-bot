@@ -1369,9 +1369,9 @@ async function classifyIntent(message) {
       content: `Classify this reply intent. Return ONLY one word.
 
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
-soft_negative = maybe later: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "in the future", "trenutno ne"
-positive = interested, asking questions, wants to talk
-neutral = just acknowledging, unclear intent, short reply like "ok", "hvala"
+soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
+positive = interested, asking a question, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
+neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
 Message: "${message.substring(0, 300)}"
 
@@ -1942,12 +1942,12 @@ async function detectEmailHandoff(message) {
       max_tokens: 10,
       messages: [{
         role: 'user',
-        content: `Does this LinkedIn message ask the sender to send an offer, presentation, more info, or details to email? Or does it ask for an email contact?
+        content: `Does this LinkedIn message EXPLICITLY ask us to send something to EMAIL, or explicitly mention email/e-pošta/e-mail as the channel? Only then is it a handoff.
 
 Return ONLY "yes" or "no".
 
-yes examples: "Pošljite mi ponudbo na email", "Lahko mi pošljete predstavitev na e-pošto?", "Send me details to my email", "Mi lahko pošljete več informacij?"
-no examples: "Zanima me", "Pokličite me", "Hvala", "Kdaj se lahko slišimo?"
+yes examples (email is explicitly mentioned): "Pošljite mi ponudbo na email", "Lahko mi pošljete predstavitev na e-pošto?", "Send me details to my email", "Moj mail je ...", "na e-naslov mi pošljite"
+no examples (no email mentioned, even if they want info): "Mi lahko pošljete več informacij?", "Več informacij mi lahko delite kar preko LinkedIna", "Zanima me", "Kako bi to naredili?", "Pokličite me", "Hvala", "Kdaj se lahko slišimo?"
 
 Message: "${message.substring(0, 400)}"`
       }]

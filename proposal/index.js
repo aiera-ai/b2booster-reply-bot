@@ -126,10 +126,12 @@ async function buildProposalHTML(leadData) {
 
   const recipientShort = `${titlePrefix} ${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
 
-  // URL slug = company. NEVER the person's name (privacy + cleaner links).
+  // URL slug = company. NEVER the person's name (the `company` display var above
+  // falls back to the person name, so read leadData.company directly here).
   // When company is unknown, use a neutral stable hash instead of the name.
-  const slug = company
-    ? createSlug(company)
+  const realCompany = (leadData.company && leadData.company !== 'LinkedIn') ? leadData.company : '';
+  const slug = realCompany
+    ? createSlug(realCompany)
     : `ponudba-${sha1((fullName || '') + (leadData.linkedinUrl || '')).slice(0, 6)}`;
 
   const meta = {
