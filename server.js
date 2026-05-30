@@ -5233,11 +5233,34 @@ app.post('/webhook/outflo', async (req, res) => {
     const msg = payload.message || {};
     const acct = payload.account || {};
 
+    // TEMP DEBUG: log the full Outflo payload so we can see EVERY field Outflo sends
+    // (we want to know if company/headline/title arrive here, to avoid depending on Apollo).
+    console.log('[OUTFLO RAW]', JSON.stringify(payload).slice(0, 2500));
+
     const messageText = msg.text || msg.body || msg.content || payload.text || '';
     const leadProfileUrl = msg.sender_profile_url || msg.sender_url || payload.lead?.profile_url || payload.lead?.linkedin_url || '';
     const leadFirstNameFromPayload = msg.sender_first_name || payload.lead?.first_name || '';
     const leadLastNameFromPayload = msg.sender_last_name || payload.lead?.last_name || '';
     const leadFullName = [leadFirstNameFromPayload, leadLastNameFromPayload].filter(Boolean).join(' ') || payload.lead?.full_name || payload.lead?.name || 'Lead';
+
+    // Outflo MAY carry the lead's company/title/headline (field names vary across
+    // Outflo versions). Try every plausible field so that, if present, we use it
+    // directly and do NOT depend on Apollo for the company. Harmless if absent.
+    const _ld = payload.lead || payload.prospect || payload.contact || {};
+    const outfloCompany = msg.sender_company || msg.sender_company_name || msg.sender_organization
+      || _ld.company || _ld.company_name || _ld.organization || _ld.organization_name || '';
+    const outfloTitle = msg.sender_title || msg.sender_job_title || _ld.title || _ld.job_title || _ld.position || '';
+    const outfloHeadline = msg.sender_headline || msg.sender_occupation || _ld.headline || _ld.occupation || '';
+    // Headlines are often "Title at Company" / "Title @ Company" / "Title - Company".
+    const headlineCompany = (() => {
+      const h = (outfloHeadline || '').trim();
+      const m = h.match(/(?:\bat\b|@|\||–|—|-)\s*([^|@–—-]{2,60})$/i);
+      return m ? m[1].trim() : '';
+    })();
+    const leadCompanyFromOutflo = (outfloCompany || headlineCompany || '').trim();
+    if (leadCompanyFromOutflo || outfloTitle || outfloHeadline) {
+      console.log(`[OUTFLO] Lead meta from payload: company="${leadCompanyFromOutflo}" title="${outfloTitle}" headline="${outfloHeadline}"`);
+    }
 
     // Safety: skip if "sender" is actually one of our own accounts (e.g. echo of an outbound message)
     if (leadProfileUrl && acct.profile_url && leadProfileUrl === acct.profile_url) {
@@ -5300,9 +5323,10 @@ app.post('/webhook/outflo', async (req, res) => {
       // NEVER fall back to campaignName here: campaigns are named after the SENDER
       // ("Zan Bagaric" / "Vesna Pevec"), which leaked into slugs and message text
       // ("kako bi izgledalo za Zan Bagaric"). Empty is safer than the wrong name.
-      company: apolloData?.companyName || '',
+      // Prefer Apollo (richest), then whatever Outflo gave us. NEVER campaignName.
+      company: apolloData?.companyName || leadCompanyFromOutflo || '',
       linkedinUrl: leadProfileUrl,
-      title: apolloData?.title || '',
+      title: apolloData?.title || outfloTitle || outfloHeadline || '',
       industry: apolloData?.industry || '',
       employees: apolloData?.employees || '',
       seniority: apolloData?.seniority || '',
