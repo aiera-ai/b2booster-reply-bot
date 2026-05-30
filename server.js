@@ -1191,7 +1191,10 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     leadData.company && `Company: ${leadData.company}`,
     leadData.industry && `Industry: ${leadData.industry}`,
     leadData.employees && `Company size: ${leadData.employees} employees`,
-    leadData.seniority && `Seniority: ${leadData.seniority}`
+    leadData.seniority && `Seniority: ${leadData.seniority}`,
+    // First-party research from our own DB - use it to personalize, do NOT quote verbatim.
+    leadData.researchSummary && `What we know about their company (use naturally, do not quote): ${leadData.researchSummary}`,
+    leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`
   ].filter(Boolean).join('\n');
 
   // When a personalized offer page exists and the lead is interested, the reply
@@ -5121,6 +5124,41 @@ app.post('/poll-linkedin', async (req, res) => {
   }
 });
 
+// ─── OWN DB ENRICHMENT (B2Booster Campaigns app, Supabase edge fn) ────────────
+// First-party lead data: company, title, industry, location, employee count.
+// Matches on the same LinkedIn URL format Outflo sends (normalized). This is the
+// PRIMARY enrichment source - richer + free + no Apollo dependency.
+async function enrichFromOwnDB(linkedinUrl) {
+  const base = process.env.B2BOOSTER_LEAD_API_URL;
+  const key = process.env.B2BOOSTER_LEAD_API_KEY;
+  if (!base || !key || !linkedinUrl) return null;
+  try {
+    const url = `${base}${base.includes('?') ? '&' : '?'}linkedin_url=${encodeURIComponent(linkedinUrl)}`;
+    const r = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!r.ok) { console.log(`[OWNDB] ${r.status} for ${linkedinUrl}`); return null; }
+    const d = await r.json();
+    if (!d || d.error || (!d.company && !d.title)) return null;
+    const clean = v => (v && v !== 'null') ? v : '';
+    console.log(`[OWNDB] Hit: ${clean(d.company) || '(no company)'} | ${clean(d.title) || '(no title)'} | ${clean(d.industry)}`);
+    return {
+      company: clean(d.company),
+      title: clean(d.title),
+      industry: clean(d.industry),
+      employees: clean(d.employeeCount),
+      location: clean(d.location),
+      email: clean(d.email),
+      fitReason: clean(d.fitReason),
+      researchSummary: clean(d.websiteResearchSummary)
+    };
+  } catch (e) {
+    console.log('[OWNDB] error:', e.message);
+    return null;
+  }
+}
+
 // ─── APOLLO ENRICHMENT ───────────────────────────────────────────────────────
 
 async function enrichLeadWithApollo(linkedinUrl) {
@@ -5204,6 +5242,38 @@ app.get('/test-apollo', async (req, res) => {
   } catch(e) {
     res.json({ error: e.message });
   }
+});
+
+// Debug: probe Outflo public API to discover which endpoints return lead/company data.
+// Uses the real OUTFLO_API_KEY from env. Read-only. Remove once enrichment is wired.
+app.get('/debug/outflo', async (req, res) => {
+  const key = process.env.OUTFLO_API_KEY;
+  if (!key) return res.json({ error: 'OUTFLO_API_KEY not set' });
+  const base = 'https://live.outflo.in/api/public';
+  const candidates = [
+    `${base}/conversations?limit=2`,
+    `${base}/conversations?page=1&limit=2`,
+    `${base}/leads?limit=2`,
+    `${base}/prospects?limit=2`,
+    `${base}/contacts?limit=2`,
+    `${base}/campaigns?limit=2`,
+  ];
+  if (req.query.conv) candidates.unshift(`${base}/conversations/${encodeURIComponent(req.query.conv)}`);
+  if (req.query.path) candidates.unshift(`${base}/${req.query.path}`);
+  const out = [];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, {
+        headers: { 'x-api-key': key, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(8000)
+      });
+      const text = await r.text();
+      out.push({ url, status: r.status, body: text.slice(0, 1500) });
+    } catch (e) {
+      out.push({ url, error: e.message });
+    }
+  }
+  res.json(out);
 });
 
 // ─── OUTFLO WEBHOOK ───────────────────────────────────────────────────────────
@@ -5307,7 +5377,10 @@ app.post('/webhook/outflo', async (req, res) => {
     const firstName = nameParts[0] || 'Lead';
     const lastName = nameParts.slice(1).join(' ') || '';
 
-    // Apollo enrichment - only for interested leads (skip negatives to save credits)
+    // Enrichment - only for interested leads. PRIMARY: our own DB (B2Booster
+    // Campaigns app) - first-party company/title/industry, matches Outflo's URL
+    // format. FALLBACK: Apollo (mainly for email/phone, which own DB lacks).
+    const ownData = (intent !== 'negative') ? await enrichFromOwnDB(leadProfileUrl) : null;
     const apolloData = (intent !== 'negative')
       ? await enrichLeadWithApollo(leadProfileUrl)
       : null;
@@ -5320,21 +5393,21 @@ app.post('/webhook/outflo', async (req, res) => {
     const leadData = {
       firstName,
       lastName,
-      // NEVER fall back to campaignName here: campaigns are named after the SENDER
-      // ("Zan Bagaric" / "Vesna Pevec"), which leaked into slugs and message text
-      // ("kako bi izgledalo za Zan Bagaric"). Empty is safer than the wrong name.
-      // Prefer Apollo (richest), then whatever Outflo gave us. NEVER campaignName.
-      company: apolloData?.companyName || leadCompanyFromOutflo || '',
+      // Priority: own DB (first-party) -> Apollo -> Outflo payload. NEVER campaignName
+      // (campaigns are named after the SENDER, which leaked into slugs/message text).
+      company: ownData?.company || apolloData?.companyName || leadCompanyFromOutflo || '',
       linkedinUrl: leadProfileUrl,
-      title: apolloData?.title || outfloTitle || outfloHeadline || '',
-      industry: apolloData?.industry || '',
-      employees: apolloData?.employees || '',
+      title: ownData?.title || apolloData?.title || outfloTitle || outfloHeadline || '',
+      industry: ownData?.industry || apolloData?.industry || '',
+      employees: ownData?.employees || apolloData?.employees || '',
       seniority: apolloData?.seniority || '',
       city: apolloData?.city || '',
-      country: apolloData?.country || '',
-      email: apolloData?.email || '',
+      country: apolloData?.country || ownData?.location || '',
+      email: apolloData?.email || ownData?.email || '',
       phone: apolloData?.phone || '',
       companyPhone: apolloData?.companyPhone || '',
+      fitReason: ownData?.fitReason || '',
+      researchSummary: ownData?.researchSummary || '',
       theirMessage: messageText,
       intent,
       campaignName,
