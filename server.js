@@ -95,6 +95,43 @@ function isOutfloDuplicate(conversationId, messageText) {
   return false;
 }
 
+// LinkedIn notification boilerplate detector.
+// LinkedIn digest emails carry no real text, just placeholders like
+// "You have 1 new message" / "You have 6 new messages". These must never be
+// treated as the lead's actual message.
+function isLinkedInBoilerplate(text) {
+  const t = (text || '').trim().toLowerCase();
+  if (!t) return true;
+  return (
+    /^you have \d+ new messages?$/i.test(t) ||
+    /^you have a new message/i.test(t) ||
+    /^\d+ new messages?$/i.test(t) ||
+    /^you have \d+ new notifications?$/i.test(t) ||
+    /just messaged you$/i.test(t) ||
+    /sent you a message$/i.test(t)
+  );
+}
+
+// LinkedIn-notif dedup (email-notif path had none → inbox flooded with re-fires).
+// Keyed on linkedinUrl + notificationType, 24h window.
+const LI_NOTIF_DEDUP = new Map();
+const LI_NOTIF_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
+const LI_NOTIF_DEDUP_MAX = 2000;
+function isLinkedInNotifDuplicate(linkedinUrl, discriminator) {
+  if (!linkedinUrl) return false;
+  const key = `${linkedinUrl}::${discriminator || 'messaged'}`;
+  const now = Date.now();
+  if (LI_NOTIF_DEDUP.size > LI_NOTIF_DEDUP_MAX) {
+    for (const [k, t] of LI_NOTIF_DEDUP) {
+      if (now - t > LI_NOTIF_DEDUP_TTL_MS) LI_NOTIF_DEDUP.delete(k);
+    }
+  }
+  const seen = LI_NOTIF_DEDUP.get(key);
+  if (seen && now - seen < LI_NOTIF_DEDUP_TTL_MS) return true;
+  LI_NOTIF_DEDUP.set(key, now);
+  return false;
+}
+
 // Outbound throttle (#4): max 1 LI send per account per N min
 const LI_THROTTLE_MIN = parseInt(process.env.LI_THROTTLE_MIN || '20', 10);
 const LI_LAST_SEND = new Map(); // account key → epoch ms of last scheduled send
@@ -3242,6 +3279,10 @@ function parseLinkedInEmail(subject, from, body) {
     message = lines[0] || '';
   }
 
+  // Drop LinkedIn digest boilerplate ("You have N new messages") so it never
+  // passes as the lead's real message and triggers a needy "resend" reply.
+  if (isLinkedInBoilerplate(message)) message = '';
+
   const urlMatch = body && body.match(/https?:\/\/(?:www\.|[a-z]{2}\.)?linkedin\.com\/in\/[a-zA-Z0-9\-_%]+/);
   const linkedinUrl = urlMatch ? urlMatch[0].split('?')[0] : null;
 
@@ -3281,6 +3322,28 @@ app.post('/webhook/linkedin', async (req, res) => {
 
     if (!leadData.linkedinUrl) {
       console.warn('[LINKEDIN] No LinkedIn URL - skipping');
+      return;
+    }
+
+    // Skip phantom digests: a "messaged"/"replied" notification with no real
+    // text is just LinkedIn's "You have N new messages" placeholder - no signal
+    // to act on. "accepted" notifications legitimately have no text (opener flow).
+    if (!hasRealMessage && parsed.notificationType !== 'accepted') {
+      console.log(`[LINKEDIN] Skipping phantom notif (no real message) - ${parsed.firstName}`);
+      return;
+    }
+    if (parsed.firstName === 'Unknown') {
+      console.log('[LINKEDIN] Skipping - unparseable sender (digest)');
+      return;
+    }
+    // Dedup re-fired notifications (Make forwards the same email repeatedly).
+    // Discriminate by message content so a real reply isn't swallowed by an
+    // earlier no-text notification for the same person.
+    const liDiscriminator = hasRealMessage
+      ? `msg:${crypto.createHash('sha1').update(parsed.message).digest('hex').slice(0, 16)}`
+      : `opener:${parsed.notificationType}`;
+    if (isLinkedInNotifDuplicate(parsed.linkedinUrl, liDiscriminator)) {
+      console.log(`[LINKEDIN] Duplicate notif for ${parsed.firstName} - skipping`);
       return;
     }
 
@@ -3350,6 +3413,23 @@ app.post('/webhook/vesna', async (req, res) => {
 
     if (!parsed.linkedinUrl) {
       console.warn('[VESNA] No LinkedIn URL - skipping');
+      return;
+    }
+
+    // Skip phantom digests (same fix as /webhook/linkedin).
+    if (!hasRealMessage && parsed.notificationType !== 'accepted') {
+      console.log(`[VESNA] Skipping phantom notif (no real message) - ${parsed.firstName}`);
+      return;
+    }
+    if (parsed.firstName === 'Unknown') {
+      console.log('[VESNA] Skipping - unparseable sender (digest)');
+      return;
+    }
+    const vesnaDiscriminator = hasRealMessage
+      ? `msg:${crypto.createHash('sha1').update(parsed.message).digest('hex').slice(0, 16)}`
+      : `opener:${parsed.notificationType}`;
+    if (isLinkedInNotifDuplicate(parsed.linkedinUrl, `vesna:${vesnaDiscriminator}`)) {
+      console.log(`[VESNA] Duplicate notif for ${parsed.firstName} - skipping`);
       return;
     }
 
