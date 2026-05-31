@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 // New deterministic-template proposal generator (spirit-style, no prices, meeting-focused)
-const { createAndDeployProposal: createAndDeployProposalSpirit, setOnProposalGenerated } = require('./proposal');
+const { createAndDeployProposal: createAndDeployProposalSpirit, buildProposalHTML, setOnProposalGenerated } = require('./proposal');
 
 // B2Booster offer (template-driven, with pricing, sales-focused). For B2B sales/growth roles + international.
 const {
@@ -1150,6 +1150,13 @@ async function createAndDeployOfferClassic(leadData) {
 // Env: PROPOSAL_STYLE=spirit (default) | classic
 // Per-call override: leadData.offerStyle = 'spirit' | 'classic'
 async function createAndDeployOffer(leadData) {
+  // Render-hosted serving (default): single-page offers served by this bot, no Netlify.
+  // Generator stays on Netlify (multi-file). Set OFFER_HOST=netlify to force old behavior.
+  if (OFFER_HOST === 'render' && !(leadData && leadData.offerType === 'generator')) {
+    const url = await createAndServeOffer(leadData);
+    if (url) return url;
+    console.log('[OFFER-SERVE] render serve failed - falling back to Netlify path');
+  }
   // Generator ponudb (AIERA brand SaaS demo) - ai.aiera.si/g/{slug}
   if (leadData && leadData.offerType === 'generator') {
     const url = await createAndDeployGeneratorOffer(leadData);
@@ -1168,6 +1175,63 @@ async function createAndDeployOffer(leadData) {
   if (style === 'classic') return createAndDeployOfferClassic(leadData);
   // Default: new spirit-style proposal
   return createAndDeployProposalSpirit(leadData);
+}
+
+// ─── RENDER-HOSTED OFFER PAGES (no Netlify) ──────────────────────────────────
+// Free-tier friendly: build the HTML, stash it in Airtable Proposals (survives
+// restarts; Render free has no persistent disk), and serve it from this bot at
+// /o/:slug. Avoids Netlify deploy limits entirely. Single-page offers only
+// (spirit/aiera, b2booster, classic). Generator stays on Netlify (multi-file).
+const OFFER_SERVE_BASE = process.env.OFFER_SERVE_URL || process.env.SERVER_URL || `http://localhost:${PORT}`;
+const OFFER_HOST = (process.env.OFFER_HOST || 'render').toLowerCase(); // 'render' | 'netlify'
+
+async function storeOfferHtml(slug, html, leadData) {
+  if (!AIRTABLE_PAT || !slug || !html) return false;
+  if (html.length > 99000) {
+    console.warn(`[OFFER-SERVE] HTML too large for Airtable (${html.length} chars) - skipping store, slug=${slug}`);
+    return false;
+  }
+  try {
+    const fields = { HTML: html };
+    const leadName = `${leadData?.firstName || ''} ${leadData?.lastName || ''}`.trim();
+    if (leadName) fields['Lead Name'] = leadName;
+    if (leadData?.company) fields['Company'] = leadData.company;
+    await airtableProposalUpsert(slug, fields);
+    return true;
+  } catch (e) {
+    console.error('[OFFER-SERVE] store error:', e.message);
+    return false;
+  }
+}
+
+// Build a single-page offer, store it, and return the Render-served URL.
+async function createAndServeOffer(leadData) {
+  try {
+    let html, slug;
+    const offerType = leadData && leadData.offerType;
+    const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
+
+    if (offerType === 'b2booster') {
+      ({ html, slug } = await buildB2BoosterHTML(leadData));
+    } else if (style === 'classic') {
+      const company = leadData.company && leadData.company !== 'LinkedIn'
+        ? leadData.company : `${leadData.firstName}-${leadData.lastName}`.toLowerCase();
+      slug = createOfferSlug(company);
+      html = await generateOfferHTML(leadData);
+    } else {
+      ({ html, slug } = await buildProposalHTML(leadData)); // spirit (default)
+    }
+
+    if (!html || !slug) return null;
+    const stored = await storeOfferHtml(slug, html, leadData);
+    if (!stored) return null;
+    const url = `${OFFER_SERVE_BASE.replace(/\/$/, '')}/o/${slug}`;
+    console.log(`[OFFER-SERVE] Live (render): ${url}`);
+    return url;
+  } catch (e) {
+    console.error('[OFFER-SERVE] build error:', e.message);
+    return null;
+  }
 }
 
 // ─── GENERATE REPLY ───────────────────────────────────────────────────────────
@@ -3849,6 +3913,26 @@ app.get('/force-send/:id', async (req, res) => {
 // ─── PING (keep-alive for UptimeRobot) ───────────────────────────────────────
 
 app.get('/ping', (req, res) => res.send('pong'));
+
+// ─── SERVE OFFER PAGE (Render-hosted, no Netlify) ────────────────────────────
+// Serves the HTML stored in Airtable Proposals by createAndServeOffer.
+// The page's own pixel/tracking still posts back to this same bot.
+app.get('/o/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  try {
+    const rec = await airtableProposalGet(slug);
+    const html = rec?.fields?.HTML;
+    if (!html) {
+      return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[OFFER-SERVE] serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
 
 // ─── PROPOSAL TRACKING (Airtable Proposals table) ────────────────────────────
 
