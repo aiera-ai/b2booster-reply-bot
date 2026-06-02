@@ -19,6 +19,7 @@ const {
 const {
   createAndDeployGeneratorOffer,
   buildGeneratorHTML,
+  OFFER_THEMES: GENERATOR_THEMES,
 } = require('./proposal-generator');
 
 // ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
@@ -1188,9 +1189,19 @@ async function createAndDeployOffer(leadData) {
     if (url) return url;
     console.log('[OFFER-SERVE] render serve failed - falling back to Netlify path');
   }
-  // Generator ponudb (AIERA brand SaaS demo) - ai.aiera.si/g/{slug}
+  // Generator ponudb (AIERA brand SaaS demo). Served from Render (/g/{slug}/) by default,
+  // Netlify only if GENERATOR_HOST=netlify or the Render store fails.
   if (leadData && leadData.offerType === 'generator') {
-    const url = await createAndDeployGeneratorOffer(leadData);
+    let url = null;
+    if (GENERATOR_HOST === 'render') {
+      url = await createAndServeGeneratorOffer(leadData);
+      if (!url) {
+        console.log('[GENERATOR] render serve failed - falling back to Netlify');
+        url = await createAndDeployGeneratorOffer(leadData);
+      }
+    } else {
+      url = await createAndDeployGeneratorOffer(leadData);
+    }
     if (url) {
       // Persist URL so engagement tracker can look up lead by slug
       const leadName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
@@ -1261,6 +1272,40 @@ async function createAndServeOffer(leadData) {
     return url;
   } catch (e) {
     console.error('[OFFER-SERVE] build error:', e.message);
+    return null;
+  }
+}
+
+// ─── RENDER-HOSTED GENERATOR PAGES (no Netlify) ──────────────────────────────
+// The generator is multi-file (1 landing + 3 themed offers, landing links to them
+// with relative ./offer-{theme}.html). It used to deploy to Netlify; here we store
+// the 4 docs in Airtable and serve them from this bot under /g/{slug}/, mirroring
+// the single-page offer serving. The generated HTML is self-contained (tracking →
+// this bot, fonts → Google CDN), so only the hosting location changes.
+// Set GENERATOR_HOST=netlify to force the old behavior.
+const GENERATOR_HOST = (process.env.GENERATOR_HOST || 'render').toLowerCase(); // 'render' | 'netlify'
+const GENERATOR_RENDER_BASE = (process.env.GENERATOR_RENDER_URL || OFFER_SERVE_BASE || 'https://ponudbe.aiera.si').replace(/\/$/, '');
+const GENERATOR_THEME_LIST = Array.isArray(GENERATOR_THEMES) ? GENERATOR_THEMES : ['minimal', 'modern', 'premium'];
+
+// Build the generator (landing + themed offers), store each doc in Airtable keyed by
+// its path, and return the Render-served landing URL (with trailing slash so the
+// landing's relative ./offer-{theme}.html links resolve to /g/{slug}/offer-...).
+async function createAndServeGeneratorOffer(leadData, options = {}) {
+  try {
+    const { landingHtml, offerHtml, slug } = await buildGeneratorHTML(leadData, options);
+    if (!landingHtml || !slug) return null;
+    const storedLanding = await storeOfferHtml(`g/${slug}/index`, landingHtml, leadData);
+    if (!storedLanding) return null;
+    for (const theme of GENERATOR_THEME_LIST) {
+      if (offerHtml && offerHtml[theme]) {
+        await storeOfferHtml(`g/${slug}/offer-${theme}`, offerHtml[theme], leadData);
+      }
+    }
+    const url = `${GENERATOR_RENDER_BASE}/g/${slug}/`;
+    console.log(`[GENERATOR] Live (render): ${url}`);
+    return url;
+  } catch (e) {
+    console.error('[GENERATOR] render serve error:', e.message);
     return null;
   }
 }
@@ -4027,6 +4072,48 @@ app.get('/o/:slug', async (req, res) => {
   }
 });
 
+// ─── SERVE GENERATOR PAGES (Render-hosted, no Netlify) ───────────────────────
+// Multi-file: landing at /g/{slug}/ + themed offers at /g/{slug}/offer-{theme}.html,
+// all stored in Airtable Proposals by createAndServeGeneratorOffer. The landing uses
+// relative ./offer-{theme}.html links, so it MUST be served with a trailing slash.
+// Themed offer pages are registered first (more specific) so they win the match.
+app.get('/g/:slug/:file', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  const m = (req.params.file || '').match(/^offer-([a-z]+)\.html$/i);
+  if (!m) return res.status(404).send(page('Ni najdeno', '<p>Stran ne obstaja.</p>'));
+  const theme = m[1].toLowerCase();
+  try {
+    const rec = await airtableProposalGet(`g/${slug}/offer-${theme}`);
+    const html = rec?.fields?.HTML;
+    if (!html) return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[GENERATOR-SERVE] offer serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
+
+app.get('/g/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  // Redirect to the trailing-slash form so the landing's relative offer links resolve.
+  if (!req.originalUrl.split('?')[0].endsWith('/')) {
+    return res.redirect(301, `/g/${slug}/`);
+  }
+  try {
+    const rec = await airtableProposalGet(`g/${slug}/index`);
+    const html = rec?.fields?.HTML;
+    if (!html) return res.status(404).send(page('Ni najdeno', '<p>Ta stran ne obstaja ali ni več na voljo.</p>'));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[GENERATOR-SERVE] landing serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju strani.');
+  }
+});
+
 // ─── PROPOSAL TRACKING (Airtable Proposals table) ────────────────────────────
 
 async function airtableProposalUpsert(slug, fields) {
@@ -6324,26 +6411,26 @@ app.listen(PORT, () => {
   // Flush buffered offer-page tracking every 120s (one PATCH per active slug).
   setInterval(flushAllProposals, PROPOSAL_FLUSH_MS);
 
-  // Poll Instantly after warmup, then every 15 min
+  // Poll Instantly after warmup, then every 30 min (lower intensity — replies don't need to be instant)
   setTimeout(pollInstantlyReplies, 30 * 1000);
-  setInterval(pollInstantlyReplies, 15 * 60 * 1000);
+  setInterval(pollInstantlyReplies, 30 * 60 * 1000);
 
-  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 12h
-  // (12h not 6h — leads are 3+ days overdue, so half-day granularity is plenty; saves Airtable reads)
+  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + once a day
+  // (leads are 3+ days overdue — daily granularity is plenty and keeps Airtable reads minimal)
   setTimeout(processFollowups, 60 * 1000);
-  setInterval(processFollowups, 12 * 60 * 60 * 1000);
+  setInterval(processFollowups, 24 * 60 * 60 * 1000);
 
   // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
   setTimeout(processLiFollowups, 75 * 1000);
-  setInterval(processLiFollowups, 12 * 60 * 60 * 1000);
+  setInterval(processLiFollowups, 24 * 60 * 60 * 1000);
 
   // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
   setTimeout(processColdLinkedInLeads, 90 * 1000);
-  setInterval(processColdLinkedInLeads, 12 * 60 * 60 * 1000);
+  setInterval(processColdLinkedInLeads, 24 * 60 * 60 * 1000);
 
   // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
   setTimeout(processGeneratorEngagement, 105 * 1000);
-  setInterval(processGeneratorEngagement, 12 * 60 * 60 * 1000);
+  setInterval(processGeneratorEngagement, 24 * 60 * 60 * 1000);
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
