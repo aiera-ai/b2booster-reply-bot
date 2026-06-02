@@ -28,6 +28,11 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err.message);
 });
+// On spin-down/restart, flush any buffered offer-page tracking so we don't lose it.
+process.on('SIGTERM', async () => {
+  try { if (typeof flushAllProposals === 'function') await flushAllProposals(); } catch {}
+  process.exit(0);
+});
 
 const app = express();
 
@@ -355,6 +360,12 @@ async function logOfferEngagement(slug, event, data) {
 const AT_PENDING = process.env.AIRTABLE_PENDING_TABLE_ID || 'tblNV1AHq1VkyBcI5';
 const USE_AT_PENDING = !!AIRTABLE_PAT;
 
+// In-memory cache of *scheduled* sends so the 60s queue poll does NOT hit Airtable
+// every minute (that single poll was ~30k GET/month and blew the free 1000 cap).
+// Authoritative source for processScheduledSends; seeded from Airtable on boot and
+// reconciled every 6h, kept live by markScheduled (add) and deletePending (remove).
+const scheduledItems = {};
+
 // Disk helpers (fallback only)
 function loadPendingDisk() {
   if (!fs.existsSync(PENDING_FILE)) return {};
@@ -446,6 +457,7 @@ async function getPending(id) {
 }
 
 async function deletePending(id) {
+  delete scheduledItems[id]; // keep the in-memory scheduled cache in sync
   if (!USE_AT_PENDING) {
     const all = loadPendingDisk();
     delete all[id];
@@ -506,6 +518,7 @@ async function markScheduled(id, draft, sendAt, pendingData = null) {
           }
         }]
       });
+      scheduledItems[id] = { ...restored, id };
       console.log(`[QUEUE] Restored entry for ${id} from fallback data (Airtable)`);
       return;
     }
@@ -519,6 +532,7 @@ async function markScheduled(id, draft, sendAt, pendingData = null) {
         Data: JSON.stringify(merged).substring(0, 95000)
       }
     });
+    scheduledItems[id] = { ...merged, id, _recordId: rec.id };
   } catch (e) {
     console.error('[PENDING] markScheduled error:', e.message);
   }
@@ -688,9 +702,26 @@ async function executeSend(id, item) {
   }
 }
 
+// Seed/reconcile the in-memory scheduled cache from Airtable. One GET on boot +
+// every 6h (drift safety) instead of one GET every 60s.
+async function seedScheduledItems() {
+  if (!USE_AT_PENDING) return;
+  try {
+    const all = await loadPending();
+    for (const k of Object.keys(scheduledItems)) delete scheduledItems[k];
+    for (const [id, item] of Object.entries(all)) {
+      if (item.status === 'scheduled') scheduledItems[id] = { ...item, id };
+    }
+    console.log(`[QUEUE] Seeded ${Object.keys(scheduledItems).length} scheduled item(s) from Airtable`);
+  } catch (e) {
+    console.error('[QUEUE] seedScheduledItems error:', e.message);
+  }
+}
+
 async function processScheduledSends() {
-  const all = await loadPending();
   const now = Date.now();
+  // Use the in-memory cache when on Airtable (no per-minute GET); disk mode reads local file (free).
+  const all = USE_AT_PENDING ? scheduledItems : await loadPending();
   const overdue = Object.entries(all).filter(
     ([, item]) => item.status === 'scheduled' && new Date(item.sendAt) <= now
   );
@@ -1261,18 +1292,22 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`
   ].filter(Boolean).join('\n');
 
-  // When a personalized offer page exists and the lead is interested, the reply
-  // should drive them to OPEN that page (it holds details + booking) instead of
-  // cold-pushing a Calendly link. This is the missing step that left hot leads
-  // ("kako bi to naredili?", "kaj ponujate?") with nothing but a calendar link.
+  // Offer-link-first: whenever a personalized offer page exists, the reply drives the
+  // lead to OPEN that page (it holds details + a booking option) instead of cold-pushing
+  // a Calendly link. A cold "book a call" ask converts poorly; the page is a smaller ask,
+  // lets the lead self-qualify, and still contains the booking CTA. Calendly is only the
+  // fallback when no page exists; explicit call-requests are handled separately above.
   const offerUrl = leadData.offerUrl || null;
-  const useOfferCta = offerUrl && leadData.intent === 'positive';
+  const useOfferCta = !!offerUrl;
 
   // Pin addressing deterministically from the lead's own message (model kept mixing).
   const addressing = detectAddressing(hasRealMessage ? theirMessage : '');
   const addressingRule = addressing === 'ti'
     ? '\nADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently. Never switch to vikanje mid-message.'
     : '\nADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje, never mix the two.';
+
+  // Pin reply language to the lead's message language (model defaulted to Slovenian).
+  const languageRule = buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage);
 
   if (hasRealMessage && leadData.wantsCall) {
     // Lead asked to be called / left a number. A call is the hottest signal:
@@ -1283,17 +1318,17 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their message: "${theirMessage}"
 
-The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}`;
+The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
   } else if (hasRealMessage) {
     const ctaInstruction = useOfferCta
-      ? `They are clearly interested. Briefly answer their question in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so do NOT also paste a separate Calendly link. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
+      ? `Briefly answer their message in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so this is the main call to action: do NOT also paste a separate Calendly link and do NOT ask them to book a call directly. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
       : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${addressingRule}${variant.nudge}`;
+Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${addressingRule}${languageRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1301,7 +1336,7 @@ Context: ${theirMessage}
 
 Write a short, natural opening message. Lead with what we take off their plate (we run the outreach to the right decision-makers for them), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". NEVER promise a specific number of replies or meetings. Then move toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
-Be confident but humble, never cocky. Start the conversation naturally.${variant.nudge}`;
+Be confident but humble, never cocky. Start the conversation naturally.${languageRule}${variant.nudge}`;
   }
 
   const response = await anthropic.messages.create({
@@ -1366,6 +1401,64 @@ function detectAddressing(text) {
   const ti = /\b(tebe|tebi|tvoj|tvoja|tvoje|tvojo|tvojega|tvojem|pokli?ci me|povej|javi mi|posiljas|imas|lahko mi poves|ti)\b/.test(t);
   if (ti && !vi) return 'ti';
   return 'vi'; // default + when both present, stay formal
+}
+
+// Detect the lead's message language so we can pin the REPLY language deterministically.
+// The model kept defaulting to Slovenian (STYLE_GUIDE is Slovenian-heavy) even when the
+// lead wrote in another language, producing a reply whose language did not match the lead.
+// Returns 'sl' | 'en' | 'de' | 'cs' | null (null = let the model mirror the message).
+function detectLanguage(text) {
+  if (!text || text.trim().length < 3) return null;
+  const raw = text.toLowerCase();
+  const t = ' ' + raw + ' ';
+  const count = (arr) => arr.reduce((n, w) => n + (t.includes(' ' + w + ' ') ? 1 : 0), 0);
+
+  // Czech: distinctive háček/kroužek letters Slovenian/German never use are enough on
+  // their own. For diacritic-stripped text, require 2+ Czech-distinctive words (avoid
+  // single tokens like "prosim"/"vam" that also exist in Slovenian -> false positives).
+  if (/[řěůťďň]/i.test(raw)
+    || count(['děkuji','dekuji','dobrý','dobry','společnost','spolecnost','více','vice','nabídka','nabidka','jsme','jsem','není','neni','zpráva','zprava','přesně','presne']) >= 2) return 'cs';
+
+  // German: ß is unique; umlauts + a stopword, or two stopwords, confirm it. All words
+  // below are German-distinctive (not Slovenian/English) so two of them are safe.
+  const deStop = count(['und','der','die','das','ich','wir','ist','für','fur','mit','nicht','sehr','danke','dank','vielen','ihnen','ihre','ihren','ihr','sie','was','haben','sind','eine','einen','gerne','guten','bieten','würde','wurde','würden','wurden','möchten','moechten','grüße','grusse','freundlichen']);
+  if (/ß/.test(raw) || (/[äöü]/.test(raw) && deStop >= 1) || deStop >= 2) return 'de';
+
+  // Slovenian: šumniki or common stopwords.
+  const slDia = /[čšž]/.test(raw);
+  const slStop = count(['in','pa','je','ki','da','za','na','se','ne','vas','vam','hvala','prosim','lep','pozdrav','smo','sem','ponudbo','zanima','vaš','vas','ali','kako','kaj','bi','že','nas']);
+
+  // English: common stopwords.
+  const enStop = count(['the','you','your','we','is','are','thanks','thank','hi','hello','please','would','could','interested','more','information','about','what','how','our','can','will','not','for','and','with']);
+
+  if (slDia || slStop >= 2) {
+    // SL and EN share some short tokens; only flip to EN if EN clearly dominates and no šumniki.
+    if (!slDia && enStop >= slStop + 2) return 'en';
+    return 'sl';
+  }
+  if (enStop >= 2) return 'en';
+  return null;
+}
+
+const LANG_NAMES = { sl: 'Slovenian', en: 'English', de: 'German', cs: 'Czech' };
+
+// Build a hard LANGUAGE instruction pinned to the lead's message, mirroring the
+// deterministic addressingRule pattern. Placed at the END of the user prompt so it
+// wins over the Slovenian default baked into STYLE_GUIDE / VESNA_STYLE_GUIDE.
+function buildLanguageRule(theirMessage, hasRealMessage = true) {
+  if (!hasRealMessage) {
+    return '\nLANGUAGE (hard): Write in Slovenian (this is a first-contact opener).';
+  }
+  const lang = detectLanguage(theirMessage);
+  if (lang && lang !== 'sl') {
+    const name = LANG_NAMES[lang];
+    return `\nLANGUAGE (hard, OVERRIDES any Slovenian default in the style guide): The lead wrote in ${name}. Write your ENTIRE reply in ${name}. Do NOT write in Slovenian, do NOT translate, do NOT mix languages.`;
+  }
+  if (lang === 'sl') {
+    return '\nLANGUAGE (hard): The lead wrote in Slovenian. Reply entirely in Slovenian with correct šumniki (č, š, ž).';
+  }
+  // Unknown: instruct the model to mirror the lead's own language.
+  return '\nLANGUAGE (hard): Reply in the EXACT same language the lead used in their message above. Mirror their language and do not switch to Slovenian unless their message is in Slovenian.';
 }
 
 // Hard addressing instruction string, derived from the lead's own message.
@@ -3661,7 +3754,7 @@ app.post('/webhook/vesna', async (req, res) => {
         content: `Lead name: ${leadData.firstName} ${leadData.lastName}
 ${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
 
-Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.`
+Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? messageForAI : '', hasRealMessage)}`
       }]
     });
 
@@ -3961,15 +4054,9 @@ async function airtableProposalGet(slug) {
   return res?.records?.[0] || null;
 }
 
-async function airtableProposalLogEvent(slug, event, value, ua, ip) {
-  if (!AIRTABLE_PAT) return null;
-  const rec = await airtableProposalGet(slug);
-  if (!rec) {
-    // Create stub so events still get captured even if generation insert failed
-    await airtableProposalUpsert(slug, {});
-  }
-  const current = rec?.fields || {};
-  const now = new Date().toISOString();
+// Compute the field changes for a single tracking event against the current known
+// field values. Pure function — no Airtable calls. Returns a delta object.
+function _computeProposalEventFields(current, event, value, ua, ip, now) {
   const fields = {};
 
   // Append to events log
@@ -4019,8 +4106,86 @@ async function airtableProposalLogEvent(slug, event, value, ua, ip) {
   if (event === 'pagehide') {
     fields['Last Pagehide At'] = now;
   }
+  return fields;
+}
 
-  await airtableProposalUpsert(slug, fields);
+// ── Buffered proposal tracking ──────────────────────────────────────────────
+// Previously every pixel event did 3 Airtable calls (GET + upsert's GET + PATCH),
+// so one engaged visitor (heartbeat every 30s + scrolls) cost 45-60 calls. Now
+// events accumulate in memory and flush as ONE PATCH per slug every 120s (plus an
+// immediate flush for hot signals: calendly/cta click, exit-intent). A visitor now
+// costs ~1 seed GET + a couple of PATCHes instead of dozens of calls.
+const proposalAgg = {}; // slug -> { current, changed, recordId, dirty, lastTouch, seeded }
+const PROPOSAL_FLUSH_MS = 120 * 1000;
+const PROPOSAL_EVICT_MS = 30 * 60 * 1000;
+const PROPOSAL_HOT_EVENTS = new Set(['calendly_click', 'cta_click', 'exit_intent']);
+
+async function _ensureProposalAgg(slug) {
+  let agg = proposalAgg[slug];
+  if (agg && agg.seeded) return agg;
+  agg = proposalAgg[slug] || { current: {}, changed: {}, recordId: null, dirty: false, lastTouch: Date.now(), seeded: false };
+  try {
+    let rec = await airtableProposalGet(slug); // one GET per slug per server lifetime
+    if (!rec) {
+      // Create a stub so events are captured even if generation insert failed
+      const up = await airtableProposalUpsert(slug, {});
+      agg.recordId = up?.id || null;
+      agg.current = {};
+    } else {
+      agg.recordId = rec.id;
+      agg.current = { ...rec.fields };
+    }
+  } catch (e) {
+    console.error('[PROPOSAL-AT] seed error:', e.message);
+    agg.current = agg.current || {};
+  }
+  agg.seeded = true;
+  proposalAgg[slug] = agg;
+  return agg;
+}
+
+async function _flushProposal(slug) {
+  const agg = proposalAgg[slug];
+  if (!agg || !agg.dirty) return;
+  const payload = agg.changed;
+  agg.changed = {};
+  agg.dirty = false;
+  try {
+    if (agg.recordId) {
+      await airtableRequest('PATCH', `${AT_PROPOSALS}/${agg.recordId}`, { fields: payload });
+    } else {
+      const up = await airtableProposalUpsert(slug, payload);
+      if (up?.id) agg.recordId = up.id;
+    }
+  } catch (e) {
+    // Re-queue the changes on failure so we don't lose them
+    agg.changed = { ...payload, ...agg.changed };
+    agg.dirty = true;
+    console.error('[PROPOSAL-AT] flush error:', e.message);
+  }
+}
+
+async function flushAllProposals() {
+  const now = Date.now();
+  for (const slug of Object.keys(proposalAgg)) {
+    const agg = proposalAgg[slug];
+    if (agg.dirty) await _flushProposal(slug);
+    // Evict idle, clean slugs to bound memory (they re-seed on next event)
+    if (!agg.dirty && now - agg.lastTouch > PROPOSAL_EVICT_MS) delete proposalAgg[slug];
+  }
+}
+
+async function airtableProposalLogEvent(slug, event, value, ua, ip) {
+  if (!AIRTABLE_PAT) return null;
+  const agg = await _ensureProposalAgg(slug);
+  const now = new Date().toISOString();
+  const delta = _computeProposalEventFields(agg.current, event, value, ua, ip, now);
+  Object.assign(agg.current, delta);   // keep in-memory counters/max cumulative
+  Object.assign(agg.changed, delta);   // accumulate what needs writing
+  agg.dirty = true;
+  agg.lastTouch = Date.now();
+  // Hot signals: flush immediately so a buying intent is never lost to a crash/spin-down
+  if (PROPOSAL_HOT_EVENTS.has(event)) await _flushProposal(slug);
   return true;
 }
 
@@ -5562,7 +5727,7 @@ app.post('/webhook/outflo', async (req, res) => {
           system: VESNA_STYLE_GUIDE,
           messages: [{
             role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.`
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.${buildLanguageRule(messageText, true)}`
           }]
         });
         draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
@@ -6146,31 +6311,39 @@ app.listen(PORT, () => {
   console.log(`B2Booster Reply Bot on port ${PORT}`);
   console.log(`Send window: ${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00 CET`);
 
-  // Recover scheduled sends on startup (survives server restart/spin-up)
-  setTimeout(processScheduledSends, 10 * 1000);
+  // Recover scheduled sends on startup (survives server restart/spin-up):
+  // seed the in-memory cache from Airtable once, then process.
+  setTimeout(async () => { await seedScheduledItems(); await processScheduledSends(); }, 10 * 1000);
 
-  // Check queue every 60s
+  // Check queue every 60s — reads the in-memory cache, no Airtable call.
   setInterval(processScheduledSends, 60 * 1000);
+
+  // Reconcile the scheduled cache from Airtable every 6h (drift safety, ~4 GET/day).
+  setInterval(seedScheduledItems, 6 * 60 * 60 * 1000);
+
+  // Flush buffered offer-page tracking every 120s (one PATCH per active slug).
+  setInterval(flushAllProposals, PROPOSAL_FLUSH_MS);
 
   // Poll Instantly after warmup, then every 15 min
   setTimeout(pollInstantlyReplies, 30 * 1000);
   setInterval(pollInstantlyReplies, 15 * 60 * 1000);
 
-  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 6h
+  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 12h
+  // (12h not 6h — leads are 3+ days overdue, so half-day granularity is plenty; saves Airtable reads)
   setTimeout(processFollowups, 60 * 1000);
-  setInterval(processFollowups, 6 * 60 * 60 * 1000);
+  setInterval(processFollowups, 12 * 60 * 60 * 1000);
 
   // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
   setTimeout(processLiFollowups, 75 * 1000);
-  setInterval(processLiFollowups, 6 * 60 * 60 * 1000);
+  setInterval(processLiFollowups, 12 * 60 * 60 * 1000);
 
   // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
   setTimeout(processColdLinkedInLeads, 90 * 1000);
-  setInterval(processColdLinkedInLeads, 6 * 60 * 60 * 1000);
+  setInterval(processColdLinkedInLeads, 12 * 60 * 60 * 1000);
 
   // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
   setTimeout(processGeneratorEngagement, 105 * 1000);
-  setInterval(processGeneratorEngagement, 6 * 60 * 60 * 1000);
+  setInterval(processGeneratorEngagement, 12 * 60 * 60 * 1000);
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
