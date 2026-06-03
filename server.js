@@ -3517,6 +3517,17 @@ app.post('/webhook/instantly', async (req, res) => {
       console.log(`[EMAIL] Skipped self-address (anti-loop): ${leadData.email}`);
       return;
     }
+    // Paused campaign (e.g. Valtheron): don't draft. Check any account/campaign hint.
+    if (belongsToPausedCampaign({ eaccount: req.body.eaccount, to_address_email_list: req.body.to_email || req.body.eaccount, campaign: req.body.campaign_name })
+        || PAUSED_CAMPAIGN_DOMAINS.some(d => String(req.body.campaign_name || '').toLowerCase().includes(d.split('.')[0]))) {
+      console.log(`[EMAIL] Skipped paused campaign: ${leadData.email}`);
+      return;
+    }
+    // Dedup: never queue the same reply twice.
+    if (emailUuidSeen(leadData.emailUuid)) {
+      console.log(`[EMAIL] Skipped duplicate uuid: ${leadData.emailUuid} (${leadData.email})`);
+      return;
+    }
     leadData.intent = await classifyIntent(leadData.theirMessage);
     const draft = await generateReply('email', leadData, leadData.theirMessage);
     const id = uuidv4();
@@ -5188,6 +5199,52 @@ function saveLastPollTime(ts) {
   fs.writeFileSync(LAST_POLL_FILE, JSON.stringify({ timestamp: ts }));
 }
 
+// ─── EMAIL UUID DEDUP (anti-duplicate) ────────────────────────────────────────
+// Without this, the same Instantly reply (e.g. a lead like "Glorija") gets
+// re-queued on every poll: Render's disk is ephemeral so lastpoll.json resets on
+// restart and the poll re-ingests the last window of replies. Also persisted to
+// disk so in-session repeats are caught even after a single item throws.
+const EMAIL_UUID_DEDUP = new Map(); // uuid -> ts
+const EMAIL_UUID_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const EMAIL_UUID_FILE = './seen_emails.json';
+(function loadSeenEmails() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(EMAIL_UUID_FILE, 'utf8'));
+    for (const [k, t] of Object.entries(obj)) EMAIL_UUID_DEDUP.set(k, t);
+  } catch {}
+})();
+function emailUuidSeen(uuid) {
+  if (!uuid) return false;
+  const now = Date.now();
+  const prev = EMAIL_UUID_DEDUP.get(uuid);
+  if (prev && now - prev < EMAIL_UUID_TTL_MS) return true;
+  EMAIL_UUID_DEDUP.set(uuid, now);
+  // prune + persist
+  if (EMAIL_UUID_DEDUP.size > 3000) {
+    for (const [k, t] of EMAIL_UUID_DEDUP) if (now - t > EMAIL_UUID_TTL_MS) EMAIL_UUID_DEDUP.delete(k);
+  }
+  try { fs.writeFileSync(EMAIL_UUID_FILE, JSON.stringify(Object.fromEntries(EMAIL_UUID_DEDUP))); } catch {}
+  return false;
+}
+
+// ─── PAUSED CAMPAIGNS (do not draft replies) ──────────────────────────────────
+// The bot must NOT prepare replies for these Instantly sending accounts/campaigns.
+// valtheron.eu is an active cold-outreach campaign run manually via Instantly —
+// the user does not want bot-drafted replies for that business right now.
+const PAUSED_CAMPAIGN_DOMAINS = (process.env.PAUSED_CAMPAIGN_DOMAINS || 'valtheron.eu')
+  .split(',').map(d => d.toLowerCase().trim()).filter(Boolean);
+function belongsToPausedCampaign(item) {
+  if (!PAUSED_CAMPAIGN_DOMAINS.length) return false;
+  // eaccount = our mailbox the reply landed in (= the campaign's sending identity).
+  const candidates = [
+    item.eaccount,
+    item.to_address_email_list,
+    Array.isArray(item.to_address_email_list) ? item.to_address_email_list.join(',') : '',
+    item.cc_address_email_list
+  ].map(v => String(v || '').toLowerCase());
+  return PAUSED_CAMPAIGN_DOMAINS.some(dom => candidates.some(c => c.includes('@' + dom) || c.includes(dom)));
+}
+
 async function pollInstantlyReplies() {
   try {
     const since = getLastPollTime();
@@ -5231,12 +5288,31 @@ async function pollInstantlyReplies() {
         console.log(`[POLL] Skipped self-address (anti-loop): ${leadData.email}`);
         continue;
       }
-      leadData.intent = await classifyIntent(leadData.theirMessage);
-      const draft = await generateReply('email', leadData, leadData.theirMessage);
-      const id = uuidv4();
-      await storePending(id, { channel: 'email', leadData, draft });
-      await sendApprovalEmail(id, leadData, draft, 'email');
-      console.log(`[POLL] Queued: ${leadData.firstName} ${leadData.lastName}`);
+      // Paused campaign: don't draft replies for e.g. the Valtheron Instantly campaign.
+      if (belongsToPausedCampaign(item)) {
+        console.log(`[POLL] Skipped paused campaign (${item.eaccount || item.to_address_email_list}): ${leadData.email}`);
+        emailUuidSeen(leadData.emailUuid); // mark so we never reconsider it
+        continue;
+      }
+      // Dedup: never queue the same reply twice (survives restarts via disk).
+      if (emailUuidSeen(leadData.emailUuid)) {
+        console.log(`[POLL] Skipped duplicate uuid: ${leadData.emailUuid} (${leadData.email})`);
+        continue;
+      }
+      try {
+        leadData.intent = await classifyIntent(leadData.theirMessage);
+        const draft = await generateReply('email', leadData, leadData.theirMessage);
+        const id = uuidv4();
+        await storePending(id, { channel: 'email', leadData, draft });
+        await sendApprovalEmail(id, leadData, draft, 'email');
+        console.log(`[POLL] Queued: ${leadData.firstName} ${leadData.lastName}`);
+      } catch (itemErr) {
+        // One bad item must not block the cursor from advancing (else the whole
+        // window gets re-polled and re-queued forever). Roll back its dedup mark
+        // so it can be retried on the next poll.
+        EMAIL_UUID_DEDUP.delete(leadData.emailUuid);
+        console.error(`[POLL] Item failed (${leadData.email}):`, itemErr.message);
+      }
     }
 
     saveLastPollTime(now);

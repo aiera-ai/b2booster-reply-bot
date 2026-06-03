@@ -3,6 +3,7 @@ node_modules/
 *.log
 pending.json
 seen_conversations.json
+seen_emails.json
 training_examples.json
 lastpoll.json
 offer-files.json
