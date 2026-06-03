@@ -5225,6 +5225,12 @@ async function pollInstantlyReplies() {
         source: 'instantly-poll'
       };
       if (!leadData.theirMessage) continue;
+      // Anti-loop: Instantly sometimes returns our own outbound (e.g. the Valtheron
+      // campaign sender zan.bagaric@valtheron.eu) as "received". Never reply to ourselves.
+      if (isOurOwnAddress(leadData.email)) {
+        console.log(`[POLL] Skipped self-address (anti-loop): ${leadData.email}`);
+        continue;
+      }
       leadData.intent = await classifyIntent(leadData.theirMessage);
       const draft = await generateReply('email', leadData, leadData.theirMessage);
       const id = uuidv4();
@@ -5884,12 +5890,16 @@ const OUR_EMAIL_ADDRESSES = new Set([
   (process.env.MY_EMAIL || 'zan.bagaric@gmail.com'),
   (process.env.SENDING_EMAIL || 'zan@b2booster.si'),
   'zan@aiera.si',
+  'zan.bagaric@valtheron.eu',
   'bot@b2booster.eu',
   'vesna@b2booster.eu',
   'vesna@aiera.si'
 ].map(e => String(e).toLowerCase().trim()));
 // Any address on one of our own sending domains is also "us".
-const OUR_EMAIL_DOMAINS = ['b2booster.eu', 'b2booster.si', 'aiera.si'];
+// valtheron.eu is one of our own Instantly cold-outreach sending identities -
+// without it the poll re-ingests our own Valtheron campaign mail as "lead replies".
+const OUR_EMAIL_DOMAINS = (process.env.OUR_EMAIL_DOMAINS || 'b2booster.eu,b2booster.si,aiera.si,valtheron.eu')
+  .split(',').map(d => d.toLowerCase().trim()).filter(Boolean);
 function isOurOwnAddress(rawFrom) {
   if (!rawFrom) return false;
   // Extract bare address from a possible "Name <addr@x>" header.
