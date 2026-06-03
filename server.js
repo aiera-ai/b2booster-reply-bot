@@ -3513,6 +3513,10 @@ app.post('/webhook/instantly', async (req, res) => {
       source: 'instantly-webhook'
     };
     if (!leadData.theirMessage) return;
+    if (isOurOwnAddress(leadData.email)) {
+      console.log(`[EMAIL] Skipped self-address (anti-loop): ${leadData.email}`);
+      return;
+    }
     leadData.intent = await classifyIntent(leadData.theirMessage);
     const draft = await generateReply('email', leadData, leadData.theirMessage);
     const id = uuidv4();
@@ -5870,6 +5874,38 @@ app.post('/webhook/outflo', async (req, res) => {
 const EMAIL_REPLY_DEDUP = new Map();
 const EMAIL_REPLY_TTL_MS = 24 * 60 * 60 * 1000;
 
+// ─── SELF-ADDRESS GUARD (anti-loop) ───────────────────────────────────────────
+// The bot must NEVER process an inbound "reply" that came from one of our own
+// addresses. Without this, our own approval/notification/sent mail gets forwarded
+// back in by the Make Gmail-watch scenario and the bot replies to itself in an
+// endless loop. Make has a skip_self filter too, but it breaks silently, so this
+// is the authoritative defense-in-depth guard.
+const OUR_EMAIL_ADDRESSES = new Set([
+  (process.env.MY_EMAIL || 'zan.bagaric@gmail.com'),
+  (process.env.SENDING_EMAIL || 'zan@b2booster.si'),
+  'zan@aiera.si',
+  'bot@b2booster.eu',
+  'vesna@b2booster.eu',
+  'vesna@aiera.si'
+].map(e => String(e).toLowerCase().trim()));
+// Any address on one of our own sending domains is also "us".
+const OUR_EMAIL_DOMAINS = ['b2booster.eu', 'b2booster.si', 'aiera.si'];
+function isOurOwnAddress(rawFrom) {
+  if (!rawFrom) return false;
+  // Extract bare address from a possible "Name <addr@x>" header.
+  const m = String(rawFrom).match(/<([^>]+)>/);
+  const addr = (m ? m[1] : rawFrom).toLowerCase().trim();
+  if (OUR_EMAIL_ADDRESSES.has(addr)) return true;
+  // Pull our own gmail/domain matches even if wrapped in display name.
+  const at = addr.lastIndexOf('@');
+  if (at === -1) return false;
+  const domain = addr.slice(at + 1);
+  if (OUR_EMAIL_DOMAINS.includes(domain)) return true;
+  // Catch zan.bagaric@gmail.com (personal) explicitly.
+  if (addr === 'zan.bagaric@gmail.com') return true;
+  return false;
+}
+
 async function airtableFindLeadByEmailReply(email) {
   if (!AIRTABLE_PAT || !email) return null;
   try {
@@ -5889,6 +5925,12 @@ app.post('/webhook/email-reply', async (req, res) => {
     const { from, fromName, subject, body, inReplyTo, threadId } = req.body || {};
     if (!from || !body) {
       console.warn('[EMAIL-REPLY] Missing from or body');
+      return;
+    }
+
+    // Anti-loop: never reply to our own addresses (broken Make skip_self safety net).
+    if (isOurOwnAddress(from)) {
+      console.log(`[EMAIL-REPLY] Skipped self-address (anti-loop): ${from}`);
       return;
     }
 
