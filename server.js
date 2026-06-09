@@ -234,7 +234,10 @@ async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, stat
     };
     if (enrichData.email) fields['Email'] = enrichData.email;
     if (enrichData.phone) fields['Phone'] = enrichData.phone;
+    if (enrichData.language) fields['Language'] = enrichData.language;
     if (existing?.records?.length > 0) {
+      // Hard suppression: a generic upsert must NEVER overwrite "Do Not Contact".
+      if (existing.records[0].fields?.Status === 'Do Not Contact') delete fields['Status'];
       await airtableRequest('PATCH', `${AT_LEADS}/${existing.records[0].id}`, { fields });
       console.log(`[AIRTABLE] Lead updated: ${leadName}`);
     } else {
@@ -265,6 +268,120 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
     console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}${variantTag ? ` | ${variantTag}` : ''}`);
   } catch (e) {
     console.error('[AIRTABLE] logMessage error:', e.message);
+  }
+}
+
+// ─── LEAD STATUS / SUPPRESSION HELPERS ───────────────────────────────────────
+// Negative reply → "Not Interested" (crons stop, lead can still re-engage).
+// Unsubscribe → "Do Not Contact" (hard block: no replies, no crons, ever).
+
+async function airtableSetLeadStatus(linkedinUrl, email, status, leadName = '') {
+  if (!AIRTABLE_PAT || !status) return;
+  try {
+    let rec = null;
+    if (linkedinUrl) {
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`)}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (!rec && email) {
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{Email}="${email}"`)}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (rec) {
+      // typecast lets Airtable auto-create the select option (e.g. "Do Not Contact") on first use.
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Status': status }, typecast: true });
+    } else if (linkedinUrl || email) {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields: {
+        'Lead Name': leadName || '',
+        'LinkedIn URL': linkedinUrl || '',
+        'Email': email || '',
+        'Status': status
+      } }], typecast: true });
+    }
+    console.log(`[AIRTABLE] Status → ${status} (${linkedinUrl || email || leadName})`);
+  } catch (e) {
+    console.error('[AIRTABLE] setLeadStatus error:', e.message);
+  }
+}
+
+async function isDoNotContactLead(linkedinUrl, email = null) {
+  if (!AIRTABLE_PAT) return false;
+  try {
+    let formula = null;
+    if (linkedinUrl) formula = `AND({LinkedIn URL}="${linkedinUrl}", {Status}="Do Not Contact")`;
+    else if (email) formula = `AND({Email}="${email}", {Status}="Do Not Contact")`;
+    if (!formula) return false;
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`);
+    return !!(r?.records?.length);
+  } catch {
+    return false;
+  }
+}
+
+// Persist the lead's detected language so ALL later generators (followups, nudges,
+// closeouts, handoff email) write in the lead's language, not default Slovenian.
+async function airtableSaveLanguage(linkedinUrl, language) {
+  if (!AIRTABLE_PAT || !linkedinUrl || !language) return;
+  try {
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`)}&maxRecords=1`);
+    const rec = r?.records?.[0];
+    if (rec && rec.fields?.['Language'] !== language) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Language': language } });
+    }
+  } catch { /* non-blocking */ }
+}
+
+// Pull the recent conversation for a lead from the Messages table so reply drafts
+// see the WHOLE thread, not just the last inbound message (fixes non-sequitur replies).
+async function airtableGetThreadContext(linkedinUrl, limit = 6) {
+  if (!AIRTABLE_PAT || !linkedinUrl) return '';
+  try {
+    const filter = encodeURIComponent(`AND({LinkedIn URL}="${linkedinUrl}", OR({Direction}="inbound", {Direction}="outbound"))`);
+    const url = `${AT_MESSAGES}?filterByFormula=${filter}&maxRecords=${limit}&sort%5B0%5D%5Bfield%5D=Timestamp&sort%5B0%5D%5Bdirection%5D=desc`;
+    const r = await airtableRequest('GET', url);
+    const recs = (r?.records || []).reverse(); // oldest first
+    if (!recs.length) return '';
+    const lines = recs.map(rec => {
+      const f = rec.fields || {};
+      const who = f['Direction'] === 'outbound' ? 'We' : 'Lead';
+      const text = (f['Direction'] === 'outbound' ? (f['Draft Reply'] || f['Text']) : f['Text']) || '';
+      if (!text.trim()) return null;
+      return `${who}: ${text.substring(0, 400).replace(/\s+/g, ' ').trim()}`;
+    }).filter(Boolean);
+    if (!lines.length) return '';
+    return `\nConversation so far (oldest first). Use it for context, do NOT repeat points already made and do NOT re-introduce yourself:\n${lines.join('\n')}\n`;
+  } catch {
+    return '';
+  }
+}
+
+// FYI-only mail (no action buttons) when a lead unsubscribes. The bot never replies
+// to an opt-out; this just tells Žan it happened and that suppression is active.
+async function sendUnsubscribeNotif(leadData, message, channel) {
+  try {
+    const html = `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+        <div style="background:#fee2e2;border:2px solid #b91c1c;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+          <p style="margin:0;color:#7f1d1d;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">ODJAVA - lead označen kot Do Not Contact</p>
+          <p style="margin:6px 0 0;color:#7f1d1d;font-size:13px">Bot NE bo odgovoril in NE bo pošiljal nobenih followupov. Brez akcije s tvoje strani.</p>
+        </div>
+        <h2 style="margin:0 0 12px;font-size:18px">${leadData.firstName || ''} ${leadData.lastName || ''}</h2>
+        ${leadData.linkedinUrl ? `<p style="margin:0 0 12px;font-size:13px"><a href="${leadData.linkedinUrl}" style="color:#0a66c2">${leadData.linkedinUrl}</a></p>` : ''}
+        <div style="border-left:3px solid #b91c1c;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${(message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+        <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · unsubscribe (${channel})</p>
+      </div>`;
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
+        to: process.env.MY_EMAIL,
+        subject: `[${(channel || 'LI').toUpperCase()} ODJAVA] ${leadData.firstName || ''} ${leadData.lastName || ''} - ne kontaktiramo več`,
+        html
+      })
+    });
+  } catch (e) {
+    console.error('[UNSUB] notif failed:', e.message);
   }
 }
 
@@ -1352,7 +1469,14 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     : '\nADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje, never mix the two.';
 
   // Pin reply language to the lead's message language (model defaulted to Slovenian).
-  const languageRule = buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage);
+  const languageRule = buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null);
+
+  // Thread context: last few messages from Airtable so the reply continues the
+  // conversation instead of reacting to the last message in a vacuum.
+  let threadContext = '';
+  if (hasRealMessage && leadData.linkedinUrl) {
+    try { threadContext = await airtableGetThreadContext(leadData.linkedinUrl); } catch { /* non-blocking */ }
+  }
 
   if (hasRealMessage && leadData.wantsCall) {
     // Lead asked to be called / left a number. A call is the hottest signal:
@@ -1360,7 +1484,7 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     const phoneNote = leadData.messagePhone ? ` They left their number: ${leadData.messagePhone}.` : '';
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
-${enrichmentContext}
+${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
 The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
@@ -1370,7 +1494,7 @@ The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT 
       : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
-${enrichmentContext}
+${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
 Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${addressingRule}${languageRule}${variant.nudge}`;
@@ -1490,11 +1614,12 @@ const LANG_NAMES = { sl: 'Slovenian', en: 'English', de: 'German', cs: 'Czech' }
 // Build a hard LANGUAGE instruction pinned to the lead's message, mirroring the
 // deterministic addressingRule pattern. Placed at the END of the user prompt so it
 // wins over the Slovenian default baked into STYLE_GUIDE / VESNA_STYLE_GUIDE.
-function buildLanguageRule(theirMessage, hasRealMessage = true) {
+function buildLanguageRule(theirMessage, hasRealMessage = true, knownLang = null) {
   if (!hasRealMessage) {
     return '\nLANGUAGE (hard): Write in Slovenian (this is a first-contact opener).';
   }
-  const lang = detectLanguage(theirMessage);
+  // Prefer the LLM-classified language (classifyMessage) over the stopword heuristic.
+  const lang = knownLang || detectLanguage(theirMessage);
   if (lang && lang !== 'sl') {
     const name = LANG_NAMES[lang];
     return `\nLANGUAGE (hard, OVERRIDES any Slovenian default in the style guide): The lead wrote in ${name}. Write your ENTIRE reply in ${name}. Do NOT write in Slovenian, do NOT translate, do NOT mix languages.`;
@@ -1536,7 +1661,7 @@ async function polishSlovenian(text, opts = {}) {
 HARD RULES:
 - Keep the SAME language as the input. If the message is in English, German or Czech, proofread it in that language and do NOT translate.
 - Do NOT change the meaning, the offer, prices, or the length materially. Same number of sentences, same intent.
-- Preserve EXACTLY, character for character: any URL, email address, and the literal tokens [CALENDLY LINK] and [OFFER LINK]. Never rewrite, remove, or reformat them.
+- Preserve EXACTLY, character for character: any URL, email address, and the literal tokens [CALENDLY LINK], [CALENDLY_15MIN] and [OFFER LINK]. Never rewrite, remove, or reformat them.
 - Fix Slovenian grammar: correct case endings (skloni), verb conjugation, agreement, and word order. Restore missing šumniki (č, š, ž).
 - Remove dvojina (1st person dual: "pošljeva", "pogledava", "se slišiva", "sva", "midva") and replace with 1st person plural ("pošljemo", "pogledamo", "se slišimo").
 - Replace every em dash or en dash (— –) with a comma or a regular hyphen "-".
@@ -1552,6 +1677,7 @@ OUTPUT: only the corrected message text.`,
     if (!out || out.length < 3) return null;
     // Guard: never let the polisher drop a link placeholder if the input had it.
     if (text.includes('[CALENDLY LINK]') && !out.includes('[CALENDLY LINK]')) return null;
+    if (text.includes('[CALENDLY_15MIN]') && !out.includes('[CALENDLY_15MIN]')) return null;
     if (text.includes('[OFFER LINK]') && !out.includes('[OFFER LINK]')) return null;
     // Deterministic final guard: dashes/dvojina the LLM may still have left.
     return cleanArtifacts(out);
@@ -1563,29 +1689,76 @@ OUTPUT: only the corrected message text.`,
 
 // ─── INTENT CLASSIFICATION ────────────────────────────────────────────────────
 
-async function classifyIntent(message) {
-  if (!message || message.trim().length < 3) return 'neutral';
+// Deterministic opt-out guard. Runs BEFORE any AI call so an explicit "odjava /
+// ne pošiljaj več / unsubscribe" can never be misclassified and replied to.
+const UNSUB_RE = /(odjav\w*|ne\s+posiljaj\w*\s+(mi\s+)?(vec|nic|nicesar)|prenehajte?\s+(s\s+)?posiljat|ne\s+kontaktiraj|izbrisi(te)?\s+me|brisi(te)?\s+me\s+s|unsubscribe|remove\s+me|take\s+me\s+off|stop\s+(contacting|emailing|messaging|writing)|do\s+not\s+contact|opt[\s-]?out|abmelden|abbestellen|keine\s+weiteren\s+(nachrichten|mails)|neposilejte|odhlasit)/i;
+function isUnsubscribeMessage(text) {
+  if (!text) return false;
+  const t = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return UNSUB_RE.test(t);
+}
+
+// Language-aware negative closeout templates. The old hardcoded Slovenian string
+// went out even when the lead wrote in English/German - the #1 "weird reply" fail.
+const CLOSEOUT_BY_LANG = {
+  sl: (n, s) => `Razumem, hvala za odgovor${n ? ' ' + n : ''}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${s}`,
+  en: (n, s) => `Understood, thanks for letting me know${n ? ', ' + n : ''}. If anything changes down the line, I am happy to reconnect. Best regards, ${s}`,
+  de: (n, s) => `Verstanden, danke für Ihre Rückmeldung${n ? ', ' + n : ''}. Falls sich die Situation einmal ändert, melden Sie sich gerne. Freundliche Grüße, ${s}`,
+  cs: (n, s) => `Rozumím, děkuji za odpověď${n ? ', ' + n : ''}. Kdyby se situace někdy změnila, ozvěte se. S pozdravem, ${s}`
+};
+function buildNegativeCloseout(language, firstName, signoff) {
+  const f = CLOSEOUT_BY_LANG[language] || CLOSEOUT_BY_LANG.sl;
+  return f(firstName || '', signoff || 'Žan');
+}
+
+// Bare acknowledgement ("ok", "hvala", "super") - a full pitch reply with an offer
+// link to these reads pushy and weird. Detect them so the flow can skip drafting.
+const BARE_ACK_RE = /^(ok(ej|ay)?|v redu|velja|hvala(\s+(lepa|vam|ti))?|thanks?(\s+you)?|thank you|thx|super|odlicno|top|perfect|great|noted|dogovorjeno|may se|se vidimo|lp|lep pozdrav|danke)[\s.!,🙂👍🙏]*$/i;
+function isBareAck(text) {
+  const t = (text || '').trim().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return t.length > 0 && t.length <= 40 && !t.includes('?') && BARE_ACK_RE.test(t);
+}
+
+// Combined intent + language classification in ONE Haiku call. Language from the
+// LLM is far more reliable than the stopword heuristic (which whiffed on short
+// English messages and let the Slovenian-heavy style guide take over the reply).
+async function classifyMessage(message) {
+  if (!message || message.trim().length < 3) return { intent: 'neutral', language: null };
+  if (isUnsubscribeMessage(message)) return { intent: 'unsubscribe', language: detectLanguage(message) };
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 10,
+    max_tokens: 12,
     messages: [{
       role: 'user',
-      content: `Classify this reply intent. Return ONLY one word.
+      content: `Classify this B2B outreach reply. Return ONLY: intent|language (one line, lowercase).
 
+INTENT (one of):
+unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
 soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
 positive = interested, asking a question, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
 neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
-Message: "${message.substring(0, 300)}"
+LANGUAGE (of THEIR message, one of): sl, en, de, cs, other
 
-Return: negative, soft_negative, positive, or neutral`
+Message: "${message.substring(0, 1000)}"
+
+Return format example: positive|en`
     }]
   });
-  const intent = response.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');
-  const valid = ['negative', 'soft_negative', 'positive', 'neutral'];
-  return valid.includes(intent) ? intent : 'neutral';
+  const raw = response.content[0].text.trim().toLowerCase();
+  const [intentRaw, langRaw] = raw.split('|').map(s => (s || '').trim().replace(/[^a-z_]/g, ''));
+  const validIntents = ['unsubscribe', 'negative', 'soft_negative', 'positive', 'neutral'];
+  const validLangs = ['sl', 'en', 'de', 'cs'];
+  const intent = validIntents.includes(intentRaw) ? intentRaw : 'neutral';
+  const language = validLangs.includes(langRaw) ? langRaw : (detectLanguage(message) || null);
+  return { intent, language };
+}
+
+// Back-compat wrapper - existing call sites that only need the intent keep working.
+async function classifyIntent(message) {
+  return (await classifyMessage(message)).intent;
 }
 
 // ─── OFFER CLASSIFICATION (aiera vs b2booster) ────────────────────────────────
@@ -1797,7 +1970,7 @@ async function generateClosingReply(leadData, theirMessage) {
       content: `Lead: ${leadData.firstName} ${leadData.lastName}
 Their message: "${theirMessage}"
 
-Generate closing reply.`
+Generate closing reply.${buildLanguageRule(theirMessage, true, leadData.language || null)}`
     }]
   });
   const raw = response.content[0].text.trim();
@@ -2240,35 +2413,64 @@ async function airtableMarkOfferSent(linkedinUrl, leadName, email, offerType) {
   }
 }
 
-const HANDOFF_EMAIL_PROMPT = `You draft outreach emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
+const HANDOFF_EMAIL_PROMPT = `You draft short offer emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
 
-CONTEXT: The lead asked on LinkedIn for details/offer/presentation via email. You write the follow-up email.
-The LinkedIn first-touch was done by Vesna Pevec (kolegica). If the lead spoke with Vesna first, reference it naturally:
-- Good opener pattern: "Kot ste se dogovorili z mojo kolegico Vesno Pevec, vam pošiljam ..."
-- If the lead never interacted with Vesna, do NOT mention her at all. Open naturally referencing the LinkedIn conversation.
+CONTEXT: The lead asked on LinkedIn for details/offer via email. You write that email. When the user prompt says an offer page link is available, the WHOLE email is built around the single [OFFER LINK] token - that pattern books the meetings.
 
-ABOUT AIERA / B2Booster:
-AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
+THE PATTERN THAT WINS (follow it exactly):
+1. Personal greeting with their first name ("Boris pozdravljeni," / "Spoštovani," if no name).
+2. One sentence referencing the LinkedIn agreement ("kot dogovorjeno na Linkedinu, vam pošiljam ...") - or Vesna ("kot ste se dogovorili z mojo kolegico Vesno Pevec ...") ONLY if they actually spoke with Vesna first.
+3. One sentence framing what we prepared for THEIR company/department (use their industry/role if known).
+4. The [OFFER LINK] token on its own line.
+5. One closing sentence proposing a short meeting ("Predlagam kratek sestanek, kjer lažje dorečemo in nato pripravimo uradno ponudbo." / "Lahko se na kratko slišimo in dorečemo naslednje korake.").
+6. Sign-off: "Lep pozdrav,\nŽan Bagarič" (the email signature with phone is appended automatically - NEVER add phone/company info yourself).
 
-Pricing (only if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
-Soft proof (use sparingly, NEVER a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori." NEVER promise a specific number of replies or meetings. Tone stays humble, never cocky.
-Slovenia rule: We work the Slovenian market normally; the small market means we reach all target companies within a few months, and then often expand to foreign markets. NEVER imply we skip Slovenia.
+REAL EMAILS ŽAN SENT THAT GOT MEETINGS (mimic this rhythm and length exactly):
 
-WRITING RULES (strict):
-- Slovenian, šumniki correct (š, č, ž)
-- NEVER use dashes (pomišljaji "—"). Use commas or periods or regular hyphens "-".
-- Never use negative words: problem, težava, izziv, zamudno, zapleteno
-- Frame as opportunity, not pain
-- Polite, professional, modern SaaS tone
-- No bullet points
-- 4 to 6 short sentences total
-- Sign as: Žan Bagarič
-- End with one clear CTA: 15-min razgovor preko Calendly link [CALENDLY_15MIN]
-- Never include a phone number in the body
-- Vikanje VEDNO (Vi, Vas, Vam). Tikamo NIKOLI.
-- NEVER use dvojina (1st dual): "se slišiva", "pogledava". Use 1st plural: "se slišimo", "lahko pogledamo".
-- NEVER use banned cliches: "veseli me, če se kdaj pogovorimo", "rezerviraj si termin tukaj", "se vidiva".
-- Natural Calendly intro example: "Če vas zanima 15-min uskladitev, lahko izberete termin tukaj: [CALENDLY_15MIN]"
+Example 1 - SUBJECT: AI za Gorsko
+"Spoštovani,
+
+pošiljam vam nekaj izhodišč, kje vse bi lahko AI pomagal poslovanju celotne skupine Gorsko.
+
+[OFFER LINK]
+
+Predlagam kratek sestanek, kjer lažje dorečemo in nato pripravimo uradno ponudbo.
+
+Lep pozdrav,
+Žan Bagarič"
+
+Example 2 - SUBJECT: AI za Cinkarno Celje
+"Boris pozdravljeni,
+
+kot dogovorjeno na Linkedinu, vam pošiljam več informacij o možnosti sodelovanja. Fokus smo dali predvsem na vaš oddelek nabave in logistike.
+
+[OFFER LINK]
+
+Lahko se na kratko slišimo in dorečemo naslednje korake.
+
+Lep pozdrav,
+Žan Bagarič"
+
+Example 3 (lead used tikanje, so the email matches) - SUBJECT: AI za Habeco
+"Branko, pošiljam ti dogovorjen predlog sodelovanja.
+
+[OFFER LINK]
+
+Cene za nekatere storitve lažje definiramo po sestanku, ker so odvisne od več stvari, ki jih v živo hitreje dorečemo.
+
+Lep pozdrav,
+Žan Bagarič"
+
+RULES (strict):
+- 2 to 4 sentences plus the link line. NEVER more. Short beats complete.
+- SUBJECT pattern: "AI za {Company}" (or "AI za {oddelek/področje}" if a specific department was discussed). NEVER "AI predstavitev za {first name}", never salesy subjects.
+- If an offer link is available: [OFFER LINK] is the ONLY link in the email. Do NOT add a Calendly link and do NOT ask them to book a slot (Calendly comes later in followups). Propose a short meeting in words instead.
+- If NO offer link is available: end with one natural Calendly sentence using [CALENDLY_15MIN] ("Če vam ustreza, lahko izberete termin tukaj: [CALENDLY_15MIN]").
+- Language: write in the language the lead used on LinkedIn (Slovenian default). Slovenian: vikanje unless THEIR message used tikanje; correct šumniki (š, č, ž).
+- NEVER use dashes (pomišljaji "—"); use commas or hyphens "-". No bullet points. No negative words (problem, težava, izziv).
+- NEVER use dvojina ("se slišiva", "pogledava") - use 1st plural. No banned cliches ("rezerviraj si termin", "se vidiva").
+- Pricing only if they explicitly asked: 790 EUR setup + 890 EUR na mesec, never ranges. NEVER promise reply/meeting counts.
+- Never include a phone number in the body.
 
 OUTPUT FORMAT (strict):
 Line 1: SUBJECT: <subject line>
@@ -2287,6 +2489,7 @@ async function generateHandoffEmail(leadData, theirMessage) {
     leadData.seniority && `Seniority: ${leadData.seniority}`
   ].filter(Boolean).join('\n');
 
+  const offerUrl = leadData.offerUrl || null;
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 600,
@@ -2296,27 +2499,32 @@ async function generateHandoffEmail(leadData, theirMessage) {
       content: `Lead: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their LinkedIn message: "${theirMessage || '(prosil za email predstavitev)'}"
+Offer page link available: ${offerUrl ? 'YES - build the email around the [OFFER LINK] token, no Calendly' : 'NO - use the [CALENDLY_15MIN] fallback CTA'}
 
-Write the handoff email.`
+Write the handoff email.${buildLanguageRule(theirMessage, true, leadData.language || null)}`
     }]
   });
 
   let raw = response.content[0].text.trim();
-  // Pick Calendly URL based on offer type. B2Booster uses dedicated event link.
-  const calendlyForEmail = leadData.offerType === 'b2booster' ? CALENDLY_B2BOOSTER : CALENDLY_AI_15MIN;
-  raw = raw.replace(/\[CALENDLY_15MIN\]/g, calendlyForEmail);
-  raw = raw.replace(/\[CALENDLY LINK\]/g, calendlyForEmail);
 
-  // Parse SUBJECT: line
-  let subject = `AI predstavitev za ${leadData.firstName}`;
+  // Parse SUBJECT: line. Default follows Žan's proven pattern: "AI za {Company}".
+  const companyForSubject = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : null;
+  let subject = companyForSubject ? `AI za ${companyForSubject}` : `AI za ${leadData.firstName}`;
   let body = raw;
   const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
   if (subjMatch) {
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  // Lektorski pass on the body (URLs are preserved verbatim by the polisher).
+  // Lektorski pass on the body (URLs and link tokens are preserved verbatim by the polisher).
   body = (await polishSlovenian(body, { signature: 'Žan Bagarič' })) || body;
+
+  // Swap placeholders AFTER polish. Offer link first; Calendly only as fallback so
+  // the first email never double-CTAs (Calendly belongs in the followups).
+  const calendlyForEmail = leadData.offerType === 'b2booster' ? CALENDLY_B2BOOSTER : CALENDLY_AI_15MIN;
+  body = body.replace(/\[OFFER LINK\]/g, offerUrl || calendlyForEmail);
+  body = body.replace(/\[CALENDLY_15MIN\]/g, calendlyForEmail);
+  body = body.replace(/\[CALENDLY LINK\]/g, calendlyForEmail);
   return { subject, body };
 }
 
@@ -2342,7 +2550,7 @@ async function generateHandoffLinkedInReply(leadData, providedEmail) {
     system: HANDOFF_LI_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.\n${addressingRuleFor(leadData)}`
+      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.\n${addressingRuleFor(leadData)}${buildLanguageRule(leadData.theirMessage || '', true, leadData.language || null)}`
     }]
   });
   const raw = response.content[0].text.trim();
@@ -2368,7 +2576,7 @@ async function generateAskForEmailReply(leadData) {
     system: ASK_EMAIL_LI_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.\n${addressingRuleFor(leadData)}`
+      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.\n${addressingRuleFor(leadData)}${buildLanguageRule(leadData.theirMessage || '', true, leadData.language || null)}`
     }]
   });
   const raw = response.content[0].text.trim();
@@ -2565,7 +2773,20 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
   const id = uuidv4();
 
   if (email) {
-    // We have an email - build full handoff package
+    // We have an email - build full handoff package.
+    // Deploy the personalized offer page FIRST: the winning email pattern is
+    // 2-4 sentences built around that one link (not a Calendly pitch).
+    if (!leadData.offerUrl && !leadData.wantsCall) {
+      try {
+        const ou = await createAndDeployOffer(leadData);
+        if (ou) {
+          leadData.offerUrl = ou;
+          console.log(`[HANDOFF] Offer page ready for email: ${ou}`);
+        }
+      } catch (e) {
+        console.error('[HANDOFF] offer deploy failed (email falls back to Calendly):', e.message);
+      }
+    }
     const { subject, body } = await generateHandoffEmail(leadData, theirMessage);
     const liReply = await generateHandoffLinkedInReply(leadData, email);
 
@@ -2926,10 +3147,15 @@ Write the value-add follow-up email (step 2 of 3). Lead with a concrete industry
 Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, low pressure.`;
   }
 
+  // Write the followup in the LEAD's language (persisted on the lead record).
+  const langRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write the ENTIRE email INCLUDING the SUBJECT line in ${LANG_NAMES[leadData.language]}. Do NOT write in Slovenian.`
+    : '';
+
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 400,
-    system: systemPrompt + SHARED_LANG_RULES,
+    system: systemPrompt + SHARED_LANG_RULES + langRule,
     messages: [{ role: 'user', content: userPrompt }]
   });
 
@@ -2979,6 +3205,7 @@ async function airtableFindLeadsForFollowup() {
     company: rec.fields['Campaign'] || '',
     title: rec.fields['Title'] || '',
     industry: rec.fields['Industry'] || '',
+    language: rec.fields['Language'] || '',
     emailSentAt: rec.fields['Email Sent At'] || '',
     nextStep
   });
@@ -3027,7 +3254,8 @@ async function processFollowups() {
           company: c.company || '',
           linkedinUrl: c.linkedinUrl,
           title: c.title || '',
-          industry: c.industry || ''
+          industry: c.industry || '',
+          language: c.language || ''
         };
 
         const { subject, body, step } = await generateFollowupEmail(leadData, c.nextStep);
@@ -3152,6 +3380,7 @@ async function processGeneratorEngagement() {
     const filter = encodeURIComponent(
       `AND(` +
       `{Offer Generator URL}!="",` +
+      `{Status}!="Not Interested", {Status}!="Do Not Contact",` +
       `NOT({Offer Calendly Clicked}),` +
       `OR(NOT({Offer Nudge Sent At}),{Offer Nudge Sent At}=""),` +
       `OR(IS_BEFORE({Email Sent At}, "${cutoffIso}"),IS_BEFORE({Last Activity}, "${cutoffIso.slice(0, 10)}"))` +
@@ -3293,7 +3522,7 @@ async function airtableFindColdLeads() {
   try {
     const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const formula = encodeURIComponent(
-      `AND({Asked for Email}="Yes", {Email}!="", IS_BEFORE({Last Activity}, "${cutoff}"), {Cold Email Sent At}=BLANK(), {Booked At}=BLANK())`
+      `AND({Asked for Email}="Yes", {Email}!="", IS_BEFORE({Last Activity}, "${cutoff}"), {Cold Email Sent At}=BLANK(), {Booked At}=BLANK(), {Status}!="Not Interested", {Status}!="Do Not Contact")`
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
     if (!r?.records) return [];
@@ -3393,10 +3622,13 @@ Rules:
 
 async function generateLiFollowupMessage(leadData) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const langRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write the ENTIRE message in ${LANG_NAMES[leadData.language]}.`
+    : '';
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 150,
-    system: LI_FOLLOWUP_PROMPT + SHARED_LANG_RULES,
+    system: LI_FOLLOWUP_PROMPT + SHARED_LANG_RULES + langRule,
     messages: [{ role: 'user', content: `Lead: ${leadData.firstName} ${leadData.lastName}\nCompany: ${leadData.company || 'unknown'}\nLast message from them: "${leadData.lastMessage || '(no message)'}"\n\nWrite the LinkedIn nudge.` }]
   });
   return cleanArtifacts(response.content[0].text.trim());
@@ -3407,7 +3639,7 @@ async function airtableFindSilentLeads() {
   try {
     const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const formula = encodeURIComponent(
-      `AND({Status}="Replied", IS_BEFORE({Last Activity}, "${cutoff}"), {LI Followup Sent At}=BLANK(), {Asked for Email}=BLANK(), {Booked At}=BLANK())`
+      `AND({Status}="Replied", IS_BEFORE({Last Activity}, "${cutoff}"), {LI Followup Sent At}=BLANK(), {Asked for Email}=BLANK(), {Booked At}=BLANK(), {Status}!="Do Not Contact")`
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
     if (!r?.records) return [];
@@ -3422,6 +3654,7 @@ async function airtableFindSilentLeads() {
         linkedinUrl: rec.fields['LinkedIn URL'] || '',
         company,
         lastMessage: rec.fields['Last Message'] || '',
+        language: rec.fields['Language'] || '',
         channel: rec.fields['Channel'] || 'linkedin'
       };
     }).filter(x => x.linkedinUrl);
@@ -3443,8 +3676,11 @@ async function processLiFollowups() {
         // ("Tema ni aktualna", "ne zanima", "morda kdaj"). Mark them so we stop re-checking.
         if (c.lastMessage && c.lastMessage.trim().length > 3) {
           const lastIntent = await classifyIntent(c.lastMessage);
-          if (lastIntent === 'negative' || lastIntent === 'soft_negative') {
+          if (lastIntent === 'unsubscribe' || lastIntent === 'negative' || lastIntent === 'soft_negative') {
             console.log(`[LI-FOLLOWUP] Skipping ${c.leadName} - last message intent=${lastIntent}`);
+            // Persist the right suppression status so the lead never re-enters any cron.
+            const supStatus = lastIntent === 'unsubscribe' ? 'Do Not Contact' : 'Not Interested';
+            await airtableSetLeadStatus(c.linkedinUrl, null, supStatus, c.leadName).catch(() => {});
             await airtableRequest('PATCH', `${AT_LEADS}/${c.recordId}`, {
               fields: { 'LI Followup Sent At': new Date().toISOString() }
             }).catch(() => {});
@@ -3458,7 +3694,8 @@ async function processLiFollowups() {
           lastName: nameParts.slice(1).join(' '),
           company: c.company || '',
           linkedinUrl: c.linkedinUrl,
-          lastMessage: c.lastMessage
+          lastMessage: c.lastMessage,
+          language: c.language || ''
         };
 
         const nudge = await generateLiFollowupMessage(leadData);
@@ -3528,8 +3765,30 @@ app.post('/webhook/instantly', async (req, res) => {
       console.log(`[EMAIL] Skipped duplicate uuid: ${leadData.emailUuid} (${leadData.email})`);
       return;
     }
-    leadData.intent = await classifyIntent(leadData.theirMessage);
-    const draft = await generateReply('email', leadData, leadData.theirMessage);
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(null, leadData.email)) {
+      console.log(`[EMAIL] Do Not Contact - skipping ${leadData.email}`);
+      return;
+    }
+    const { intent, language } = await classifyMessage(leadData.theirMessage);
+    leadData.intent = intent;
+    leadData.language = language || null;
+    console.log(`[EMAIL] Intent: ${intent} | lang: ${language || '?'} | ${leadData.email}`);
+
+    if (intent === 'unsubscribe') {
+      await airtableSetLeadStatus(null, leadData.email, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+      await sendUnsubscribeNotif(leadData, leadData.theirMessage, 'email');
+      console.log(`[EMAIL] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.email}`);
+      return;
+    }
+
+    let draft;
+    if (intent === 'negative') {
+      await airtableSetLeadStatus(null, leadData.email, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+      draft = buildNegativeCloseout(language, leadData.firstName, 'Žan Bagarič');
+    } else {
+      draft = await generateReply('email', leadData, leadData.theirMessage);
+    }
     const id = uuidv4();
     await storePending(id, { channel: 'email', leadData, draft });
     await sendApprovalEmail(id, leadData, draft, 'email');
@@ -3669,19 +3928,46 @@ app.post('/webhook/linkedin', async (req, res) => {
       return;
     }
 
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(parsed.linkedinUrl)) {
+      console.log(`[LINKEDIN] Do Not Contact - skipping ${parsed.firstName} ${parsed.lastName}`);
+      return;
+    }
+
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
-      const intent = await classifyIntent(parsed.message);
+      const { intent, language } = await classifyMessage(parsed.message);
       leadData.intent = intent;
-      console.log(`[LINKEDIN] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[LINKEDIN] Intent: ${intent} | lang: ${language || '?'} | ${leadData.firstName} ${leadData.lastName}`);
+
+      if (intent === 'unsubscribe') {
+        // Opt-out: NO reply, hard suppression, FYI-only notif.
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'unsubscribe', parsed.message, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, parsed.message, 'linkedin');
+        console.log(`[LINKEDIN] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
 
       if (intent === 'negative') {
-        // Polite closeout - same pattern as /webhook/outflo (don't silently drop)
-        const draft = `Razumem, hvala za odgovor ${leadData.firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+        // Polite closeout in THEIR language + stop all future crons via status.
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+        const draft = buildNegativeCloseout(language, leadData.firstName, 'Žan');
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
         await sendApprovalEmail(id, leadData, draft, 'linkedin');
         console.log(`[LINKEDIN] Negative closeout queued for ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
+
+      if (intent === 'neutral' && isBareAck(parsed.message)) {
+        // Bare "ok"/"hvala" - replying with a pitch reads pushy. Log and stay quiet.
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'neutral', parsed.message, null, false).catch(() => {});
+        console.log(`[LINKEDIN] Bare ack ("${parsed.message.substring(0, 30)}") - no reply needed for ${leadData.firstName}`);
         return;
       }
 
@@ -3775,14 +4061,39 @@ app.post('/webhook/vesna', async (req, res) => {
       notificationContext = `${parsed.firstName} sent a message to Vesna on LinkedIn but text wasn't in the email.`;
     }
 
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(parsed.linkedinUrl)) {
+      console.log(`[VESNA] Do Not Contact - skipping ${parsed.firstName} ${parsed.lastName}`);
+      return;
+    }
+
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
-      const intent = await classifyIntent(parsed.message);
+      const { intent, language } = await classifyMessage(parsed.message);
       leadData.intent = intent;
-      console.log(`[VESNA] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[VESNA] Intent: ${intent} | lang: ${language || '?'} | ${leadData.firstName} ${leadData.lastName}`);
+
+      if (intent === 'unsubscribe') {
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'unsubscribe', parsed.message, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, parsed.message, 'vesna');
+        console.log(`[VESNA] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.firstName}`);
+        return;
+      }
 
       if (intent === 'negative') {
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
         console.log(`[VESNA] Skipping - negative response from ${leadData.firstName}`);
+        return;
+      }
+
+      if (intent === 'neutral' && isBareAck(parsed.message)) {
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'neutral', parsed.message, null, false).catch(() => {});
+        console.log(`[VESNA] Bare ack - no reply needed for ${leadData.firstName}`);
         return;
       }
 
@@ -3814,7 +4125,7 @@ app.post('/webhook/vesna', async (req, res) => {
         content: `Lead name: ${leadData.firstName} ${leadData.lastName}
 ${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
 
-Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? messageForAI : '', hasRealMessage)}`
+Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? messageForAI : '', hasRealMessage, leadData.language || null)}`
       }]
     });
 
@@ -5492,11 +5803,37 @@ async function pollLinkedInInbox() {
         source: 'linkedin-poll'
       };
 
-      // Classify intent
-      const intent = await classifyIntent(body);
+      // Hard suppression: never process a lead who opted out.
+      if (await isDoNotContactLead(linkedinUrl)) {
+        console.log(`[POLL] Do Not Contact - skipping ${firstName} ${lastName}`);
+        continue;
+      }
+
+      // Classify intent + language in one call
+      const { intent, language } = await classifyMessage(body);
       leadData.intent = intent;
-      console.log(`[POLL] Intent: ${intent} | ${firstName} ${lastName}`);
-      if (intent === 'negative') continue;
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[POLL] Intent: ${intent} | lang: ${language || '?'} | ${firstName} ${lastName}`);
+
+      if (intent === 'unsubscribe') {
+        await airtableSetLeadStatus(linkedinUrl, null, 'Do Not Contact', `${firstName} ${lastName}`);
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, body, 'linkedin');
+        console.log(`[POLL] UNSUBSCRIBE - Do Not Contact, no reply: ${firstName} ${lastName}`);
+        continue;
+      }
+      if (intent === 'negative') {
+        await airtableSetLeadStatus(linkedinUrl, null, 'Not Interested', `${firstName} ${lastName}`);
+        continue;
+      }
+      if (intent === 'neutral' && isBareAck(body)) {
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'neutral', body, null, false).catch(() => {});
+        console.log(`[POLL] Bare ack - no reply needed for ${firstName}`);
+        continue;
+      }
 
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, body);
@@ -5790,14 +6127,36 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
 
-    // Classify intent
-    const intent = await classifyIntent(messageText);
-    console.log(`[${senderLabel}] Intent: ${intent}`);
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(leadProfileUrl)) {
+      console.log(`[${senderLabel}] Do Not Contact - skipping ${leadFullName}`);
+      return;
+    }
+
+    // Classify intent + language in one call
+    const { intent, language } = await classifyMessage(messageText);
+    console.log(`[${senderLabel}] Intent: ${intent} | lang: ${language || '?'}`);
 
     // Parse name
     const nameParts = leadFullName.trim().split(' ');
     const firstName = nameParts[0] || 'Lead';
     const lastName = nameParts.slice(1).join(' ') || '';
+
+    if (intent === 'unsubscribe') {
+      // Opt-out: NO reply ever, hard suppression, FYI-only notif to Žan.
+      await airtableSetLeadStatus(leadProfileUrl, null, 'Do Not Contact', leadFullName);
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'unsubscribe', messageText, null, false).catch(() => {});
+      await sendUnsubscribeNotif({ firstName, lastName, linkedinUrl: leadProfileUrl }, messageText, isVesna ? 'vesna' : 'linkedin');
+      console.log(`[${senderLabel}] UNSUBSCRIBE - Do Not Contact, no reply: ${leadFullName}`);
+      return;
+    }
+
+    if (intent === 'neutral' && isBareAck(messageText)) {
+      // Bare "ok"/"hvala" - a pitch reply here reads pushy. Log and stay quiet.
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'neutral', messageText, null, false).catch(() => {});
+      console.log(`[${senderLabel}] Bare ack ("${messageText.substring(0, 30)}") - no reply needed`);
+      return;
+    }
 
     // Enrichment - only for interested leads. PRIMARY: our own DB (B2Booster
     // Campaigns app) - first-party company/title/industry, matches Outflo's URL
@@ -5832,6 +6191,7 @@ app.post('/webhook/outflo', async (req, res) => {
       researchSummary: ownData?.researchSummary || '',
       theirMessage: messageText,
       intent,
+      language: language || null,
       campaignName,
       accountName: acct.full_name || (isVesna ? 'Vesna Pevec' : 'Žan Bagarič'),
       accountFirstName: acct.first_name || (isVesna ? 'Vesna' : 'Žan'),
@@ -5865,8 +6225,10 @@ app.post('/webhook/outflo', async (req, res) => {
 
     if (intent === 'negative') {
       // Sign as whoever owns the profile the reply goes out from (Vesna stays Vesna).
+      // Closeout goes out in THEIR language; status stops all future crons.
+      await airtableSetLeadStatus(leadProfileUrl, null, 'Not Interested', leadFullName);
       const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
-      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
+      draft = buildNegativeCloseout(language, firstName, signoff);
     } else {
       // Check for email handoff before drafting normal reply
       const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
@@ -5900,7 +6262,7 @@ app.post('/webhook/outflo', async (req, res) => {
           system: VESNA_STYLE_GUIDE,
           messages: [{
             role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.${buildLanguageRule(messageText, true)}`
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.${buildLanguageRule(messageText, true, language || null)}`
           }]
         });
         draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
@@ -5933,7 +6295,12 @@ app.post('/webhook/outflo', async (req, res) => {
     console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
     // Log to Airtable (non-blocking)
-    airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText, apolloData || {}).catch(() => {});
+    airtableUpsertLead(
+      leadProfileUrl, leadFullName, campaignName, channel,
+      intent === 'negative' ? 'Not Interested' : 'Replied',
+      messageText,
+      { ...(apolloData || {}), language: language || null }
+    ).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', intent, messageText, null, false).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false, leadData.abVariant || null).catch(() => {});
 
@@ -6037,6 +6404,13 @@ app.post('/webhook/email-reply', async (req, res) => {
     // Try to look up the lead (gives us context: name, company, LinkedIn url, offer type)
     const leadRec = await airtableFindLeadByEmailReply(from);
     const f = leadRec?.fields || {};
+
+    // Hard suppression: lead opted out earlier - never process.
+    if (f['Status'] === 'Do Not Contact') {
+      console.log(`[EMAIL-REPLY] Do Not Contact - skipping ${from}`);
+      return;
+    }
+
     const leadName = f['Lead Name'] || fromName || from.split('@')[0];
     const nameParts = leadName.trim().split(' ');
     const firstName = nameParts[0] || 'Lead';
@@ -6065,13 +6439,26 @@ app.post('/webhook/email-reply', async (req, res) => {
       inReplyTo: inReplyTo || ''
     };
 
-    // Classify intent
-    const intent = await classifyIntent(body);
+    // Classify intent + language in one call
+    const { intent, language } = await classifyMessage(body);
     leadData.intent = intent;
-    console.log(`[EMAIL-REPLY] ${from} | intent=${intent} | subj="${subject}"`);
+    leadData.language = (language || f['Language'] || null) || null;
+    if (language && leadData.linkedinUrl) airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+    console.log(`[EMAIL-REPLY] ${from} | intent=${intent} | lang=${language || '?'} | subj="${subject}"`);
+
+    if (intent === 'unsubscribe') {
+      // Opt-out: NO reply, hard suppression, FYI-only notif.
+      await airtableSetLeadStatus(leadData.linkedinUrl || null, from, 'Do Not Contact', leadName);
+      airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
+      await sendUnsubscribeNotif(leadData, body, 'email');
+      console.log(`[EMAIL-REPLY] UNSUBSCRIBE - Do Not Contact, no reply: ${from}`);
+      return;
+    }
 
     if (intent === 'negative') {
-      const draft = `Hvala za odgovor ${firstName}. Razumem, ostajamo na voljo če bi se kdaj situacija spremenila.\n\nLep pozdrav,\nŽan Bagarič`;
+      // Closeout in THEIR language; status flip stops the 3-touch followup cron.
+      await airtableSetLeadStatus(leadData.linkedinUrl || null, from, 'Not Interested', leadName);
+      const draft = buildNegativeCloseout(leadData.language, firstName, 'Žan Bagarič');
       const id = uuidv4();
       await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-negative' });
       await sendApprovalEmail(id, leadData, draft, 'email');
