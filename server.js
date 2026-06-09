@@ -1384,7 +1384,9 @@ async function createAndServeOffer(leadData) {
     if (!html || !slug) return null;
     const stored = await storeOfferHtml(slug, html, leadData);
     if (!stored) return null;
-    const url = `${OFFER_SERVE_BASE.replace(/\/$/, '')}/o/${slug}`;
+    // Clean root-level URL (ponudbe.aiera.si/gorsko) - matches the premium look of
+    // Žan's manual aiera.si/{company} pages. Old /o/{slug} links keep working.
+    const url = `${OFFER_SERVE_BASE.replace(/\/$/, '')}/${slug}`;
     console.log(`[OFFER-SERVE] Live (render): ${url}`);
     return url;
   } catch (e) {
@@ -1451,7 +1453,9 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     leadData.seniority && `Seniority: ${leadData.seniority}`,
     // First-party research from our own DB - use it to personalize, do NOT quote verbatim.
     leadData.researchSummary && `What we know about their company (use naturally, do not quote): ${leadData.researchSummary}`,
-    leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`
+    leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`,
+    // One-liner the offer classifier wrote specifically for this lead - weave it in naturally.
+    leadData.personalizationHook && `Personalization hook (use naturally if it fits): ${leadData.personalizationHook}`
   ].filter(Boolean).join('\n');
 
   // Offer-link-first: whenever a personalized offer page exists, the reply drives the
@@ -2079,6 +2083,11 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
     ? `<span style="background:#ede9fe;color:#5b21b6;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">OFFER ${leadData.offerType.toUpperCase()}</span>`
     : '';
 
+  // Language badge - spot a wrong-language draft BEFORE approving it.
+  const langBadge = leadData.language
+    ? `<span style="background:${leadData.language === 'sl' ? '#f3f4f6' : '#fff7ed'};color:${leadData.language === 'sl' ? '#4b5563' : '#9a3412'};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">JEZIK ${leadData.language.toUpperCase()}</span>`
+    : '';
+
   // Inbound message - always show, prominent. If empty say so.
   // Fallback to leadData.lastMessage (used by followup/cold crons that pull from Airtable's "Last Message" field).
   const inboundMessage = leadData.theirMessage || leadData.lastMessage || '';
@@ -2207,7 +2216,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
       ${callBar}
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-          ${channelBadge}${intentBadge}${accountBadge}${offerTypeBadge}${variantBadge}
+          ${channelBadge}${intentBadge}${langBadge}${accountBadge}${offerTypeBadge}${variantBadge}
         </div>
         <h2 style="margin:0;font-size:20px;color:#111;font-weight:700">${leadData.firstName} ${leadData.lastName} ${actionLabel}</h2>
       </div>
@@ -3343,6 +3352,9 @@ async function generateGeneratorNudge(leadData, kase, offerUrl, channel) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   const anthropic = new Anthropic({ apiKey });
 
+  const nudgeLangRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write subject AND body in ${LANG_NAMES[leadData.language]}.`
+    : '';
   const userBlock = `Lead: ${leadData.firstName || ''} ${leadData.lastName || ''}
 Company: ${leadData.company || 'unknown'}
 Title: ${leadData.title || 'unknown'}
@@ -3356,7 +3368,7 @@ Generate the JSON now.`;
   const r = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 500,
-    system: GEN_NUDGE_PROMPT,
+    system: GEN_NUDGE_PROMPT + nudgeLangRule,
     messages: [{ role: 'user', content: userBlock }]
   });
   let raw = r.content[0].text.trim();
@@ -3402,7 +3414,8 @@ async function processGeneratorEngagement() {
           company: f['Company'] || '',
           linkedinUrl: f['LinkedIn URL'] || '',
           title: f['Title'] || '',
-          industry: f['Industry'] || ''
+          industry: f['Industry'] || '',
+          language: f['Language'] || ''
         };
         const offerUrl = f['Offer Generator URL'];
         const opened = !!f['Offer Opened At'];
@@ -3493,6 +3506,9 @@ Rules:
 
 async function generateColdReachEmail(leadData) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const coldLangRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write subject AND body in ${LANG_NAMES[leadData.language]}.`
+    : '';
   const prompt = `Lead: ${leadData.firstName} ${leadData.lastName}
 Company context: ${leadData.company || 'unknown'}
 Their last LinkedIn message: "${leadData.lastMessage || '(no message recorded)'}"
@@ -3502,7 +3518,7 @@ Write the cold follow-up email. Return JSON: { "subject": "...", "body": "..." }
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    system: COLD_REACH_PROMPT + SHARED_LANG_RULES,
+    system: COLD_REACH_PROMPT + SHARED_LANG_RULES + coldLangRule,
     messages: [{ role: 'user', content: prompt }]
   });
 
@@ -3532,7 +3548,8 @@ async function airtableFindColdLeads() {
       linkedinUrl: rec.fields['LinkedIn URL'] || '',
       email: rec.fields['Email'] || '',
       company: rec.fields['Campaign'] || '',
-      lastMessage: rec.fields['Last Message'] || ''
+      lastMessage: rec.fields['Last Message'] || '',
+      language: rec.fields['Language'] || ''
     })).filter(x => x.email);
   } catch (e) {
     console.error('[COLD] find error:', e.message);
@@ -6906,6 +6923,32 @@ async function ensureCalendlySubscription() {
     console.error('[CALENDLY] Subscription bootstrap error:', e.message);
   }
 }
+
+// ─── CLEAN OFFER URLS (root-level slugs) ─────────────────────────────────────
+// Registered LAST so every named route above wins first. Serves the same Airtable
+// HTML as /o/:slug but at ponudbe.aiera.si/{slug} - the premium look that matches
+// Žan's manual aiera.si/{company} pages. Guarded: slug pattern only, no dots
+// (favicon.ico/robots.txt skip Airtable entirely).
+const ROOT_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,59}$/;
+app.get('/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim().toLowerCase();
+  if (!ROOT_SLUG_RE.test(slug)) {
+    return res.status(404).send(page('Ni najdeno', '<p>Ta stran ne obstaja.</p>'));
+  }
+  try {
+    const rec = await airtableProposalGet(slug);
+    const html = rec?.fields?.HTML;
+    if (!html) {
+      return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[OFFER-SERVE] root serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
 
 // ─── START ────────────────────────────────────────────────────────────────────
 

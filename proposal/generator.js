@@ -246,6 +246,22 @@ function buildUserPrompt({ leadData, persona, themeName }) {
   const industry = leadData.industry || leadData.industryContext || '';
   const context = leadData.theirMessage || leadData.context || '';
 
+  // First-party research: this is what turns the page from a product pitch into a
+  // company-specific proposal ("kje vse bi AI pomagal poslovanju {Company}").
+  const researchLines = [
+    leadData.researchSummary && `- Kaj vemo o podjetju: ${leadData.researchSummary}`,
+    leadData.fitReason && `- Zakaj so dober fit: ${leadData.fitReason}`,
+    leadData.personalizationHook && `- Personalization hook (iz classifierja): ${leadData.personalizationHook}`,
+    leadData.employees && `- Velikost: ${leadData.employees} zaposlenih`,
+    leadData.country && `- Država: ${leadData.country}`
+  ].filter(Boolean).join('\n');
+
+  // Page language follows the lead (persisted on the lead record). Slovenian default.
+  const LANG_FULL = { en: 'ANGLEŠČINI (English)', de: 'NEMŠČINI (Deutsch)', cs: 'ČEŠČINI (Czech)' };
+  const langOverride = leadData.language && LANG_FULL[leadData.language]
+    ? `\nJEZIK STRANI (NAJVIŠJA PRIORITETA, prepiše vsa pravila o slovenščini zgoraj): Naslovnik komunicira v ${LANG_FULL[leadData.language]}. VSA besedila v JSON izhodu napiši v tem jeziku, na native ravni. Slovenska pravila o šumnikih ne veljajo, pravila o tonu, prepovedanih frazah in konkretnosti pa ostanejo.\n`
+    : '';
+
   return `Pripravi predlog sodelovanja za naslednjega naslovnika.
 
 NASLOVNIK:
@@ -256,12 +272,18 @@ NASLOVNIK:
 - Persona blueprint: ${persona.label}
 - Persona theme (fokus): ${persona.spotlight.themes.join(', ')}
 - Spotlight section bo: "${persona.spotlight.label}"
-
+${researchLines ? `
+RAZISKAVA O PODJETJU (prva roka, uporabi to kot hrbtenico vsebine):
+${researchLines}
+` : ''}
 KONTEKST (od kod prihaja stik, kaj je rekel/-a):
 ${context || 'Outbound stik prek LinkedIn ali emaila. Naslovnik je izrazil zanimanje za AI rešitve.'}
-
+${langOverride}
 CILJ TEGA DOKUMENTA:
 Personaliziran predlog sodelovanja, ki ${fullName.split(' ')[0] || 'naslovnik'} prepriča, da rezervira 15-minutni Calendly sestanek. Brez cen. Brez splošnih agencijskih besed.
+
+NAJPOMEMBNEJŠE PRAVILO (to loči stran, ki proda, od strani, ki jo zaprejo):
+Stran NI predstavitev AIERE in njenih storitev. Stran je odgovor na vprašanje "kje vse bi AI konkretno pomagal poslovanju podjetja ${company}". Vsaka sekcija govori o NJIHOVIH oddelkih, procesih in dnevnem delu, AIERA je samo izvajalec. Če kontekst ali raziskava omenja konkreten oddelek ali use-case (npr. nabava, logistika, prodajne ponudbe, customer service), postavi CELOTEN fokus strani tja - tako kot bi svetovalec pripravil izhodišča za ta konkreten oddelek.
 
 ZAHTEVE ZA KOPIJO:
 1. Vsak tekst MORA biti specifičen za ${company} in role "${title}".
@@ -269,7 +291,7 @@ ZAHTEVE ZA KOPIJO:
 3. Ko omeniš osebo, uporabi: "${fullName.split(' ')[0]}" (samo ime) ali "g. ${leadData.lastName}" za bolj formalne reference.
 4. Hero mock widget mora ponazoriti KONKRETEN use-case za "${industry || persona.label}". Ne generičnih stvari.
 5. FAQ vprašanja MORAJO naslavljati prave ugovore te persone (persona ima v fokusu: ${persona.faqFocus.join(', ')}).
-6. resitveModules: izberi 6 modulov, ki so smiselni za to persono+industrijo (ne generic AI features).
+6. resitveModules: izberi 6 modulov, ki so smiselni za to persono+industrijo (ne generic AI features). Vsak modul poimenuj po NJIHOVEM procesu/oddelku (npr. "AI za pripravo ponudb v prodaji", ne "AI Workflow Engine").
 7. spotlightBullets: pišejo TOČNO o tem, kar je za to persono najbolj kritično.
 
 PRODUCT KNOWLEDGE - AIERA reference moduli (ti so resnični, jih lahko vključiš če pasujejo):
