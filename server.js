@@ -264,7 +264,8 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
       'Timestamp': new Date().toISOString()
     };
     if (variantTag) fields['Variant'] = variantTag;
-    await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }] });
+    // typecast lets Airtable auto-create new Intent options (e.g. "vendor_pitch") on first use.
+    await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }], typecast: true });
     console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}${variantTag ? ` | ${variantTag}` : ''}`);
   } catch (e) {
     console.error('[AIRTABLE] logMessage error:', e.message);
@@ -977,9 +978,15 @@ WRITING RULES:
 - Never use negative or low-energy words: problem, težava, izziv, zamudno, zapleteno
 - Frame everything as opportunity, not pain
 - No bullet point lists inside messages
-- Sign as: Žan Bagarič (samo na koncu, ne v sredini)
+- Sign as: Žan Bagarič (samo na koncu, ne v sredini). ALWAYS sign, also in English/German/Czech replies.
 - Always include Calendly CTA as the literal placeholder: [CALENDLY LINK]
 - Never include a phone number
+
+CLOSE / CTA RULES (hard, apply to EVERY reply):
+- Every reply MUST end with exactly ONE concrete next step: either one specific question the lead can answer in a sentence, or two proposed call times (e.g. "Vam ustreza četrtek ob 10.00 ali petek ob 13.00?"). A link alone is NOT a close.
+- NEVER promise a future action ("pošljemo vam ponudbo v naslednjih dneh", "javimo se v kratkem", "we'll get back to you", "kmalu vam pripravimo"). FORBIDDEN. Everything you offer must be delivered IN THIS MESSAGE (the link, the answer, the proposed times). If something cannot be delivered now, do not promise it.
+- MIRROR LENGTH: if the lead wrote one short line, reply in max 2 sentences. Never write more than roughly twice the length of their message (signature excluded).
+- Maximum ONE exclamation mark per message, preferably zero. Calm confidence, not cheerleading.
 
 LINKEDIN TONE:
 - Very short: 2 to 4 sentences maximum
@@ -1037,10 +1044,15 @@ CRITICAL HANDOFF RULE - NEVER mention "Žan" or any director by name, and NEVER 
 - WRONG: signing the message "Žan" or "Žan Bagarič" (the message comes from Vesna's profile)
 - WRONG: "direktor Žan bo stopil v stik", "kolega Žan"
 - RIGHT: Speak as "mi/aiera/B2Booster team", neutrally, and sign as Vesna Pevec.
-- Use natural variations like:
-  - "Pripravimo vam ponudbo, ki vam jo pošljemo na email v naslednjih dneh."
-  - "Pogledamo vaš primer in vam pošljemo konkretno ponudbo na email."
-- Why: It feels professional that "the team" prepares the offer. The offer email itself will then naturally reference "kot ste se dogovorili z Vesno Pevec".
+
+NEXT-STEP RULE (hard):
+- NEVER promise a future action with vague timing: "pošljemo vam ponudbo v naslednjih dneh", "javimo se v kratkem", "pošljemo na email" without a concrete step are ALL FORBIDDEN. These promises create dead ends.
+- Instead, ALWAYS end with ONE concrete question that moves the conversation forward. The best default: ask for their email address so the offer can be sent immediately.
+  - RIGHT: "Z veseljem vam pripravimo konkreten predlog. Na kateri e-naslov vam ga pošljemo?"
+  - RIGHT: "Super, pripravimo vam predlog po meri. Mi zaupate vaš e-naslov, da vam ga pošljemo še danes?"
+  - If their email is ALREADY visible in their message, confirm sending to that address instead of asking.
+- MIRROR LENGTH: if the lead wrote one short line, reply in max 2 sentences.
+- Maximum ONE exclamation mark per message, preferably zero.
 
 TONE:
 - Friendly and professional, like a capable coordinator
@@ -1491,17 +1503,29 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
+The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
   } else if (hasRealMessage) {
+    // Structure rotation (anti-template): the old fixed example ("Pripravil sem vam
+    // kratek pregled...") leaked verbatim into ~60% of drafts. Pick one of 4 reply
+    // structures deterministically per lead so consecutive drafts do not read alike.
+    const structures = [
+      `STRUCTURE: React to ONE concrete detail from their message in a single sentence, then give the link with a short intro in your own words, then close with one yes/no question about whether this direction makes sense for them.`,
+      `STRUCTURE: Answer their point, then ask ONE short question about their current situation (how they handle outreach/quotes today), and offer the link as supporting detail mid-message, not as the closing line.`,
+      `STRUCTURE: Lead with the single most relevant thing we would take off their plate given their role/industry, back it with the link, close by proposing two concrete call times (weekday + hour, e.g. "četrtek ob 10.00 ali petek ob 13.00").`,
+      `STRUCTURE: Short and almost casual: one sentence of substance, link in the second sentence, one-line question at the end. Total 3 sentences maximum.`
+    ];
+    const structIdx = Math.abs([...`${leadData.firstName}${leadData.lastName}${leadData.company || ''}`].reduce((a, c) => a + c.charCodeAt(0), 0)) % structures.length;
     const ctaInstruction = useOfferCta
-      ? `Briefly answer their message in 1-2 sentences, then point them to a personalized page you have prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option, so this is the main call to action: do NOT also paste a separate Calendly link and do NOT ask them to book a call directly. Example phrasing: "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas: [OFFER LINK]".`
-      : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
+      ? `Point them to the personalized page prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option: do NOT also paste a separate Calendly link. ${structures[structIdx]} BANNED SENTENCE (never use it or close variations): "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas". Introduce the link in fresh words.`
+      : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry. ${structures[structIdx]}`;
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}${addressingRule}${languageRule}${variant.nudge}`;
+Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}
+HARD CLOSE RULE: end with exactly ONE concrete question or two proposed call times. NEVER promise a future action ("pošljemo v naslednjih dneh", "javimo se kmalu") - deliver everything in this message.
+HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${addressingRule}${languageRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1512,21 +1536,50 @@ Do NOT say anything went wrong or mention a technical issue.
 Be confident but humble, never cocky. Start the conversation naturally.${languageRule}${variant.nudge}`;
   }
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 400,
-    system: STYLE_GUIDE + trainingContext,
-    messages: [{ role: 'user', content: prompt }]
-  });
-
-  let text = response.content[0].text.trim();
+  let text = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 400,
+      system: STYLE_GUIDE + trainingContext,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    text = response.content[0].text.trim();
+    // Deterministic guard: a draft that promises a FUTURE send is a dead end (nothing
+    // in the pipeline fulfils it). One retry with an explicit correction, then give up
+    // gracefully (approval-first flow means a human still sees it).
+    if (attempt === 1 && FUTURE_PROMISE_RE.test(text)) {
+      console.warn('[REPLY] Draft promised a future action - retrying once');
+      prompt += `\n\nYOUR PREVIOUS DRAFT BROKE A HARD RULE: it promised a future action (e.g. "pošljemo v naslednjih dneh"). FORBIDDEN. Deliver everything IN THIS MESSAGE and end with one concrete question or two proposed call times.`;
+      continue;
+    }
+    break;
+  }
   // Lektorski pass before placeholder swap so the proofreader sees the clean text.
   text = (await polishSlovenian(text, { signature: 'Žan Bagarič' })) || text;
   // Offer link takes priority. If the model emitted [OFFER LINK] but no offer
   // exists, fall back to Calendly so we never ship a broken placeholder.
   text = text.replace(/\[OFFER LINK\]/g, offerUrl || CALENDLY_LINK);
   text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
-  return cleanArtifacts(text);
+  return ensureSignature(cleanArtifacts(text), 'Žan Bagarič');
+}
+
+// Future-promise detector: drafts that defer delivery ("pošljemo v naslednjih dneh")
+// create commitments nothing in the pipeline fulfils. Checked deterministically
+// after every generation because the LLM rule alone is not 100% reliable.
+const FUTURE_PROMISE_RE = /(v (naslednjih|prihodnjih|prihajajočih) dneh|v kratkem (vam|ti|se)|kmalu (vam|ti|se) (pošljemo|posljemo|pripravimo|javimo|oglasimo)|(pošljemo|posljemo) (vam |ti )?(konkretno |konkreten )?(ponudbo|predlog) (na|po) e|we('ll| will) (send|get back|follow up)|in the (coming|next) (days|few days)|get back to you (shortly|soon))/i;
+
+// Deterministic signature guard: EN/DE drafts kept going out unsigned (the polish
+// pass enforces it for Slovenian but is skipped/fails on non-SL text sometimes).
+function ensureSignature(text, name) {
+  if (!text || !name) return text;
+  const firstName = name.split(' ')[0];
+  if (text.includes(firstName)) {
+    // Already signed (or at least mentions the sender name at the end) - leave as is.
+    const tail = text.slice(-60);
+    if (tail.includes(firstName)) return text;
+  }
+  return `${text.replace(/\s+$/, '')}\n\n${name}`;
 }
 
 // ─── DETERMINISTIC TEXT GUARDS ────────────────────────────────────────────────
@@ -1741,7 +1794,8 @@ INTENT (one of):
 unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
 soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
-positive = interested, asking a question, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
+vendor_pitch = THEY are selling or promoting something TO US instead of responding to our offer: a pitch for their own product/service/agency, an event/webinar/conference invitation, a newsletter or promo blast, a course/program promotion, recruiting spam. Examples: "join us for our event", "we help companies like yours grow", "check out our platform", "vam pomagam izboljšati prodajne strategije", "are you ready to take your startup global". KEY TEST: if the message would read the same even if we had never written to them, it is vendor_pitch. This OVERRIDES positive: a friendly sales pitch to us is vendor_pitch, NOT positive.
+positive = interested IN OUR OFFER, asking a question about it, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
 neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
 LANGUAGE (of THEIR message, one of): sl, en, de, cs, other
@@ -1753,7 +1807,7 @@ Return format example: positive|en`
   });
   const raw = response.content[0].text.trim().toLowerCase();
   const [intentRaw, langRaw] = raw.split('|').map(s => (s || '').trim().replace(/[^a-z_]/g, ''));
-  const validIntents = ['unsubscribe', 'negative', 'soft_negative', 'positive', 'neutral'];
+  const validIntents = ['unsubscribe', 'negative', 'soft_negative', 'vendor_pitch', 'positive', 'neutral'];
   const validLangs = ['sl', 'en', 'de', 'cs'];
   const intent = validIntents.includes(intentRaw) ? intentRaw : 'neutral';
   const language = validLangs.includes(langRaw) ? langRaw : (detectLanguage(message) || null);
@@ -1803,12 +1857,13 @@ MANDATORY B2B_CHECK (filter BEFORE choosing generator or b2booster):
 
 DEFAULT RULES:
 1. If B2B_CHECK fails → aiera
-2. Else if country != "Slovenia" AND any B2B sales signal → b2booster
-3. Else if Slovenia AND company explicitly targets international expansion → b2booster
-4. Else if Slovenia AND B2B company (any size 10-500, any sales role OR owner/CEO) → generator
-5. Else if Slovenia AND non-sales role at large enterprise (CFO, CTO, HR, ops, marketing >500) → aiera
-6. Else if Slovenia AND B2B but role unclear → generator (default)
-7. Else (uncertain, confidence < 0.5) → aiera
+2. Else if SOLO/MICRO (s.p., 1-2 people, lead says "sem sam", "sem edini zaposleni", one-person consultancy) AND does B2B sales → generator (the affordable tier; NEVER pitch b2booster's price point at a solo operator, and NEVER write them off just for being small)
+3. Else if country != "Slovenia" AND any B2B sales signal → b2booster
+4. Else if Slovenia AND company explicitly targets international expansion → b2booster
+5. Else if Slovenia AND B2B company (any size 10-500, any sales role OR owner/CEO) → generator
+6. Else if Slovenia AND non-sales role at large enterprise (CFO, CTO, HR, ops, marketing >500) → aiera
+7. Else if Slovenia AND B2B but role unclear → generator (default)
+8. Else (uncertain, confidence < 0.5) → aiera
 
 Return JSON only, no markdown, no commentary:
 {
@@ -3799,6 +3854,13 @@ app.post('/webhook/instantly', async (req, res) => {
       return;
     }
 
+    if (intent === 'vendor_pitch') {
+      // They are selling to US - no draft, no offer page, just log.
+      airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, null, 'inbound', 'vendor_pitch', leadData.theirMessage, null, false).catch(() => {});
+      console.log(`[EMAIL] Vendor pitch - no reply: ${leadData.email}`);
+      return;
+    }
+
     let draft;
     if (intent === 'negative') {
       await airtableSetLeadStatus(null, leadData.email, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
@@ -3970,6 +4032,13 @@ app.post('/webhook/linkedin', async (req, res) => {
         return;
       }
 
+      if (intent === 'vendor_pitch') {
+        // They are selling to US - no draft, no offer page, just log.
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'vendor_pitch', parsed.message, null, false).catch(() => {});
+        console.log(`[LINKEDIN] Vendor pitch - no reply: ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
+
       if (intent === 'negative') {
         // Polite closeout in THEIR language + stop all future crons via status.
         await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
@@ -4102,6 +4171,12 @@ app.post('/webhook/vesna', async (req, res) => {
         return;
       }
 
+      if (intent === 'vendor_pitch') {
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'vendor_pitch', parsed.message, null, false).catch(() => {});
+        console.log(`[VESNA] Vendor pitch - no reply: ${leadData.firstName}`);
+        return;
+      }
+
       if (intent === 'negative') {
         await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
         console.log(`[VESNA] Skipping - negative response from ${leadData.firstName}`);
@@ -4142,11 +4217,11 @@ app.post('/webhook/vesna', async (req, res) => {
         content: `Lead name: ${leadData.firstName} ${leadData.lastName}
 ${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
 
-Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the team sending a tailored offer by email. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? messageForAI : '', hasRealMessage, leadData.language || null)}`
+Write a short LinkedIn reply in Vesna's name that briefly acknowledges their message and ends with ONE concrete question, by default asking which email address to send the tailored proposal to (if their email is already in the message, confirm sending to it instead). NEVER promise "v naslednjih dneh" or any vague future action. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? messageForAI : '', hasRealMessage, leadData.language || null)}`
       }]
     });
 
-    let draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
+    let draft = ensureSignature((await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim(), 'Vesna Pevec');
     const offerUrl = await createAndDeployOffer(leadData);
     const id = uuidv4();
     await storePending(id, { channel: 'vesna', leadData, draft });
@@ -5842,6 +5917,11 @@ async function pollLinkedInInbox() {
         console.log(`[POLL] UNSUBSCRIBE - Do Not Contact, no reply: ${firstName} ${lastName}`);
         continue;
       }
+      if (intent === 'vendor_pitch') {
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'vendor_pitch', body, null, false).catch(() => {});
+        console.log(`[POLL] Vendor pitch - no reply: ${firstName} ${lastName}`);
+        continue;
+      }
       if (intent === 'negative') {
         await airtableSetLeadStatus(linkedinUrl, null, 'Not Interested', `${firstName} ${lastName}`);
         continue;
@@ -6168,6 +6248,13 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
+    if (intent === 'vendor_pitch') {
+      // They are selling to US - no draft, no offer page, no enrichment. Just log.
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'vendor_pitch', messageText, null, false).catch(() => {});
+      console.log(`[${senderLabel}] Vendor pitch - no reply: ${leadFullName}`);
+      return;
+    }
+
     if (intent === 'neutral' && isBareAck(messageText)) {
       // Bare "ok"/"hvala" - a pitch reply here reads pushy. Log and stay quiet.
       airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'neutral', messageText, null, false).catch(() => {});
@@ -6279,10 +6366,10 @@ app.post('/webhook/outflo', async (req, res) => {
           system: VESNA_STYLE_GUIDE,
           messages: [{
             role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. Sign as Vesna Pevec.${buildLanguageRule(messageText, true, language || null)}`
+            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name. End with ONE concrete question, by default asking which email address to send the tailored proposal to (if their email is already in the message, confirm sending to it instead). NEVER promise "v naslednjih dneh" or any vague future action. Sign as Vesna Pevec.${buildLanguageRule(messageText, true, language || null)}`
           }]
         });
-        draft = (await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim();
+        draft = ensureSignature((await polishSlovenian(response.content[0].text.trim(), { signature: 'Vesna Pevec' })) || response.content[0].text.trim(), 'Vesna Pevec');
       } else {
         draft = await generateReply('linkedin', leadData, messageText, true);
       }
@@ -6469,6 +6556,12 @@ app.post('/webhook/email-reply', async (req, res) => {
       airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
       await sendUnsubscribeNotif(leadData, body, 'email');
       console.log(`[EMAIL-REPLY] UNSUBSCRIBE - Do Not Contact, no reply: ${from}`);
+      return;
+    }
+
+    if (intent === 'vendor_pitch') {
+      airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'vendor_pitch', body, null, false).catch(() => {});
+      console.log(`[EMAIL-REPLY] Vendor pitch - no reply: ${from}`);
       return;
     }
 
