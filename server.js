@@ -7056,8 +7056,9 @@ app.listen(PORT, () => {
   // Check queue every 60s — reads the in-memory cache, no Airtable call.
   setInterval(processScheduledSends, 60 * 1000);
 
-  // Reconcile the scheduled cache from Airtable every 6h (drift safety, ~4 GET/day).
-  setInterval(seedScheduledItems, 6 * 60 * 60 * 1000);
+  // Reconcile the scheduled cache from Airtable once a day (drift safety, ~1 GET/day).
+  // Was 6h; lowered to cut Airtable public-API usage on the free plan.
+  setInterval(seedScheduledItems, 24 * 60 * 60 * 1000);
 
   // Flush buffered offer-page tracking every 120s (one PATCH per active slug).
   setInterval(flushAllProposals, PROPOSAL_FLUSH_MS);
@@ -7066,22 +7067,31 @@ app.listen(PORT, () => {
   setTimeout(pollInstantlyReplies, 30 * 1000);
   setInterval(pollInstantlyReplies, 30 * 60 * 1000);
 
-  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + once a day
-  // (leads are 3+ days overdue — daily granularity is plenty and keeps Airtable reads minimal)
-  setTimeout(processFollowups, 60 * 1000);
-  setInterval(processFollowups, 24 * 60 * 60 * 1000);
+  // Outbound funnel crons (followups, LinkedIn nudges, cold email, generator nudges).
+  // Each scans Airtable daily and drafts approval emails. Off by default to save
+  // Airtable free-plan API calls when the funnel isn't actively used. Set
+  // FUNNEL_CRONS_ENABLED=true to turn the whole outbound sequence back on.
+  const FUNNEL_CRONS_ENABLED = (process.env.FUNNEL_CRONS_ENABLED || 'false').toLowerCase() === 'true';
+  if (FUNNEL_CRONS_ENABLED) {
+    // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + once a day
+    setTimeout(processFollowups, 60 * 1000);
+    setInterval(processFollowups, 24 * 60 * 60 * 1000);
 
-  // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
-  setTimeout(processLiFollowups, 75 * 1000);
-  setInterval(processLiFollowups, 24 * 60 * 60 * 1000);
+    // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
+    setTimeout(processLiFollowups, 75 * 1000);
+    setInterval(processLiFollowups, 24 * 60 * 60 * 1000);
 
-  // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
-  setTimeout(processColdLinkedInLeads, 90 * 1000);
-  setInterval(processColdLinkedInLeads, 24 * 60 * 60 * 1000);
+    // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
+    setTimeout(processColdLinkedInLeads, 90 * 1000);
+    setInterval(processColdLinkedInLeads, 24 * 60 * 60 * 1000);
 
-  // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
-  setTimeout(processGeneratorEngagement, 105 * 1000);
-  setInterval(processGeneratorEngagement, 24 * 60 * 60 * 1000);
+    // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
+    setTimeout(processGeneratorEngagement, 105 * 1000);
+    setInterval(processGeneratorEngagement, 24 * 60 * 60 * 1000);
+    console.log('[CRON] Funnel crons ENABLED');
+  } else {
+    console.log('[CRON] Funnel crons OFF (set FUNNEL_CRONS_ENABLED=true to enable)');
+  }
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
