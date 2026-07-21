@@ -6,12 +6,33 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
+// New deterministic-template proposal generator (spirit-style, no prices, meeting-focused)
+const { createAndDeployProposal: createAndDeployProposalSpirit, buildProposalHTML, setOnProposalGenerated } = require('./proposal');
+
+// B2Booster offer (template-driven, with pricing, sales-focused). For B2B sales/growth roles + international.
+const {
+  createAndDeployB2BoosterOffer,
+  buildB2BoosterHTML,
+} = require('./proposal-b2booster');
+
+// Generator ponudb offer (AIERA brand SaaS demo). For SI SMB B2B sellers (any sales role).
+const {
+  createAndDeployGeneratorOffer,
+  buildGeneratorHTML,
+  OFFER_THEMES: GENERATOR_THEMES,
+} = require('./proposal-generator');
+
 // ─── GLOBAL ERROR HANDLERS (prevent process crash) ────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason?.message || reason);
 });
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err.message);
+});
+// On spin-down/restart, flush any buffered offer-page tracking so we don't lose it.
+process.on('SIGTERM', async () => {
+  try { if (typeof flushAllProposals === 'function') await flushAllProposals(); } catch {}
+  process.exit(0);
 });
 
 const app = express();
@@ -38,6 +59,150 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || 'appDYFcKNxPmZw3P7';
 const AT_LEADS = 'tblfobqavxfv7hqC2';
 const AT_MESSAGES = 'tblNvqZEFcNaOwbnO';
+const AT_PROPOSALS = 'tblHS9tAl7c1XAQpi';
+
+// ─── CENTRAL CONFIG (pricing, throttling, A/B, handoff delay, auth) ──────────
+// Single source of truth. Override via env where flagged.
+
+const PRICING = {
+  b2booster: { setup: 790, monthly: 890, currency: 'EUR' },
+  generator: { setup: 490, monthly: 290, currency: 'EUR' },
+  // Soft proof - NO promised numbers (we never guarantee a count we might not hit).
+  socialProof: 'Za stranke prevzamemo celoten outreach do pravih odločevalcev v njihovih ciljnih podjetjih, tako da se ukvarjajo le z dogovorjenimi pogovori.',
+  // Formatted helpers (use in prompts)
+  b2boosterText: '790 EUR setup (enkratni fee) + 890 EUR na mesec',
+  generatorText: 'pilot od 290 EUR/mesec + 490 EUR setup (custom per segment)'
+};
+
+// Phone surfacing in approval mail (#1)
+const ZAN_PHONE_DISPLAY = '040 708 327';
+const ZAN_PHONE_E164 = '+38640708327';
+
+// Outflo dedup (#2): in-memory LRU, 24h window
+const OUTFLO_DEDUP = new Map(); // key: convId + sha1(text), value: timestamp
+const OUTFLO_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
+const OUTFLO_DEDUP_MAX = 2000;
+// Strip academic/professional titles from the START of a name so the bot never
+// addresses a lead as "mag." or "dr." ("mag. Marjana Skubic, PMP" → firstName Marjana).
+function stripLeadingTitles(fullName) {
+  return (fullName || '').replace(/^\s*((mag|dr|mr|mrs|ms|prof|ing|dipl|univ|mba|msc|bsc|phd)\.?\s+)+/i, '').trim();
+}
+
+function outfloDedupKey(conversationId, messageText) {
+  const txt = (messageText || '').trim().substring(0, 1000);
+  const h = crypto.createHash('sha1').update(txt).digest('hex').slice(0, 16);
+  return `${conversationId || 'noconv'}::${h}`;
+}
+function isOutfloDuplicate(conversationId, messageText) {
+  const key = outfloDedupKey(conversationId, messageText);
+  const now = Date.now();
+  // Prune expired
+  if (OUTFLO_DEDUP.size > OUTFLO_DEDUP_MAX) {
+    for (const [k, t] of OUTFLO_DEDUP) {
+      if (now - t > OUTFLO_DEDUP_TTL_MS) OUTFLO_DEDUP.delete(k);
+    }
+  }
+  const seen = OUTFLO_DEDUP.get(key);
+  if (seen && now - seen < OUTFLO_DEDUP_TTL_MS) return true;
+  OUTFLO_DEDUP.set(key, now);
+  return false;
+}
+
+// LinkedIn notification boilerplate detector.
+// LinkedIn digest emails carry no real text, just placeholders like
+// "You have 1 new message" / "You have 6 new messages". These must never be
+// treated as the lead's actual message.
+function isLinkedInBoilerplate(text) {
+  const t = (text || '').trim().toLowerCase();
+  if (!t) return true;
+  return (
+    /^you have \d+ new messages?$/i.test(t) ||
+    /^you have a new message/i.test(t) ||
+    /^\d+ new messages?$/i.test(t) ||
+    /^you have \d+ new notifications?$/i.test(t) ||
+    /just messaged you$/i.test(t) ||
+    /sent you a message$/i.test(t)
+  );
+}
+
+// LinkedIn-notif dedup (email-notif path had none → inbox flooded with re-fires).
+// Keyed on linkedinUrl + notificationType, 24h window.
+const LI_NOTIF_DEDUP = new Map();
+const LI_NOTIF_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
+const LI_NOTIF_DEDUP_MAX = 2000;
+function isLinkedInNotifDuplicate(linkedinUrl, discriminator) {
+  if (!linkedinUrl) return false;
+  const key = `${linkedinUrl}::${discriminator || 'messaged'}`;
+  const now = Date.now();
+  if (LI_NOTIF_DEDUP.size > LI_NOTIF_DEDUP_MAX) {
+    for (const [k, t] of LI_NOTIF_DEDUP) {
+      if (now - t > LI_NOTIF_DEDUP_TTL_MS) LI_NOTIF_DEDUP.delete(k);
+    }
+  }
+  const seen = LI_NOTIF_DEDUP.get(key);
+  if (seen && now - seen < LI_NOTIF_DEDUP_TTL_MS) return true;
+  LI_NOTIF_DEDUP.set(key, now);
+  return false;
+}
+
+// Outbound throttle (#4): max 1 LI send per account per N min
+const LI_THROTTLE_MIN = parseInt(process.env.LI_THROTTLE_MIN || '20', 10);
+const LI_LAST_SEND = new Map(); // account key → epoch ms of last scheduled send
+function getThrottleExtraMs(accountKey) {
+  if (!accountKey) return 0;
+  const last = LI_LAST_SEND.get(accountKey);
+  const now = Date.now();
+  const windowMs = LI_THROTTLE_MIN * 60 * 1000;
+  if (last && now - last < windowMs) {
+    // Schedule after the window expires, plus small jitter 30-90s
+    return (windowMs - (now - last)) + (30 + Math.floor(Math.random() * 60)) * 1000;
+  }
+  return 0;
+}
+function markThrottleSlot(accountKey, sendAtMs) {
+  if (!accountKey) return;
+  // Track the latest scheduled send so we space the NEXT one accordingly
+  const prev = LI_LAST_SEND.get(accountKey) || 0;
+  LI_LAST_SEND.set(accountKey, Math.max(prev, sendAtMs));
+}
+
+// Vesna → Žan handoff delay (#5): random 60-180 min between Vesna LI confirm and Žan offer email
+const VESNA_HANDOFF_DELAY_MIN = parseInt(process.env.VESNA_HANDOFF_DELAY_MIN || '60', 10);
+const VESNA_HANDOFF_DELAY_MAX = parseInt(process.env.VESNA_HANDOFF_DELAY_MAX || '180', 10);
+function getVesnaHandoffDelayMs() {
+  const span = Math.max(0, VESNA_HANDOFF_DELAY_MAX - VESNA_HANDOFF_DELAY_MIN);
+  const min = VESNA_HANDOFF_DELAY_MIN * 60 * 1000;
+  return min + Math.floor(Math.random() * (span * 60 * 1000));
+}
+
+// A/B variant tagging (#6): random variant tag, light prompt nudge per variant
+const AB_TEST_ENABLED = (process.env.AB_TEST_ENABLED || 'true').toLowerCase() === 'true';
+const AB_VARIANTS = {
+  A: { tag: 'A-baseline', nudge: '' },
+  B: { tag: 'B-curiosity', nudge: '\nOPENING MODE: Start the reply with a concrete observation or one-line question about their role/industry. Avoid generic "hvala za sporočilo" opener.' },
+  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with the concrete outcome (prevzamemo outreach do pravih odločevalcev, oni se ukvarjajo le z dogovorjenimi pogovori). NEVER promise a specific number of replies/meetings. Skip greeting. Value first, CTA last.' }
+};
+function pickABVariant() {
+  if (!AB_TEST_ENABLED) return AB_VARIANTS.A;
+  const keys = Object.keys(AB_VARIANTS);
+  return AB_VARIANTS[keys[Math.floor(Math.random() * keys.length)]];
+}
+
+// Dashboard basic auth (#16)
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
+function dashboardAuth(req, res, next) {
+  if (!DASHBOARD_PASSWORD) return next(); // disabled if no password set
+  const auth = req.headers.authorization || '';
+  const [scheme, encoded] = auth.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    try {
+      const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':');
+      if (pass === DASHBOARD_PASSWORD || user === DASHBOARD_PASSWORD) return next();
+    } catch {}
+  }
+  res.set('WWW-Authenticate', 'Basic realm="B2Booster Dashboard"');
+  return res.status(401).send('Auth required');
+}
 
 async function airtableRequest(method, endpoint, body) {
   if (!AIRTABLE_PAT) return null;
@@ -75,7 +240,10 @@ async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, stat
     };
     if (enrichData.email) fields['Email'] = enrichData.email;
     if (enrichData.phone) fields['Phone'] = enrichData.phone;
+    if (enrichData.language) fields['Language'] = enrichData.language;
     if (existing?.records?.length > 0) {
+      // Hard suppression: a generic upsert must NEVER overwrite "Do Not Contact".
+      if (existing.records[0].fields?.Status === 'Do Not Contact') delete fields['Status'];
       await airtableRequest('PATCH', `${AT_LEADS}/${existing.records[0].id}`, { fields });
       console.log(`[AIRTABLE] Lead updated: ${leadName}`);
     } else {
@@ -87,7 +255,7 @@ async function airtableUpsertLead(linkedinUrl, leadName, campaign, channel, stat
   }
 }
 
-async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text, draft, sent) {
+async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text, draft, sent, variantTag = null) {
   if (!AIRTABLE_PAT) return;
   try {
     const fields = {
@@ -101,10 +269,280 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
       'Sent': sent || false,
       'Timestamp': new Date().toISOString()
     };
-    await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }] });
-    console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}`);
+    if (variantTag) fields['Variant'] = variantTag;
+    // typecast lets Airtable auto-create new Intent options (e.g. "vendor_pitch") on first use.
+    await airtableRequest('POST', AT_MESSAGES, { records: [{ fields }], typecast: true });
+    console.log(`[AIRTABLE] Message logged: ${direction} | ${leadName}${variantTag ? ` | ${variantTag}` : ''}`);
   } catch (e) {
     console.error('[AIRTABLE] logMessage error:', e.message);
+  }
+}
+
+// ─── LEAD STATUS / SUPPRESSION HELPERS ───────────────────────────────────────
+// Negative reply → "Not Interested" (crons stop, lead can still re-engage).
+// Unsubscribe → "Do Not Contact" (hard block: no replies, no crons, ever).
+
+async function airtableSetLeadStatus(linkedinUrl, email, status, leadName = '') {
+  if (!AIRTABLE_PAT || !status) return;
+  try {
+    let rec = null;
+    if (linkedinUrl) {
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`)}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (!rec && email) {
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{Email}="${email}"`)}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (rec) {
+      // typecast lets Airtable auto-create the select option (e.g. "Do Not Contact") on first use.
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Status': status }, typecast: true });
+    } else if (linkedinUrl || email) {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields: {
+        'Lead Name': leadName || '',
+        'LinkedIn URL': linkedinUrl || '',
+        'Email': email || '',
+        'Status': status
+      } }], typecast: true });
+    }
+    console.log(`[AIRTABLE] Status → ${status} (${linkedinUrl || email || leadName})`);
+  } catch (e) {
+    console.error('[AIRTABLE] setLeadStatus error:', e.message);
+  }
+}
+
+async function isDoNotContactLead(linkedinUrl, email = null) {
+  if (!AIRTABLE_PAT) return false;
+  try {
+    let formula = null;
+    if (linkedinUrl) formula = `AND({LinkedIn URL}="${linkedinUrl}", {Status}="Do Not Contact")`;
+    else if (email) formula = `AND({Email}="${email}", {Status}="Do Not Contact")`;
+    if (!formula) return false;
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`);
+    return !!(r?.records?.length);
+  } catch {
+    return false;
+  }
+}
+
+// Persist the lead's detected language so ALL later generators (followups, nudges,
+// closeouts, handoff email) write in the lead's language, not default Slovenian.
+async function airtableSaveLanguage(linkedinUrl, language) {
+  if (!AIRTABLE_PAT || !linkedinUrl || !language) return;
+  try {
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`)}&maxRecords=1`);
+    const rec = r?.records?.[0];
+    if (rec && rec.fields?.['Language'] !== language) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Language': language } });
+    }
+  } catch { /* non-blocking */ }
+}
+
+// Pull the recent conversation for a lead from the Messages table so reply drafts
+// see the WHOLE thread, not just the last inbound message (fixes non-sequitur replies).
+async function airtableGetThreadContext(linkedinUrl, limit = 6) {
+  if (!AIRTABLE_PAT || !linkedinUrl) return '';
+  try {
+    const filter = encodeURIComponent(`AND({LinkedIn URL}="${linkedinUrl}", OR({Direction}="inbound", {Direction}="outbound"))`);
+    const url = `${AT_MESSAGES}?filterByFormula=${filter}&maxRecords=${limit}&sort%5B0%5D%5Bfield%5D=Timestamp&sort%5B0%5D%5Bdirection%5D=desc`;
+    const r = await airtableRequest('GET', url);
+    const recs = (r?.records || []).reverse(); // oldest first
+    if (!recs.length) return '';
+    const lines = recs.map(rec => {
+      const f = rec.fields || {};
+      const who = f['Direction'] === 'outbound' ? 'We' : 'Lead';
+      const text = (f['Direction'] === 'outbound' ? (f['Draft Reply'] || f['Text']) : f['Text']) || '';
+      if (!text.trim()) return null;
+      return `${who}: ${text.substring(0, 400).replace(/\s+/g, ' ').trim()}`;
+    }).filter(Boolean);
+    if (!lines.length) return '';
+    return `\nConversation so far (oldest first). Use it for context, do NOT repeat points already made and do NOT re-introduce yourself:\n${lines.join('\n')}\n`;
+  } catch {
+    return '';
+  }
+}
+
+// Structured thread rows for the approval-mail chat view (who said what, clearly).
+async function airtableGetThreadRows(linkedinUrl, limit = 6) {
+  if (!AIRTABLE_PAT || !linkedinUrl) return [];
+  try {
+    const filter = encodeURIComponent(`AND({LinkedIn URL}="${linkedinUrl}", OR({Direction}="inbound", {Direction}="outbound"))`);
+    const url = `${AT_MESSAGES}?filterByFormula=${filter}&maxRecords=${limit}&sort%5B0%5D%5Bfield%5D=Timestamp&sort%5B0%5D%5Bdirection%5D=desc`;
+    const r = await airtableRequest('GET', url);
+    const recs = (r?.records || []).reverse(); // oldest first
+    return recs.map(rec => {
+      const f = rec.fields || {};
+      const text = (f['Direction'] === 'outbound' ? (f['Draft Reply'] || f['Text']) : f['Text']) || '';
+      if (!text.trim()) return null;
+      let ts = '';
+      try {
+        ts = f['Timestamp'] ? new Date(f['Timestamp']).toLocaleString('sl-SI', { timeZone: 'Europe/Ljubljana', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      } catch { /* noop */ }
+      return { dir: f['Direction'], text: text.trim(), sent: !!f['Sent'], ts };
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Strip quoted reply history ("> ...", "On ... wrote:", "je ... napisal:") so the
+// approval mail shows only the NEW text, not the whole confusing email chain.
+function stripQuotedHistory(text) {
+  if (!text) return text;
+  const lines = text.split('\n');
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*>/.test(line)) break;
+    if (out.length && /(je\s.+\snapisal|On\s.+\swrote:|schrieb\sam|^-{2,}\s*Original Message|^From:\s.+@|^Od:\s.+@)/i.test(line)) break;
+    out.push(line);
+  }
+  const cleaned = out.join('\n').trim();
+  return cleaned || text.trim();
+}
+
+// FYI-only mail (no action buttons) when a lead unsubscribes. The bot never replies
+// to an opt-out; this just tells Žan it happened and that suppression is active.
+async function sendUnsubscribeNotif(leadData, message, channel) {
+  try {
+    const html = `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+        <div style="background:#fee2e2;border:2px solid #b91c1c;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+          <p style="margin:0;color:#7f1d1d;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">ODJAVA - lead označen kot Do Not Contact</p>
+          <p style="margin:6px 0 0;color:#7f1d1d;font-size:13px">Bot NE bo odgovoril in NE bo pošiljal nobenih followupov. Brez akcije s tvoje strani.</p>
+        </div>
+        <h2 style="margin:0 0 12px;font-size:18px">${leadData.firstName || ''} ${leadData.lastName || ''}</h2>
+        ${leadData.linkedinUrl ? `<p style="margin:0 0 12px;font-size:13px"><a href="${leadData.linkedinUrl}" style="color:#0a66c2">${leadData.linkedinUrl}</a></p>` : ''}
+        <div style="border-left:3px solid #b91c1c;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${(message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+        <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · unsubscribe (${channel})</p>
+      </div>`;
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
+        to: process.env.MY_EMAIL,
+        subject: `[${(channel || 'LI').toUpperCase()} ODJAVA] ${leadData.firstName || ''} ${leadData.lastName || ''} - ne kontaktiramo več`,
+        html
+      })
+    });
+  } catch (e) {
+    console.error('[UNSUB] notif failed:', e.message);
+  }
+}
+
+// Alert mail when an APPROVED send keeps failing. Before this, a failed send sat
+// silently in pending forever (Tomaž/Kniser case: approved 7.7., never sent, no alert).
+async function sendSendFailureAlert(id, item, errMsg) {
+  try {
+    const ld = item.leadData || {};
+    const html = `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+        <div style="background:#fee2e2;border:2px solid #b91c1c;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+          <p style="margin:0;color:#7f1d1d;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">POŠILJANJE NI USPELO - potreben ročni poseg</p>
+          <p style="margin:6px 0 0;color:#7f1d1d;font-size:13px">Approved sporočilo za ${ld.firstName || ''} ${ld.lastName || ''} (${item.channel || '?'}) je 3x zapored failalo in je USTAVLJENO. Pošlji ročno ali preveri napako.</p>
+        </div>
+        <p style="margin:0 0 6px;font-size:13px;color:#6b7280">Napaka: <code style="color:#b91c1c">${(errMsg || '').replace(/</g, '&lt;')}</code></p>
+        ${ld.linkedinUrl ? `<p style="margin:0 0 12px;font-size:13px"><a href="${ld.linkedinUrl}" style="color:#0a66c2">${ld.linkedinUrl}</a></p>` : ''}
+        <p style="color:#111;margin:16px 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Sporočilo, ki bi moralo iti ven</p>
+        <div style="border-left:3px solid #b91c1c;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${(item.draft || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+        <p style="color:#ccc;font-size:11px;margin-top:24px">B2Booster Reply Bot · send failure (id ${id})</p>
+      </div>`;
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
+        to: process.env.MY_EMAIL,
+        subject: `[SEND FAIL] ${ld.firstName || ''} ${ld.lastName || ''} - approved sporočilo NI bilo poslano`,
+        html
+      })
+    });
+  } catch (e) {
+    console.error('[SEND-FAIL] alert mail failed:', e.message);
+  }
+}
+
+// ─── OFFER ENGAGEMENT TRACKING ────────────────────────────────────────────────
+// In-memory dedup so we don't write same event 100x on every scroll.
+const _engagementSeen = new Map(); // key: slug+event+bucket → ts
+const ENG_DEDUP_WINDOW_MS = 60 * 1000;
+
+function _dedupKey(slug, event, data) {
+  if (event === 'scroll') return `${slug}|scroll|${data?.depth || 0}`;
+  if (event === 'time')   return `${slug}|time|${data?.sec || 0}`;
+  if (event === 'click')  return `${slug}|click|${data?.id || ''}`;
+  if (event === 'tab-switch') return `${slug}|tab|${data?.style || ''}`;
+  return `${slug}|${event}`;
+}
+
+async function logOfferEngagement(slug, event, data) {
+  if (!AIRTABLE_PAT || !slug) return;
+  try {
+    // Dedup
+    const key = _dedupKey(slug, event, data);
+    const now = Date.now();
+    const last = _engagementSeen.get(key);
+    if (last && (now - last) < ENG_DEDUP_WINDOW_MS) return;
+    _engagementSeen.set(key, now);
+    if (_engagementSeen.size > 5000) {
+      // GC: drop old entries
+      for (const [k, t] of _engagementSeen) if (now - t > 60 * 60 * 1000) _engagementSeen.delete(k);
+    }
+
+    // Find lead by Offer Generator URL containing this slug
+    const filter = encodeURIComponent(`FIND("${slug}", {Offer Generator URL})`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const rec = r?.records?.[0];
+
+    // Log to Messages tabela (immutable event log)
+    try {
+      await airtableRequest('POST', AT_MESSAGES, { records: [{ fields: {
+        'Message ID': `eng-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        'Lead Name': rec?.fields?.['Lead Name'] || '',
+        'LinkedIn URL': rec?.fields?.['LinkedIn URL'] || '',
+        'Direction': 'engagement',
+        'Intent': event,
+        'Text': `slug=${slug} ${JSON.stringify(data || {}).slice(0, 1500)}`,
+        'Sent': false,
+        'Timestamp': new Date().toISOString()
+      }}]});
+    } catch (e) { /* swallow */ }
+
+    // Update Lead fields
+    if (rec) {
+      const f = rec.fields || {};
+      const patch = { 'Offer Last Activity': new Date().toISOString() };
+
+      if (event === 'page-open') {
+        if (!f['Offer Opened At']) patch['Offer Opened At'] = new Date().toISOString();
+        patch['Offer Open Count'] = (Number(f['Offer Open Count']) || 0) + 1;
+      }
+      if (event === 'scroll' && data?.depth) {
+        const cur = Number(f['Offer Max Scroll']) || 0;
+        if (data.depth > cur) patch['Offer Max Scroll'] = data.depth;
+      }
+      if (event === 'time' && data?.sec) {
+        const cur = Number(f['Offer Time On Page']) || 0;
+        if (data.sec > cur) patch['Offer Time On Page'] = data.sec;
+      }
+      if (event === 'exit' && data?.sec) {
+        const cur = Number(f['Offer Time On Page']) || 0;
+        if (data.sec > cur) patch['Offer Time On Page'] = data.sec;
+        if (data.maxScroll) {
+          const sCur = Number(f['Offer Max Scroll']) || 0;
+          if (data.maxScroll > sCur) patch['Offer Max Scroll'] = data.maxScroll;
+        }
+      }
+      if (event === 'click' && data?.id && /cta|calendly|contact-cta|hero-cta|pricing-cta|header-cta/.test(data.id)) {
+        patch['Offer Calendly Clicked'] = true;
+      }
+
+      try {
+        await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: patch });
+      } catch (e) { console.error('[ENG] patch failed:', e.message); }
+    }
+  } catch (e) {
+    console.error('[ENG] logOfferEngagement error:', e.message);
   }
 }
 
@@ -116,6 +554,12 @@ async function airtableLogMessage(leadName, linkedinUrl, direction, intent, text
 
 const AT_PENDING = process.env.AIRTABLE_PENDING_TABLE_ID || 'tblNV1AHq1VkyBcI5';
 const USE_AT_PENDING = !!AIRTABLE_PAT;
+
+// In-memory cache of *scheduled* sends so the 60s queue poll does NOT hit Airtable
+// every minute (that single poll was ~30k GET/month and blew the free 1000 cap).
+// Authoritative source for processScheduledSends; seeded from Airtable on boot and
+// reconciled every 6h, kept live by markScheduled (add) and deletePending (remove).
+const scheduledItems = {};
 
 // Disk helpers (fallback only)
 function loadPendingDisk() {
@@ -208,6 +652,7 @@ async function getPending(id) {
 }
 
 async function deletePending(id) {
+  delete scheduledItems[id]; // keep the in-memory scheduled cache in sync
   if (!USE_AT_PENDING) {
     const all = loadPendingDisk();
     delete all[id];
@@ -268,6 +713,7 @@ async function markScheduled(id, draft, sendAt, pendingData = null) {
           }
         }]
       });
+      scheduledItems[id] = { ...restored, id };
       console.log(`[QUEUE] Restored entry for ${id} from fallback data (Airtable)`);
       return;
     }
@@ -281,6 +727,7 @@ async function markScheduled(id, draft, sendAt, pendingData = null) {
         Data: JSON.stringify(merged).substring(0, 95000)
       }
     });
+    scheduledItems[id] = { ...merged, id, _recordId: rec.id };
   } catch (e) {
     console.error('[PENDING] markScheduled error:', e.message);
   }
@@ -310,12 +757,13 @@ async function updatePendingData(id, patch) {
 }
 
 // ─── TIMING & DELAYS ─────────────────────────────────────────────────────────
-// LinkedIn send window: 16:00 - 22:00 CET
-// Messages received 8-16h wait until 16:00. After 16h: sent in 2-9 min.
+// LinkedIn send window: 9:00 - 22:00 CET (was 16-22: a lead who replied at 9:00
+// and was approved at 9:05 waited until 16:00 - 7h lag on hot leads killed
+// speed-to-lead; replying during the workday is also more human, not less).
 // Email: no business hours restriction, always 2-5 min delay.
 
-const SEND_WINDOW_START = 16;
-const SEND_WINDOW_END = 22;
+const SEND_WINDOW_START = parseInt(process.env.SEND_WINDOW_START || '9', 10);
+const SEND_WINDOW_END = parseInt(process.env.SEND_WINDOW_END || '22', 10);
 
 function getCETHour() {
   return parseInt(
@@ -328,28 +776,40 @@ function getCETHour() {
   );
 }
 
-function getSendAt(channel) {
+function getSendAt(channel, accountKey = null) {
+  let baseDate;
   // Email: no business hours, just 2-5 min delay
   if (channel === 'email') {
     const delayMin = 2 + Math.random() * 3;
-    return new Date(Date.now() + delayMin * 60 * 1000);
-  }
-
-  // LinkedIn: respect send window
-  const hour = getCETHour();
-
-  if (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END) {
-    const delayMin = 2 + Math.random() * 7;
-    return new Date(Date.now() + delayMin * 60 * 1000);
+    baseDate = new Date(Date.now() + delayMin * 60 * 1000);
   } else {
-    // Wait until 16:00 CET + random 1-8 min
-    const cetNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Ljubljana' }));
-    const target = new Date(cetNow);
-    if (hour >= SEND_WINDOW_END) target.setDate(target.getDate() + 1);
-    target.setHours(SEND_WINDOW_START, Math.floor(1 + Math.random() * 8), 0, 0);
-    const delayMs = Math.max(target - cetNow, 60000);
-    return new Date(Date.now() + delayMs);
+    // LinkedIn: respect send window
+    const hour = getCETHour();
+    if (hour >= SEND_WINDOW_START && hour < SEND_WINDOW_END) {
+      const delayMin = 2 + Math.random() * 7;
+      baseDate = new Date(Date.now() + delayMin * 60 * 1000);
+    } else {
+      // Wait until 16:00 CET + random 1-8 min
+      const cetNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Ljubljana' }));
+      const target = new Date(cetNow);
+      if (hour >= SEND_WINDOW_END) target.setDate(target.getDate() + 1);
+      target.setHours(SEND_WINDOW_START, Math.floor(1 + Math.random() * 8), 0, 0);
+      const delayMs = Math.max(target - cetNow, 60000);
+      baseDate = new Date(Date.now() + delayMs);
+    }
   }
+
+  // Throttle: if this account sent recently, push send out further to preserve deliverability.
+  // Applies to LinkedIn channels (linkedin, vesna, unipile). Email channel uses Instantly's own pacing.
+  if (channel !== 'email' && accountKey) {
+    const extra = getThrottleExtraMs(accountKey);
+    if (extra > 0) {
+      baseDate = new Date(Math.max(baseDate.getTime(), Date.now() + extra));
+      console.log(`[THROTTLE] ${accountKey}: pushed by ${Math.round(extra/60000)} min, sendAt=${baseDate.toISOString()}`);
+    }
+    markThrottleSlot(accountKey, baseDate.getTime());
+  }
+  return baseDate;
 }
 
 function formatDelay(sendAt) {
@@ -376,6 +836,29 @@ function formatSendTime(sendAt) {
 async function executeSend(id, item) {
   const { channel, leadData, draft } = item;
   try {
+    // Delayed Vesna→Žan offer email (handoff): scheduled email send after LI confirm went out.
+    if (item.kind === 'delayed_offer_email') {
+      await sendOfferEmailViaResend({
+        to: item.recipientEmail,
+        subject: item.emailSubject,
+        bodyText: item.emailBody
+      });
+      await airtableMarkOfferSent(
+        leadData.linkedinUrl,
+        `${leadData.firstName} ${leadData.lastName}`,
+        item.recipientEmail,
+        'teaser_v1_delayed'
+      );
+      airtableLogMessage(
+        `${leadData.firstName} ${leadData.lastName}`,
+        leadData.linkedinUrl, 'outbound', 'email_handoff',
+        `[EMAIL DELAYED → ${item.recipientEmail}] ${item.emailSubject}`,
+        item.emailBody, true
+      ).catch(() => {});
+      await deletePending(id);
+      console.log(`[QUEUE] Delayed Vesna handoff email sent: ${leadData.firstName} ${leadData.lastName} → ${item.recipientEmail}`);
+      return;
+    }
     if (channel === 'unipile') {
       await sendViaUnipile(leadData.chatId, leadData.accountId, draft);
     } else if (channel === 'linkedin') {
@@ -383,7 +866,19 @@ async function executeSend(id, item) {
     } else if (channel === 'vesna') {
       await sendViaOutflo(leadData.linkedinUrl, draft, VESNA_LINKEDIN_URL);
     } else {
-      await sendViaInstantly(leadData.emailUuid, draft, leadData.subject);
+      // Email send: prefer Instantly (if emailUuid is set = reply was polled from Instantly).
+      // Fallback to Resend reply when this came in via Gmail webhook (#14 reply-to-offer-email).
+      if (leadData.emailUuid) {
+        await sendViaInstantly(leadData.emailUuid, draft, leadData.subject);
+      } else if (leadData.email) {
+        await sendOfferEmailViaResend({
+          to: leadData.email,
+          subject: leadData.subject?.startsWith('Re:') ? leadData.subject : `Re: ${leadData.subject || 'Odgovor'}`,
+          bodyText: draft
+        });
+      } else {
+        throw new Error('Email channel but no emailUuid and no email - cannot send');
+      }
     }
     await deletePending(id);
     console.log(`[QUEUE] Sent & removed: ${leadData.firstName} ${leadData.lastName} (${channel})`);
@@ -399,13 +894,47 @@ async function executeSend(id, item) {
     ).catch(() => {});
   } catch (err) {
     console.error(`[QUEUE] Send failed for ${id}:`, err.message);
-    // Leave in pending so we can retry or investigate
+    // Retry with a hard cap: the 60s scheduler retries automatically; after 3
+    // failures we STOP, mark the item failed and alert Žan by mail. Before this,
+    // failed sends looped/rotted silently and approved messages never went out.
+    const attempts = (item.attempts || 0) + 1;
+    item.attempts = attempts;
+    if (scheduledItems[id]) scheduledItems[id].attempts = attempts;
+    if (attempts >= 3) {
+      if (scheduledItems[id]) delete scheduledItems[id];
+      try {
+        await updatePendingData(id, { attempts, status: 'failed', lastError: err.message });
+        const rec = await _atFindPendingRecord(id);
+        if (rec) await airtableRequest('PATCH', `${AT_PENDING}/${rec.id}`, { fields: { Status: 'failed' } });
+      } catch (e2) { console.error('[QUEUE] mark-failed error:', e2.message); }
+      await sendSendFailureAlert(id, item, err.message);
+      console.error(`[QUEUE] Giving up after ${attempts} attempts for ${id} - alert sent`);
+    } else {
+      updatePendingData(id, { attempts, lastError: err.message }).catch(() => {});
+    }
+  }
+}
+
+// Seed/reconcile the in-memory scheduled cache from Airtable. One GET on boot +
+// every 6h (drift safety) instead of one GET every 60s.
+async function seedScheduledItems() {
+  if (!USE_AT_PENDING) return;
+  try {
+    const all = await loadPending();
+    for (const k of Object.keys(scheduledItems)) delete scheduledItems[k];
+    for (const [id, item] of Object.entries(all)) {
+      if (item.status === 'scheduled') scheduledItems[id] = { ...item, id };
+    }
+    console.log(`[QUEUE] Seeded ${Object.keys(scheduledItems).length} scheduled item(s) from Airtable`);
+  } catch (e) {
+    console.error('[QUEUE] seedScheduledItems error:', e.message);
   }
 }
 
 async function processScheduledSends() {
-  const all = await loadPending();
   const now = Date.now();
+  // Use the in-memory cache when on Airtable (no per-minute GET); disk mode reads local file (free).
+  const all = USE_AT_PENDING ? scheduledItems : await loadPending();
   const overdue = Object.entries(all).filter(
     ([, item]) => item.status === 'scheduled' && new Date(item.sendAt) <= now
   );
@@ -458,6 +987,7 @@ function buildTrainingContext() {
 
 const CALENDLY_LINK = process.env.CALENDLY_LINK || '[CALENDLY LINK]';
 const CALENDLY_AI_15MIN = process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar/aiera-ai';
+const CALENDLY_B2BOOSTER = process.env.CALENDLY_B2BOOSTER || 'https://calendly.com/aiera-koledar/b2booster-x-ai';
 const VESNA_LINKEDIN_URL = process.env.VESNA_LINKEDIN_URL || 'https://www.linkedin.com/in/vesna-pevec-2110b8b4/';
 const HANDOFF_FROM_EMAIL = process.env.HANDOFF_FROM_EMAIL || 'Žan Bagarič <zan@aiera.si>';
 
@@ -474,29 +1004,83 @@ function isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, 
   if (intent !== 'positive') return false;           // only clearly positive replies
   if (!hasRealMessage) return false;                 // need real inbound text
   if (isHandoff) return false;                       // handoff has its own approval flow
+  if (leadData?.wantsCall) return false;             // lead wants a call - never auto-send a Calendly reply
   if (!leadData?.firstName) return false;            // need at least a name
   if (leadData.accountFirstName && leadData.accountFirstName.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '') !== 'zan') return false;
   if (!draft || draft.length > AUTO_SEND_MAX_DRAFT_CHARS) return false;
   return true;
 }
 
+// Shared language rules - injected into all prompts so pravila ostanejo konsistentna povsod.
+const SHARED_LANG_RULES = `
+LANGUAGE RULES (always apply, hard constraints):
+- Default: VIKANJE (Vi, Vas, Vam). Switch to tikanje ONLY if the lead's own message uses tikanje (you can see it from their reply).
+- NEVER use dvojina (1st person dual). FORBIDDEN: "si vzameva", "se slišiva", "pogledava", "se vidiva", "sva", "midva", "pripraviva", "pošljeva".
+  - Use 1st plural instead: "se slišimo", "lahko pogledamo", "pripravimo", "pošljemo", "se uskladimo".
+- NEVER use these banned sales cliches:
+  - "veseli me, če se kdaj pogovorimo/pogovoriva"
+  - "rezerviraj si termin tukaj", "rezerviraj si 20 minut", "rezervirajte si termin tukaj"
+  - "se vidiva", "se slišiva"
+  - "z veseljem se pogovorim" as opener
+- Natural Calendly invitation pattern (preferred):
+  "Lahko se na kratko slišimo in lažje preverimo možnosti. Tukaj je moj koledar za naslednja 2 tedna, če vam kateri termin ustreza: [CALENDLY LINK]"
+  Shorter OK: "Če vam ustreza, lahko izberete termin tukaj: [CALENDLY LINK]"
+- Slovnično pravilno (correct case endings, verb conjugation, šumniki).
+- NEVER use dashes (pomišljaji "—"). Use commas or regular hyphens "-".
+
+FACTS to use when relevant (do NOT invent others):
+- Pricing if asked: 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
+- Soft proof (use sparingly): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
+- NEVER promise specific numbers of replies, meetings, or results (e.g. "50-100 odgovorov mesečno"). We do not guarantee counts. Speak about the process and what we take off their plate, not a guaranteed outcome number.
+- TONE: confident but humble. NEVER cocky, salesy or boastful. Do NOT use punchy "Mi ne prodajamo orodja, ampak rezultat" style lines.
+- Slovenia: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies within a few months of cooperation, after which we often expand abroad. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
+`;
+
 const STYLE_GUIDE = `
 You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Pricing: fixed monthly retainer (900-1200 EUR/month), no commissions.
+Pricing (use EXACTLY these numbers if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges like "900-1200 EUR".
+Soft proof (use sparingly, NEVER as a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
+CRITICAL: NEVER promise a specific number of replies, meetings or results (no "50-100 odgovorov mesečno"). We do not guarantee counts and an unmet number burns trust. Talk about what we take off their plate, not a guaranteed outcome.
 Target: B2B companies that want to expand internationally or automate their sales outreach.
+Slovenia market rule: We DO work the Slovenian market normally. Because the market is small, we typically reach all target companies in a few months of cooperation, after which we often expand to foreign markets. NEVER say "smo usmerjeni bolj na tuje trge" or imply we skip Slovenia.
+
+LANGUAGE / TONE RULES (CRITICAL):
+- DEFAULT: vikanje (formal "vi" form). Always start vikanje.
+  - PRAVILNO: "lahko se na kratko slišimo", "vam pošljem", "če vas zanima", "rezervirate termin"
+  - NAROBE: tikanje by default
+- SWITCH to tikanje ONLY if the lead's own message uses tikanje (you can see it from their reply: "kaj pa imate" = vikanje, "kaj pa imaš" = tikanje, "te" / "ti" / "tvoj" = tikanje).
+- NEVER use dvojina (1st person dual). FORBIDDEN forms: "si vzameva", "se slišiva", "pogledava", "se vidiva", "skupaj sva", "midva".
+  - Use 1st person plural instead: "se slišimo", "lahko pogledamo", "se uskladimo", "vam pošljemo".
+- NEVER use these clichéd sales phrases (they are banned):
+  - "veseli me, če se kdaj pogovoriva/pogovorimo"
+  - "rezerviraj si termin tukaj" / "rezerviraj si 20 minut"
+  - "se vidiva" / "se slišiva"
+  - "z veseljem se pogovorim" as opener
+- Calendly intro MUST sound natural. Good pattern:
+  "Lahko se na kratko slišimo in lažje preverimo možnosti. Tukaj je moj koledar za naslednja 2 tedna - če vam kateri termin ustreza, se z veseljem slišimo na klicu ali meetu: [CALENDLY LINK]"
+- Krajše variante so OK, ampak vedno naravno, brez "rezerviraj":
+  "Če vam ustreza, lahko izberete termin tukaj: [CALENDLY LINK]"
+  "Tukaj je moj koledar, da najdete pravi termin: [CALENDLY LINK]"
 
 WRITING RULES:
 - Short, direct, professional Slovenian
-- Never use dashes (pomišljaji)
-- Use correct Slovenian spelling with šumniki
+- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
+- Use correct Slovenian spelling with šumniki (č, š, ž)
+- Slovnično pravilno (no missing diacritics, correct case endings, correct verb conjugation)
 - Never use negative or low-energy words: problem, težava, izziv, zamudno, zapleteno
 - Frame everything as opportunity, not pain
 - No bullet point lists inside messages
-- Sign as: Žan Bagarič
+- Sign as: Žan Bagarič (samo na koncu, ne v sredini). ALWAYS sign, also in English/German/Czech replies.
 - Always include Calendly CTA as the literal placeholder: [CALENDLY LINK]
 - Never include a phone number
+
+CLOSE / CTA RULES (hard, apply to EVERY reply):
+- Every reply MUST end with exactly ONE concrete next step: either one specific question the lead can answer in a sentence, or two proposed call times (e.g. "Vam ustreza četrtek ob 10.00 ali petek ob 13.00?"). A link alone is NOT a close.
+- NEVER promise a future action ("pošljemo vam ponudbo v naslednjih dneh", "javimo se v kratkem", "we'll get back to you", "kmalu vam pripravimo"). FORBIDDEN. Everything you offer must be delivered IN THIS MESSAGE (the link, the answer, the proposed times). If something cannot be delivered now, do not promise it.
+- MIRROR LENGTH: if the lead wrote one short line, reply in max 2 sentences. Never write more than roughly twice the length of their message (signature excluded).
+- Maximum ONE exclamation mark per message, preferably zero. Calm confidence, not cheerleading.
 
 LINKEDIN TONE:
 - Very short: 2 to 4 sentences maximum
@@ -509,40 +1093,68 @@ EMAIL TONE:
 - Professional but warm
 - One clear Calendly CTA at the end
 
-GOAL: Move the lead toward booking a Calendly call. Never be pushy. Be helpful and confident.
+OBJECTION HANDLING (critical - this is the #1 reason leads say no):
+- The most common rejection is "že imamo AI" / "to rešujemo interno" / "že uporabljamo AI". Do NOT re-pitch generic "AI" and do NOT give up, but stay humble.
+- Reframe gently to what internal AI does NOT cover: that WE take the whole outreach to the right decision-makers off their plate, so nobody on their side has to prospect manually.
+- Do NOT be cocky or boastful. FORBIDDEN style: "Mi ne prodajamo orodja, ampak rezultat", "naredimo to bolje kot vi", any line that implies their setup is inferior.
+- NEVER promise a number ("X pogovorov na mesec").
+- Example reframe (humble tone): "Super, da AI že uporabljate interno. Pri nas ne gre za še eno orodje, ampak za to, da celoten stik s pravimi odločevalci prevzamemo mi, brez dodatnega dela na vaši strani. Če želite, vam na kratko pokažem, kako bi to izgledalo pri vas."
+
+VALUE PROP RULE: Never sell "AI" or "avtomatizacija" as the headline. Sell what we take off their plate (we run the outreach to decision-makers for them). AI is just how we do it, never the pitch. Stay humble, never boastful.
+
+GOAL: Move the lead toward booking a Calendly call (or opening the offer page if one is prepared). Never be pushy. Be helpful and confident.
 
 OUTPUT: Return only the message text. No subject lines, no labels, no formatting notes.
 `;
 
+// Vesna handles first contact AND the replies, always from her own LinkedIn profile,
+// always signed by Vesna. The handoff to Žan happens later via the offer EMAIL - Vesna
+// herself never signs as Žan (a message from her profile signed "Žan" makes no sense).
 const VESNA_STYLE_GUIDE = `
-You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster (b2booster.eu).
+You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster / AIERA (b2booster.eu, aiera.si).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Vesna's role: she does the first contact on LinkedIn. The director (Žan Bagarič) follows up personally with a tailored offer.
+Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored offer that gets sent by email.
 
 WRITING RULES:
 - Short, warm, professional Slovenian
 - Maximum 3 sentences
-- Never use dashes (pomišljaji)
-- Use correct Slovenian spelling with šumniki
+- Never use dashes (pomišljaji "—"). Use regular hyphens "-" or commas.
+- Use correct Slovenian spelling with šumniki (č, š, ž)
+- Slovnično pravilno
 - Never use negative or low-energy words
 - No bullet points
 - Sign as: Vesna Pevec
 - Never include a Calendly link or phone number
 - Never promise specifics about price or timeline
 
+LANGUAGE / TONE RULES (CRITICAL):
+- DEFAULT: vikanje (formal "vi" form). Always start with vikanje.
+- SWITCH to tikanje ONLY if the lead's own message uses tikanje.
+- NEVER use dvojina (1st dual): "pripraviva", "pošljeva", "pogledava", "sva". Use 1st plural: "pripravimo", "pošljemo".
+
+CRITICAL HANDOFF RULE - NEVER mention "Žan" or any director by name, and NEVER sign as anyone other than Vesna.
+- WRONG: "Skupaj s kolegom Žanom bova pregledala vaš primer in Žan vas bo kmalu kontaktiral"
+- WRONG: signing the message "Žan" or "Žan Bagarič" (the message comes from Vesna's profile)
+- WRONG: "direktor Žan bo stopil v stik", "kolega Žan"
+- RIGHT: Speak as "mi/aiera/B2Booster team", neutrally, and sign as Vesna Pevec.
+
+NEXT-STEP RULE (hard):
+- NEVER promise a future action with vague timing: "pošljemo vam ponudbo v naslednjih dneh", "javimo se v kratkem", "pošljemo na email" without a concrete step are ALL FORBIDDEN. These promises create dead ends.
+- Instead, ALWAYS end with ONE concrete question that moves the conversation forward. The best default: ask for their email address so the offer can be sent immediately.
+  - RIGHT: "Z veseljem vam pripravimo konkreten predlog. Na kateri e-naslov vam ga pošljemo?"
+  - RIGHT: "Super, pripravimo vam predlog po meri. Mi zaupate vaš e-naslov, da vam ga pošljemo še danes?"
+  - If their email is ALREADY visible in their message, confirm sending to that address instead of asking.
+- MIRROR LENGTH: if the lead wrote one short line, reply in max 2 sentences.
+- Maximum ONE exclamation mark per message, preferably zero.
+
 TONE:
 - Friendly and professional, like a capable coordinator
 - Acknowledge their reply positively but briefly
-- Hand off smoothly to the director without making it feel like a brush-off
+- Hand off smoothly to the team / next steps without naming anyone
 - The lead should feel they are being taken care of personally
 
-KEY MESSAGE to weave in naturally:
-- "Skupaj s kolegom pripravimo ponudbo" or similar variation
-- Žan (direktor) bo stopil v stik s konkretno ponudbo
-- Make them feel the director is personally investing time in their case
-
-GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff to Žan.
+GOAL: Keep the conversation warm, confirm interest, and set up a seamless handoff that the email outreach will then continue.
 
 OUTPUT: Return only the message text. No labels, no formatting notes.
 `;
@@ -773,17 +1385,154 @@ async function deployOfferToNetlify(slug, html) {
   return offerUrl;
 }
 
-async function createAndDeployOffer(leadData) {
+async function createAndDeployOfferClassic(leadData) {
   try {
     const company = leadData.company && leadData.company !== 'LinkedIn'
       ? leadData.company
       : `${leadData.firstName}-${leadData.lastName}`.toLowerCase();
     const slug = createOfferSlug(company);
-    console.log(`[OFFER] Generating for: ${company} → /${slug}`);
+    console.log(`[OFFER] Generating CLASSIC pricing offer for: ${company} → /${slug}`);
     const html = await generateOfferHTML(leadData);
     return await deployOfferToNetlify(slug, html);
   } catch (err) {
-    console.error('[OFFER] Error:', err.message);
+    console.error('[OFFER] Classic error:', err.message);
+    return null;
+  }
+}
+
+// Router: chooses between Generator ponudb, B2Booster, spirit-style, or classic offer.
+// Priority: leadData.offerType === 'generator' or 'b2booster' takes precedence over offerStyle.
+// Env: PROPOSAL_STYLE=spirit (default) | classic
+// Per-call override: leadData.offerStyle = 'spirit' | 'classic'
+async function createAndDeployOffer(leadData) {
+  // Render-hosted serving (default): single-page offers served by this bot, no Netlify.
+  // Generator stays on Netlify (multi-file). Set OFFER_HOST=netlify to force old behavior.
+  if (OFFER_HOST === 'render' && !(leadData && leadData.offerType === 'generator')) {
+    const url = await createAndServeOffer(leadData);
+    if (url) return url;
+    console.log('[OFFER-SERVE] render serve failed - falling back to Netlify path');
+  }
+  // Generator ponudb (AIERA brand SaaS demo). Served from Render (/g/{slug}/) by default,
+  // Netlify only if GENERATOR_HOST=netlify or the Render store fails.
+  if (leadData && leadData.offerType === 'generator') {
+    let url = null;
+    if (GENERATOR_HOST === 'render') {
+      url = await createAndServeGeneratorOffer(leadData);
+      if (!url) {
+        console.log('[GENERATOR] render serve failed - falling back to Netlify');
+        url = await createAndDeployGeneratorOffer(leadData);
+      }
+    } else {
+      url = await createAndDeployGeneratorOffer(leadData);
+    }
+    if (url) {
+      // Persist URL so engagement tracker can look up lead by slug
+      const leadName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+      airtableSaveGeneratorUrl(leadData.linkedinUrl, leadName, url).catch(e => console.error('[GEN] save URL:', e.message));
+    }
+    return url;
+  }
+  // B2Booster has its own template + domain (ponudbe.b2booster.eu)
+  if (leadData && leadData.offerType === 'b2booster') {
+    return createAndDeployB2BoosterOffer(leadData);
+  }
+  const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
+  if (style === 'classic') return createAndDeployOfferClassic(leadData);
+  // Default: new spirit-style proposal
+  return createAndDeployProposalSpirit(leadData);
+}
+
+// ─── RENDER-HOSTED OFFER PAGES (no Netlify) ──────────────────────────────────
+// Free-tier friendly: build the HTML, stash it in Airtable Proposals (survives
+// restarts; Render free has no persistent disk), and serve it from this bot at
+// /o/:slug. Avoids Netlify deploy limits entirely. Single-page offers only
+// (spirit/aiera, b2booster, classic). Generator stays on Netlify (multi-file).
+const OFFER_SERVE_BASE = process.env.OFFER_SERVE_URL || process.env.SERVER_URL || `http://localhost:${PORT}`;
+const OFFER_HOST = (process.env.OFFER_HOST || 'render').toLowerCase(); // 'render' | 'netlify'
+
+async function storeOfferHtml(slug, html, leadData) {
+  if (!AIRTABLE_PAT || !slug || !html) return false;
+  if (html.length > 99000) {
+    console.warn(`[OFFER-SERVE] HTML too large for Airtable (${html.length} chars) - skipping store, slug=${slug}`);
+    return false;
+  }
+  try {
+    const fields = { HTML: html };
+    const leadName = `${leadData?.firstName || ''} ${leadData?.lastName || ''}`.trim();
+    if (leadName) fields['Lead Name'] = leadName;
+    if (leadData?.company) fields['Company'] = leadData.company;
+    await airtableProposalUpsert(slug, fields);
+    return true;
+  } catch (e) {
+    console.error('[OFFER-SERVE] store error:', e.message);
+    return false;
+  }
+}
+
+// Build a single-page offer, store it, and return the Render-served URL.
+async function createAndServeOffer(leadData) {
+  try {
+    let html, slug;
+    const offerType = leadData && leadData.offerType;
+    const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
+
+    if (offerType === 'b2booster') {
+      ({ html, slug } = await buildB2BoosterHTML(leadData));
+    } else if (style === 'classic') {
+      // Slug: company or neutral hash - NEVER the person's name in the URL.
+      const realCompany = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : '';
+      slug = realCompany
+        ? createOfferSlug(realCompany)
+        : `ponudba-${sha1(`${leadData.firstName || ''}${leadData.lastName || ''}${leadData.linkedinUrl || ''}`).slice(0, 6)}`;
+      html = await generateOfferHTML(leadData);
+    } else {
+      ({ html, slug } = await buildProposalHTML(leadData)); // spirit (default)
+    }
+
+    if (!html || !slug) return null;
+    const stored = await storeOfferHtml(slug, html, leadData);
+    if (!stored) return null;
+    // Clean root-level URL (ponudbe.aiera.si/gorsko) - matches the premium look of
+    // Žan's manual aiera.si/{company} pages. Old /o/{slug} links keep working.
+    const url = `${OFFER_SERVE_BASE.replace(/\/$/, '')}/${slug}`;
+    console.log(`[OFFER-SERVE] Live (render): ${url}`);
+    return url;
+  } catch (e) {
+    console.error('[OFFER-SERVE] build error:', e.message);
+    return null;
+  }
+}
+
+// ─── RENDER-HOSTED GENERATOR PAGES (no Netlify) ──────────────────────────────
+// The generator is multi-file (1 landing + 3 themed offers, landing links to them
+// with relative ./offer-{theme}.html). It used to deploy to Netlify; here we store
+// the 4 docs in Airtable and serve them from this bot under /g/{slug}/, mirroring
+// the single-page offer serving. The generated HTML is self-contained (tracking →
+// this bot, fonts → Google CDN), so only the hosting location changes.
+// Set GENERATOR_HOST=netlify to force the old behavior.
+const GENERATOR_HOST = (process.env.GENERATOR_HOST || 'render').toLowerCase(); // 'render' | 'netlify'
+const GENERATOR_RENDER_BASE = (process.env.GENERATOR_RENDER_URL || OFFER_SERVE_BASE || 'https://ponudbe.aiera.si').replace(/\/$/, '');
+const GENERATOR_THEME_LIST = Array.isArray(GENERATOR_THEMES) ? GENERATOR_THEMES : ['minimal', 'modern', 'premium'];
+
+// Build the generator (landing + themed offers), store each doc in Airtable keyed by
+// its path, and return the Render-served landing URL (with trailing slash so the
+// landing's relative ./offer-{theme}.html links resolve to /g/{slug}/offer-...).
+async function createAndServeGeneratorOffer(leadData, options = {}) {
+  try {
+    const { landingHtml, offerHtml, slug } = await buildGeneratorHTML(leadData, options);
+    if (!landingHtml || !slug) return null;
+    const storedLanding = await storeOfferHtml(`g/${slug}/index`, landingHtml, leadData);
+    if (!storedLanding) return null;
+    for (const theme of GENERATOR_THEME_LIST) {
+      if (offerHtml && offerHtml[theme]) {
+        await storeOfferHtml(`g/${slug}/offer-${theme}`, offerHtml[theme], leadData);
+      }
+    }
+    const url = `${GENERATOR_RENDER_BASE}/g/${slug}/`;
+    console.log(`[GENERATOR] Live (render): ${url}`);
+    return url;
+  } catch (e) {
+    console.error('[GENERATOR] render serve error:', e.message);
     return null;
   }
 }
@@ -799,69 +1548,614 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
 
   const trainingContext = buildTrainingContext();
 
+  // A/B variant pick (#6) - stamp variant onto leadData so caller can log it
+  const variant = pickABVariant();
+  if (leadData && !leadData.abVariant) leadData.abVariant = variant.tag;
+
   let prompt;
   const enrichmentContext = [
     leadData.title && `Title: ${leadData.title}`,
     leadData.company && `Company: ${leadData.company}`,
     leadData.industry && `Industry: ${leadData.industry}`,
     leadData.employees && `Company size: ${leadData.employees} employees`,
-    leadData.seniority && `Seniority: ${leadData.seniority}`
+    leadData.seniority && `Seniority: ${leadData.seniority}`,
+    // First-party research from our own DB - use it to personalize, do NOT quote verbatim.
+    leadData.researchSummary && `What we know about their company (use naturally, do not quote): ${leadData.researchSummary}`,
+    leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`,
+    // One-liner the offer classifier wrote specifically for this lead - weave it in naturally.
+    leadData.personalizationHook && `Personalization hook (use naturally if it fits): ${leadData.personalizationHook}`
   ].filter(Boolean).join('\n');
 
-  if (hasRealMessage) {
+  // Offer-link-first: whenever a personalized offer page exists, the reply drives the
+  // lead to OPEN that page (it holds details + a booking option) instead of cold-pushing
+  // a Calendly link. A cold "book a call" ask converts poorly; the page is a smaller ask,
+  // lets the lead self-qualify, and still contains the booking CTA. Calendly is only the
+  // fallback when no page exists; explicit call-requests are handled separately above.
+  const offerUrl = leadData.offerUrl || null;
+
+  // Pin addressing deterministically from the lead's own message (model kept mixing).
+  const addressing = detectAddressing(hasRealMessage ? theirMessage : '');
+  const addressingRule = addressing === 'ti'
+    ? '\nADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently. Never switch to vikanje mid-message.'
+    : '\nADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje, never mix the two.';
+
+  // Pin reply language to the lead's message language (model defaulted to Slovenian).
+  const languageRule = buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null);
+
+  // Thread context: last few messages from Airtable so the reply continues the
+  // conversation instead of reacting to the last message in a vacuum.
+  let threadContext = '';
+  if (hasRealMessage && leadData.linkedinUrl) {
+    try { threadContext = await airtableGetThreadContext(leadData.linkedinUrl); } catch { /* non-blocking */ }
+  }
+
+  // Thread dedup: if an offer/booking link already went out earlier in this thread,
+  // never paste a link again and never re-ask an already asked question. Repeating
+  // the same link + question in consecutive replies was killing credibility.
+  const linkAlreadySent = !!(threadContext && /(ponudbe\.aiera\.si|ai\.aiera\.si|ponudbe\.b2booster\.eu|calendly\.com)/i.test(threadContext));
+  const useOfferCta = !!offerUrl && !linkAlreadySent;
+
+  if (hasRealMessage && leadData.wantsCall) {
+    // Lead asked to be called / left a number. A call is the hottest signal:
+    // do NOT send any link. Just arrange the call.
+    const phoneNote = leadData.messagePhone ? ` They left their number: ${leadData.messagePhone}.` : '';
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
-${enrichmentContext}
+${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation, references their specific context if relevant, and moves toward a Calendly booking. Include a concrete value proposition relevant to their role/industry.`;
+The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
+  } else if (hasRealMessage) {
+    // Structure rotation (anti-template): the old fixed example ("Pripravil sem vam
+    // kratek pregled...") leaked verbatim into ~60% of drafts. Pick one of 4 reply
+    // structures deterministically per lead so consecutive drafts do not read alike.
+    const structures = [
+      `STRUCTURE: React to ONE concrete detail from their message in a single sentence, then give the link with a short intro in your own words, then close with one yes/no question about whether this direction makes sense for them.`,
+      `STRUCTURE: Answer their point, then ask ONE short question about their current situation (how they handle outreach/quotes today), and offer the link as supporting detail mid-message, not as the closing line.`,
+      `STRUCTURE: Lead with the single most relevant thing we would take off their plate given their role/industry, back it with the link, close by proposing two concrete call times (weekday + hour, e.g. "četrtek ob 10.00 ali petek ob 13.00").`,
+      `STRUCTURE: Short and almost casual: one sentence of substance, link in the second sentence, one-line question at the end. Total 3 sentences maximum.`
+    ];
+    const structIdx = Math.abs([...`${leadData.firstName}${leadData.lastName}${leadData.company || ''}`].reduce((a, c) => a + c.charCodeAt(0), 0)) % structures.length;
+    const ctaInstruction = linkAlreadySent
+      ? `A link was ALREADY shared earlier in this conversation (you can see it above). Do NOT include any link or URL in this reply and do NOT repeat a question that was already asked in the conversation. React to their latest message with substance and end with ONE new concrete question or two proposed call times (weekday + hour).`
+      : useOfferCta
+        ? `Point them to the personalized page prepared for them, using the literal token [OFFER LINK] as the URL. The page holds the concrete details and a booking option: do NOT also paste a separate Calendly link. ${structures[structIdx]} BANNED SENTENCE (never use it or close variations): "Pripravil sem vam kratek pregled, kako bi to izgledalo pri vas". Introduce the link in fresh words.`
+        : `Move toward a Calendly booking. Include a concrete value proposition relevant to their role/industry. ${structures[structIdx]}`;
+    prompt = `Channel: ${channelNote}
+Lead name: ${leadData.firstName} ${leadData.lastName}
+${enrichmentContext}${threadContext}
+Their message: "${theirMessage}"
+
+Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}
+HARD CLOSE RULE: end with exactly ONE concrete question or two proposed call times. NEVER promise a future action ("pošljemo v naslednjih dneh", "javimo se kmalu") - deliver everything in this message.
+HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${addressingRule}${languageRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 Context: ${theirMessage}
 
-Write a short, natural opening message that acknowledges the connection and moves toward a Calendly booking.
+Write a short, natural opening message. Lead with what we take off their plate (we run the outreach to the right decision-makers for them), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". NEVER promise a specific number of replies or meetings. Then move toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
-Be direct and confident. Start the conversation naturally.`;
+Be confident but humble, never cocky. Start the conversation naturally.${languageRule}${variant.nudge}`;
   }
+
+  let text = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 400,
+      system: STYLE_GUIDE + trainingContext,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    text = response.content[0].text.trim();
+    // Deterministic guard: a draft that promises a FUTURE send is a dead end (nothing
+    // in the pipeline fulfils it). One retry with an explicit correction, then give up
+    // gracefully (approval-first flow means a human still sees it).
+    if (attempt === 1 && FUTURE_PROMISE_RE.test(text)) {
+      console.warn('[REPLY] Draft promised a future action - retrying once');
+      prompt += `\n\nYOUR PREVIOUS DRAFT BROKE A HARD RULE: it promised a future action (e.g. "pošljemo v naslednjih dneh"). FORBIDDEN. Deliver everything IN THIS MESSAGE and end with one concrete question or two proposed call times.`;
+      continue;
+    }
+    break;
+  }
+  // Lektorski pass before placeholder swap so the proofreader sees the clean text.
+  text = (await polishSlovenian(text, { signature: 'Žan Bagarič' })) || text;
+  // Offer link takes priority. If the model emitted [OFFER LINK] but no offer
+  // exists, fall back to Calendly so we never ship a broken placeholder.
+  text = text.replace(/\[OFFER LINK\]/g, offerUrl || CALENDLY_LINK);
+  text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
+  return ensureSignature(cleanArtifacts(text), 'Žan Bagarič');
+}
+
+// Vesna reply generator - shared by /webhook/outflo (Vesna) and /webhook/vesna.
+// Fixes the old flow where the offer page was deployed but the prompt never saw
+// the link, enrichment or thread context, so every draft was a generic
+// "na kateri e-naslov?" regardless of what the lead actually wrote.
+async function generateVesnaReply(leadData, theirMessage, hasRealMessage = true) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const enrichmentContext = [
+    leadData.title && `Title: ${leadData.title}`,
+    leadData.company && leadData.company !== 'LinkedIn' && `Company: ${leadData.company}`,
+    leadData.industry && `Industry: ${leadData.industry}`,
+    leadData.researchSummary && `What we know about their company (use naturally, do not quote): ${leadData.researchSummary}`,
+    leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`
+  ].filter(Boolean).join('\n');
+
+  let threadContext = '';
+  if (hasRealMessage && leadData.linkedinUrl) {
+    try { threadContext = await airtableGetThreadContext(leadData.linkedinUrl); } catch { /* non-blocking */ }
+  }
+
+  const offerUrl = leadData.offerUrl || null;
+  const linkAlreadySent = !!(threadContext && /(ponudbe\.aiera\.si|ai\.aiera\.si|ponudbe\.b2booster\.eu|calendly\.com)/i.test(threadContext));
+
+  const ctaInstruction = linkAlreadySent
+    ? `A link was ALREADY shared earlier in this conversation (see it above). Do NOT paste any link again and do NOT repeat a question that was already asked. React to their latest message with substance and end with ONE new concrete question.`
+    : offerUrl
+      ? `A personalized offer page with the concrete details for their company is ready. Point them to it using the literal token [OFFER LINK] as the URL (this is our own offer page, NOT a Calendly link - including it is required and allowed). Do NOT ask for their email address - the page replaces the emailed proposal. End with ONE short concrete question, e.g. whether the direction on the page makes sense for their situation.`
+      : `End with ONE concrete question, by default asking which email address to send the tailored proposal to (if their email is already in the message, confirm sending to it instead).`;
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 400,
-    system: STYLE_GUIDE + trainingContext,
-    messages: [{ role: 'user', content: prompt }]
+    max_tokens: 300,
+    system: VESNA_STYLE_GUIDE,
+    messages: [{
+      role: 'user',
+      content: `Lead name: ${leadData.firstName} ${leadData.lastName}
+${enrichmentContext}${threadContext}
+${hasRealMessage ? `Their message: "${theirMessage}"` : `Context: ${theirMessage}`}
+
+Write a short LinkedIn reply in Vesna's name. FIRST address the substance of their message: if they asked something concrete, answer it in one sentence using the company context above - NEVER reply with a generic acknowledgement that ignores their question. ${ctaInstruction} NEVER promise "v naslednjih dneh" or any vague future action. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null)}`
+    }]
   });
 
   let text = response.content[0].text.trim();
-  text = text.replace(/\[CALENDLY LINK\]/g, CALENDLY_LINK);
-  return text;
+  text = (await polishSlovenian(text, { signature: 'Vesna Pevec' })) || text;
+  if (offerUrl) text = text.replace(/\[OFFER LINK\]/g, offerUrl);
+  return ensureSignature(cleanArtifacts(text), 'Vesna Pevec');
+}
+
+// Future-promise detector: drafts that defer delivery ("pošljemo v naslednjih dneh")
+// create commitments nothing in the pipeline fulfils. Checked deterministically
+// after every generation because the LLM rule alone is not 100% reliable.
+const FUTURE_PROMISE_RE = /(v (naslednjih|prihodnjih|prihajajočih) dneh|v kratkem (vam|ti|se)|kmalu (vam|ti|se) (pošljemo|posljemo|pripravimo|javimo|oglasimo)|(pošljemo|posljemo) (vam |ti )?(konkretno |konkreten )?(ponudbo|predlog) (na|po) e|we('ll| will) (send|get back|follow up)|in the (coming|next) (days|few days)|get back to you (shortly|soon))/i;
+
+// Deterministic signature guard: EN/DE drafts kept going out unsigned (the polish
+// pass enforces it for Slovenian but is skipped/fails on non-SL text sometimes).
+function ensureSignature(text, name) {
+  if (!text || !name) return text;
+  const firstName = name.split(' ')[0];
+  if (text.includes(firstName)) {
+    // Already signed (or at least mentions the sender name at the end) - leave as is.
+    const tail = text.slice(-60);
+    if (tail.includes(firstName)) return text;
+  }
+  return `${text.replace(/\s+$/, '')}\n\n${name}`;
+}
+
+// ─── DETERMINISTIC TEXT GUARDS ────────────────────────────────────────────────
+// The LLM polish pass is not reliable for hard typographic/grammar rules: em/en
+// dashes and dvojina kept leaking into sent messages. These run AFTER every
+// generator so the rule is enforced 100% of the time, not "usually".
+
+// Common dvojina (1st person dual) verb forms -> 1st person plural. Conservative,
+// word-boundary, only unambiguous dual verbs so we never break valid grammar.
+const DVOJINA_MAP = {
+  'slišiva': 'slišimo', 'sliševa': 'slišimo', 'pogledava': 'pogledamo',
+  'pošljeva': 'pošljemo', 'posljeva': 'posljemo', 'vidiva': 'vidimo',
+  'pripraviva': 'pripravimo', 'narediva': 'naredimo', 'uskladiva': 'uskladimo',
+  'dogovoriva': 'dogovorimo', 'pokličeva': 'pokličemo', 'pokliceva': 'poklicemo',
+  'srečava': 'srečamo', 'srecava': 'srecamo', 'greva': 'gremo',
+  'začneva': 'začnemo', 'zacneva': 'zacnemo', 'preveriva': 'preverimo',
+  'lahko se slišiva': 'lahko se slišimo', 'midva': 'mi'
+};
+
+function cleanArtifacts(text) {
+  if (!text) return text;
+  let t = text;
+  // 1) Kill every dash variant (em, en, figure, minus, etc.) -> regular hyphen.
+  t = t.replace(/[‐‑‒–—―−]/g, '-');
+  // 2) Unicode ellipsis -> plain dots.
+  t = t.replace(/…/g, '...');
+  // 3) Fancy quotes -> straight quotes (keeps copy clean, matches SaaS style).
+  t = t.replace(/[“”„‟]/g, '"').replace(/[‘’‚]/g, "'");
+  // 4) Dvojina -> plural (case-insensitive, word boundaries).
+  for (const [dual, plural] of Object.entries(DVOJINA_MAP)) {
+    t = t.replace(new RegExp(`\\b${dual}\\b`, 'gi'), plural);
+  }
+  // 5) Collapse accidental double spaces left by replacements.
+  t = t.replace(/ {2,}/g, ' ');
+  return t;
+}
+
+// Detect how the lead addressed us so we can pin vikanje/tikanje deterministically
+// instead of letting the model guess (it often mixed both in one message).
+function detectAddressing(text) {
+  if (!text) return 'vi';
+  const t = ' ' + text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '') + ' ';
+  const vi = /\b(vas|vam|vase|vasega|vasi|vaso|vi|prosim vas|poslji?te|povejte|pokli?cite|lahko mi poveste|ste|boste)\b/.test(t)
+    || /\bvas[ae]?\b/.test(t);
+  const ti = /\b(tebe|tebi|tvoj|tvoja|tvoje|tvojo|tvojega|tvojem|pokli?ci me|povej|javi mi|posiljas|imas|lahko mi poves|ti)\b/.test(t);
+  if (ti && !vi) return 'ti';
+  return 'vi'; // default + when both present, stay formal
+}
+
+// Detect the lead's message language so we can pin the REPLY language deterministically.
+// The model kept defaulting to Slovenian (STYLE_GUIDE is Slovenian-heavy) even when the
+// lead wrote in another language, producing a reply whose language did not match the lead.
+// Returns 'sl' | 'en' | 'de' | 'cs' | null (null = let the model mirror the message).
+function detectLanguage(text) {
+  if (!text || text.trim().length < 3) return null;
+  const raw = text.toLowerCase();
+  const t = ' ' + raw + ' ';
+  const count = (arr) => arr.reduce((n, w) => n + (t.includes(' ' + w + ' ') ? 1 : 0), 0);
+
+  // Czech: distinctive háček/kroužek letters Slovenian/German never use are enough on
+  // their own. For diacritic-stripped text, require 2+ Czech-distinctive words (avoid
+  // single tokens like "prosim"/"vam" that also exist in Slovenian -> false positives).
+  if (/[řěůťďň]/i.test(raw)
+    || count(['děkuji','dekuji','dobrý','dobry','společnost','spolecnost','více','vice','nabídka','nabidka','jsme','jsem','není','neni','zpráva','zprava','přesně','presne']) >= 2) return 'cs';
+
+  // German: ß is unique; umlauts + a stopword, or two stopwords, confirm it. All words
+  // below are German-distinctive (not Slovenian/English) so two of them are safe.
+  const deStop = count(['und','der','die','das','ich','wir','ist','für','fur','mit','nicht','sehr','danke','dank','vielen','ihnen','ihre','ihren','ihr','sie','was','haben','sind','eine','einen','gerne','guten','bieten','würde','wurde','würden','wurden','möchten','moechten','grüße','grusse','freundlichen']);
+  if (/ß/.test(raw) || (/[äöü]/.test(raw) && deStop >= 1) || deStop >= 2) return 'de';
+
+  // Slovenian: šumniki or common stopwords.
+  const slDia = /[čšž]/.test(raw);
+  const slStop = count(['in','pa','je','ki','da','za','na','se','ne','vas','vam','hvala','prosim','lep','pozdrav','smo','sem','ponudbo','zanima','vaš','vas','ali','kako','kaj','bi','že','nas']);
+
+  // English: common stopwords.
+  const enStop = count(['the','you','your','we','is','are','thanks','thank','hi','hello','please','would','could','interested','more','information','about','what','how','our','can','will','not','for','and','with']);
+
+  if (slDia || slStop >= 2) {
+    // SL and EN share some short tokens; only flip to EN if EN clearly dominates and no šumniki.
+    if (!slDia && enStop >= slStop + 2) return 'en';
+    return 'sl';
+  }
+  if (enStop >= 2) return 'en';
+  return null;
+}
+
+const LANG_NAMES = { sl: 'Slovenian', en: 'English', de: 'German', cs: 'Czech' };
+
+// Build a hard LANGUAGE instruction pinned to the lead's message, mirroring the
+// deterministic addressingRule pattern. Placed at the END of the user prompt so it
+// wins over the Slovenian default baked into STYLE_GUIDE / VESNA_STYLE_GUIDE.
+function buildLanguageRule(theirMessage, hasRealMessage = true, knownLang = null) {
+  if (!hasRealMessage) {
+    return '\nLANGUAGE (hard): Write in Slovenian (this is a first-contact opener).';
+  }
+  // Prefer the LLM-classified language (classifyMessage) over the stopword heuristic.
+  const lang = knownLang || detectLanguage(theirMessage);
+  if (lang && lang !== 'sl') {
+    const name = LANG_NAMES[lang];
+    return `\nLANGUAGE (hard, OVERRIDES any Slovenian default in the style guide): The lead wrote in ${name}. Write your ENTIRE reply in ${name}. Do NOT write in Slovenian, do NOT translate, do NOT mix languages.`;
+  }
+  if (lang === 'sl') {
+    return '\nLANGUAGE (hard): The lead wrote in Slovenian. Reply entirely in Slovenian with correct šumniki (č, š, ž).';
+  }
+  // Unknown: instruct the model to mirror the lead's own language.
+  return '\nLANGUAGE (hard): Reply in the EXACT same language the lead used in their message above. Mirror their language and do not switch to Slovenian unless their message is in Slovenian.';
+}
+
+// Hard addressing instruction string, derived from the lead's own message.
+function addressingRuleFor(leadData) {
+  const addr = detectAddressing((leadData && leadData.theirMessage) || '');
+  return addr === 'ti'
+    ? 'ADDRESSING (hard): The lead wrote in tikanje, so reply in tikanje (ti, tebe, tvoj) consistently.'
+    : 'ADDRESSING (hard): Reply in vikanje (Vi, Vas, Vam) consistently. Never use tikanje.';
+}
+
+// ─── LEKTORSKI / POLISH PASS ──────────────────────────────────────────────────
+// Final proofreading layer over any generated message. Fixes grammar (case
+// endings, conjugation), restores šumniki, removes dvojina + em dashes, tightens
+// awkward phrasing, and enforces the correct sign-off - WITHOUT changing meaning,
+// language, links, or the [CALENDLY LINK] placeholder. Returns null on failure so
+// callers fall back to the unpolished draft (never block a send on the polisher).
+async function polishSlovenian(text, opts = {}) {
+  if (!text || text.trim().length < 3) return null;
+  const signature = opts.signature || null;
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const sigRule = signature
+      ? `- The message MUST be signed off by "${signature}". If it is signed with a different name, no name, or "Vesna", replace the sign-off with "${signature}". Keep any natural greeting at the start.`
+      : `- Keep the existing sign-off name unchanged.`;
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 400,
+      system: `You are a meticulous Slovenian proofreader for short B2B outreach messages. You return a corrected version of the message and NOTHING else.
+
+HARD RULES:
+- Keep the SAME language as the input. If the message is in English, German or Czech, proofread it in that language and do NOT translate.
+- Do NOT change the meaning, the offer, prices, or the length materially. Same number of sentences, same intent.
+- Preserve EXACTLY, character for character: any URL, email address, and the literal tokens [CALENDLY LINK], [CALENDLY_15MIN] and [OFFER LINK]. Never rewrite, remove, or reformat them.
+- Fix Slovenian grammar: correct case endings (skloni), verb conjugation, agreement, and word order. Restore missing šumniki (č, š, ž).
+- Remove dvojina (1st person dual: "pošljeva", "pogledava", "se slišiva", "sva", "midva") and replace with 1st person plural ("pošljemo", "pogledamo", "se slišimo").
+- Replace every em dash or en dash (— –) with a comma or a regular hyphen "-".
+- Remove invented or non-existent words and clumsy phrasing; make it read like a fluent native speaker wrote it.
+- Keep vikanje unless the message clearly uses tikanje already (then keep tikanje).
+- Do not add bullet points, headings, labels, quotes around the message, or any commentary.
+${sigRule}
+
+OUTPUT: only the corrected message text.`,
+      messages: [{ role: 'user', content: text }]
+    });
+    const out = response.content?.[0]?.text?.trim();
+    if (!out || out.length < 3) return null;
+    // Guard: never let the polisher drop a link placeholder if the input had it.
+    if (text.includes('[CALENDLY LINK]') && !out.includes('[CALENDLY LINK]')) return null;
+    if (text.includes('[CALENDLY_15MIN]') && !out.includes('[CALENDLY_15MIN]')) return null;
+    if (text.includes('[OFFER LINK]') && !out.includes('[OFFER LINK]')) return null;
+    // Deterministic final guard: dashes/dvojina the LLM may still have left.
+    return cleanArtifacts(out);
+  } catch (e) {
+    console.warn('[POLISH] failed, using raw draft:', e.message);
+    return null;
+  }
 }
 
 // ─── INTENT CLASSIFICATION ────────────────────────────────────────────────────
 
-async function classifyIntent(message) {
-  if (!message || message.trim().length < 3) return 'neutral';
+// Deterministic opt-out guard. Runs BEFORE any AI call so an explicit "odjava /
+// ne pošiljaj več / unsubscribe" can never be misclassified and replied to.
+const UNSUB_RE = /(odjav\w*|ne\s+posiljaj\w*\s+(mi\s+)?(vec|nic|nicesar)|prenehajte?\s+(s\s+)?posiljat|ne\s+kontaktiraj|izbrisi(te)?\s+me|brisi(te)?\s+me\s+s|unsubscribe|remove\s+me|take\s+me\s+off|stop\s+(contacting|emailing|messaging|writing)|do\s+not\s+contact|opt[\s-]?out|abmelden|abbestellen|keine\s+weiteren\s+(nachrichten|mails)|neposilejte|odhlasit)/i;
+function isUnsubscribeMessage(text) {
+  if (!text) return false;
+  const t = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return UNSUB_RE.test(t);
+}
+
+// Language-aware negative closeout templates. The old hardcoded Slovenian string
+// went out even when the lead wrote in English/German - the #1 "weird reply" fail.
+const CLOSEOUT_BY_LANG = {
+  sl: (n, s) => `Razumem, hvala za odgovor${n ? ' ' + n : ''}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${s}`,
+  en: (n, s) => `Understood, thanks for letting me know${n ? ', ' + n : ''}. If anything changes down the line, I am happy to reconnect. Best regards, ${s}`,
+  de: (n, s) => `Verstanden, danke für Ihre Rückmeldung${n ? ', ' + n : ''}. Falls sich die Situation einmal ändert, melden Sie sich gerne. Freundliche Grüße, ${s}`,
+  cs: (n, s) => `Rozumím, děkuji za odpověď${n ? ', ' + n : ''}. Kdyby se situace někdy změnila, ozvěte se. S pozdravem, ${s}`
+};
+function buildNegativeCloseout(language, firstName, signoff) {
+  const f = CLOSEOUT_BY_LANG[language] || CLOSEOUT_BY_LANG.sl;
+  return f(firstName || '', signoff || 'Žan');
+}
+
+// Bare acknowledgement ("ok", "hvala", "super") - a full pitch reply with an offer
+// link to these reads pushy and weird. Detect them so the flow can skip drafting.
+const BARE_ACK_RE = /^(ok(ej|ay)?|v redu|velja|hvala(\s+(lepa|vam|ti))?|thanks?(\s+you)?|thank you|thx|super|odlicno|top|perfect|great|noted|dogovorjeno|may se|se vidimo|lp|lep pozdrav|danke)[\s.!,🙂👍🙏]*$/i;
+function isBareAck(text) {
+  const t = (text || '').trim().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return t.length > 0 && t.length <= 40 && !t.includes('?') && BARE_ACK_RE.test(t);
+}
+
+// Combined intent + language classification in ONE Haiku call. Language from the
+// LLM is far more reliable than the stopword heuristic (which whiffed on short
+// English messages and let the Slovenian-heavy style guide take over the reply).
+async function classifyMessage(message) {
+  if (!message || message.trim().length < 3) return { intent: 'neutral', language: null };
+  if (isUnsubscribeMessage(message)) return { intent: 'unsubscribe', language: detectLanguage(message) };
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 10,
+    max_tokens: 12,
     messages: [{
       role: 'user',
-      content: `Classify this reply intent. Return ONLY one word.
+      content: `Classify this B2B outreach reply. Return ONLY: intent|language (one line, lowercase).
 
+INTENT (one of):
+unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
-soft_negative = maybe later: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "in the future", "trenutno ne"
-positive = interested, asking questions, wants to talk
-neutral = just acknowledging, unclear intent, short reply like "ok", "hvala"
+soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
+vendor_pitch = THEY are selling or promoting something TO US instead of responding to our offer: a pitch for their own product/service/agency, an event/webinar/conference invitation, a newsletter or promo blast, a course/program promotion, recruiting spam. Examples: "join us for our event", "we help companies like yours grow", "check out our platform", "vam pomagam izboljšati prodajne strategije", "are you ready to take your startup global". KEY TEST: if the message would read the same even if we had never written to them, it is vendor_pitch. This OVERRIDES positive: a friendly sales pitch to us is vendor_pitch, NOT positive.
+positive = interested IN OUR OFFER, asking a question about it, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
+neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
-Message: "${message.substring(0, 300)}"
+LANGUAGE (of THEIR message, one of): sl, en, de, cs, other
 
-Return: negative, soft_negative, positive, or neutral`
+Message: "${message.substring(0, 1000)}"
+
+Return format example: positive|en`
     }]
   });
-  const intent = response.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');
-  const valid = ['negative', 'soft_negative', 'positive', 'neutral'];
-  return valid.includes(intent) ? intent : 'neutral';
+  const raw = response.content[0].text.trim().toLowerCase();
+  const [intentRaw, langRaw] = raw.split('|').map(s => (s || '').trim().replace(/[^a-z_]/g, ''));
+  const validIntents = ['unsubscribe', 'negative', 'soft_negative', 'vendor_pitch', 'positive', 'neutral'];
+  const validLangs = ['sl', 'en', 'de', 'cs'];
+  const intent = validIntents.includes(intentRaw) ? intentRaw : 'neutral';
+  const language = validLangs.includes(langRaw) ? langRaw : (detectLanguage(message) || null);
+  return { intent, language };
+}
+
+// Back-compat wrapper - existing call sites that only need the intent keep working.
+async function classifyIntent(message) {
+  return (await classifyMessage(message)).intent;
+}
+
+// ─── OFFER CLASSIFICATION (aiera vs b2booster) ────────────────────────────────
+// Decides which offer to send. Default routing:
+//   - B2B + sales/growth role OR country != Slovenia → b2booster
+//   - SI + non-sales role (CFO, CTO, HR, ops, marketing) → aiera
+//   - Uncertain → aiera (safer default)
+// B2B_CHECK is mandatory: B2C consumer brands NEVER get b2booster.
+
+const OFFER_CLASSIFIER_PROMPT = `You classify B2B sales leads into one of three offer paths: "generator", "b2booster", or "aiera".
+
+OFFER PATHS:
+
+GENERATOR (AIERA Generator ponudb - SaaS for sales teams that send B2B offers/quotes):
+- Tool/service that auto-generates personalized branded offers from the company's pricelist
+- Replaces static Word/PDF quotes with tracked web pages in their own brand
+- Pricing: pilot from 290 EUR/mo + 490 EUR setup (custom per segment)
+- Best for: SI companies (10-500 employees) that SEND many B2B quotes
+- Indicators: any sales/commercial/export/owner role at SI SMB that DOES B2B sales themselves
+- Industries: manufacturing, construction, IT services, distribution, electromechanical, HVAC, engineering, agencies, consulting, wholesale, technical services
+- THIS IS THE DEFAULT FOR SLOVENIAN LEADS
+
+B2BOOSTER (B2B AI outreach service, 790 EUR setup + 890 EUR/mo):
+- Done-for-you cold outreach: LinkedIn + email + AI replies + meeting booking
+- We do outreach FOR them (vs Generator which is a tool THEY use to send offers)
+- Best for B2B sellers needing pipeline/sales meetings into FOREIGN markets
+- Indicators: sales/BD/growth/export/commercial role AND country != Slovenia (DACH, EU, US)
+- OR Slovenian company with EXPLICIT focus on international expansion / DACH outreach
+
+AIERA (broader AI automation agency):
+- Best for: CFO/finance, CTO/IT, HR, operations, regulated industries (healthcare, legal, gov), enterprises >500 employees, B2C brands, non-sales use cases (internal AI workflow, document AI, custom apps)
+- Use as fallback when Generator and B2Booster don't fit
+
+MANDATORY B2B_CHECK (filter BEFORE choosing generator or b2booster):
+- The lead's company must SELL TO BUSINESSES, not just consumers
+- Pure B2C (=> route to aiera): pure retail consumer brands, e-commerce direct-to-consumer only, B2C subscription apps, pure hospitality/restaurant chains, transport-only/logistics-to-consumer
+- If lead = "Head of Growth at a D2C beverage brand" → AIERA
+
+DEFAULT RULES:
+1. If B2B_CHECK fails → aiera
+2. Else if SOLO/MICRO (s.p., 1-2 people, lead says "sem sam", "sem edini zaposleni", one-person consultancy) AND does B2B sales → generator (the affordable tier; NEVER pitch b2booster's price point at a solo operator, and NEVER write them off just for being small)
+3. Else if country != "Slovenia" AND any B2B sales signal → b2booster
+4. Else if Slovenia AND company explicitly targets international expansion → b2booster
+5. Else if Slovenia AND B2B company (any size 10-500, any sales role OR owner/CEO) → generator
+6. Else if Slovenia AND non-sales role at large enterprise (CFO, CTO, HR, ops, marketing >500) → aiera
+7. Else if Slovenia AND B2B but role unclear → generator (default)
+8. Else (uncertain, confidence < 0.5) → aiera
+
+Return JSON only, no markdown, no commentary:
+{
+  "offer": "generator" | "b2booster" | "aiera",
+  "confidence": 0.0-1.0,
+  "b2b_check": "pass" | "fail" | "unknown",
+  "key_signal": "<1 sentence: why this fit>",
+  "personalization_hook": "<1 short Slovenian sentence to use in the reply that ties to their specific situation>"
+}`;
+
+// Cache helper for classifyOffer (#3): per linkedinUrl, stored in Airtable Leads.
+// Field: "Offer Type Cached" (text). Skip cache if missing or env disable.
+const CLASSIFY_CACHE_ENABLED = (process.env.CLASSIFY_CACHE_ENABLED || 'true').toLowerCase() === 'true';
+async function getClassifyCache(linkedinUrl) {
+  if (!CLASSIFY_CACHE_ENABLED || !AIRTABLE_PAT || !linkedinUrl) return null;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&fields[]=Offer%20Type%20Cached&maxRecords=1`);
+    const cached = r?.records?.[0]?.fields?.['Offer Type Cached'];
+    if (cached && ['aiera', 'b2booster', 'generator'].includes(cached)) return cached;
+  } catch (e) {
+    console.warn('[CLASSIFY-CACHE] read error:', e.message);
+  }
+  return null;
+}
+async function setClassifyCache(linkedinUrl, offerType) {
+  if (!CLASSIFY_CACHE_ENABLED || !AIRTABLE_PAT || !linkedinUrl || !offerType) return;
+  try {
+    const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    const rec = r?.records?.[0];
+    if (rec) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields: { 'Offer Type Cached': offerType } });
+    }
+  } catch (e) {
+    console.warn('[CLASSIFY-CACHE] write error:', e.message);
+  }
+}
+
+// Pivot detector (#10): lead says "not for this but interested in X" → bypass cache, re-classify.
+// Cheap keyword check first; only escalate to AI if keyword hit (low false-positive cost).
+const PIVOT_KEYWORDS = [
+  // SI
+  'ampak bi', 'ampak imamo', 'ampak nas zanima', 'ampak potrebujemo',
+  'tega ne potrebujemo, bi pa', 'nismo za to, bi pa',
+  'ni za nas, ampak', 'ne za to, ampak', 'drugačno potrebo',
+  'imamo pa drug', 'imamo drugačn',
+  // EN
+  'not for us but', 'not interested in this but', 'this isn\'t what we need but',
+  'we don\'t need this but', 'different need', 'something else though'
+];
+function hasPivotSignal(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return PIVOT_KEYWORDS.some(k => lower.includes(k.normalize('NFD').replace(/\p{Diacritic}/gu, '')));
+}
+
+async function classifyOffer(leadData, theirMessage) {
+  // Safety: always pick a default before AI call
+  const fallback = {
+    offer: 'aiera',
+    confidence: 0.5,
+    b2b_check: 'unknown',
+    key_signal: 'classifier fallback (no AI call)',
+    personalization_hook: ''
+  };
+  if (!process.env.ANTHROPIC_API_KEY) return fallback;
+
+  // Pivot check: if their reply signals a different need, invalidate cache & re-classify.
+  const isPivot = hasPivotSignal(theirMessage);
+  if (isPivot) {
+    console.log(`[CLASSIFY-PIVOT] Pivot signal detected for ${leadData?.linkedinUrl} - bypassing cache`);
+    // Invalidate cache so re-classification gets persisted
+    if (leadData?.linkedinUrl) setClassifyCache(leadData.linkedinUrl, '').catch(() => {});
+  }
+
+  // Check cache first (saves Haiku call on follow-up messages from same lead)
+  if (!isPivot) {
+    const cached = await getClassifyCache(leadData?.linkedinUrl);
+    if (cached) {
+      console.log(`[CLASSIFY-CACHE] HIT for ${leadData.linkedinUrl} → ${cached}`);
+      return {
+        offer: cached,
+        confidence: 0.95,
+        b2b_check: 'cached',
+        key_signal: 'cached from previous classification',
+        personalization_hook: ''
+      };
+    }
+  }
+
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const leadBlock = [
+      `Name: ${leadData.firstName || ''} ${leadData.lastName || ''}`,
+      `Title/role: ${leadData.title || leadData.role || 'unknown'}`,
+      `Company: ${leadData.company || 'unknown'}`,
+      `Industry: ${leadData.industry || leadData.industryContext || 'unknown'}`,
+      `Employees: ${leadData.employees || 'unknown'}`,
+      `Seniority: ${leadData.seniority || 'unknown'}`,
+      `Country: ${leadData.country || 'unknown'}`,
+      `Campaign: ${leadData.campaignName || 'unknown'}`,
+      `Their reply: "${(theirMessage || leadData.theirMessage || '').substring(0, 400)}"`,
+      isPivot ? `\nIMPORTANT: The lead signaled this is NOT the right fit for the previous offer but they have ANOTHER need. Re-classify based on what they actually want now, not the original campaign assumption.` : ''
+    ].filter(Boolean).join('\n');
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      system: OFFER_CLASSIFIER_PROMPT,
+      messages: [{ role: 'user', content: leadBlock }]
+    });
+
+    let raw = response.content[0].text.trim();
+    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    const parsed = JSON.parse(raw);
+
+    if (!['aiera', 'b2booster', 'generator'].includes(parsed.offer)) parsed.offer = 'aiera';
+    if (typeof parsed.confidence !== 'number') parsed.confidence = 0.5;
+
+    // Hard override: if env disables b2booster, force generator (or aiera as fallback)
+    if (process.env.ENABLE_B2BOOSTER === 'false' && parsed.offer === 'b2booster') {
+      parsed.offer = 'generator';
+      parsed.key_signal = '(b2booster disabled by env) ' + (parsed.key_signal || '');
+    }
+    // Hard override: if env disables generator, force aiera
+    if (process.env.ENABLE_GENERATOR === 'false' && parsed.offer === 'generator') {
+      parsed.offer = 'aiera';
+      parsed.key_signal = '(generator disabled by env) ' + (parsed.key_signal || '');
+    }
+
+    // Write to cache for future replies from this lead
+    setClassifyCache(leadData?.linkedinUrl, parsed.offer).catch(() => {});
+
+    return parsed;
+  } catch (err) {
+    console.error('[CLASSIFY-OFFER] Error:', err.message);
+    return fallback;
+  }
 }
 
 const CLOSING_REPLY_PROMPT = `You generate short, warm closing replies for LinkedIn conversations where the lead said they're not interested right now but might be in the future.
@@ -881,21 +2175,23 @@ async function generateClosingReply(leadData, theirMessage) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 150,
-    system: CLOSING_REPLY_PROMPT,
+    system: CLOSING_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName} ${leadData.lastName}
 Their message: "${theirMessage}"
 
-Generate closing reply.`
+Generate closing reply.${buildLanguageRule(theirMessage, true, leadData.language || null)}`
     }]
   });
-  return response.content[0].text.trim();
+  const raw = response.content[0].text.trim();
+  return (await polishSlovenian(raw)) || raw;
 }
 
 // ─── SEND VIA OUTFLO (LinkedIn) ───────────────────────────────────────────────
 
 async function sendViaOutflo(receiverLinkedInUrl, text, senderUrl = null) {
+  text = cleanArtifacts(text); // final backstop: no dashes/dvojina ever leave
   const res = await fetch('https://live.outflo.in/api/public/conversations/reply', {
     method: 'POST',
     headers: {
@@ -916,6 +2212,7 @@ async function sendViaOutflo(receiverLinkedInUrl, text, senderUrl = null) {
 // ─── SEND VIA INSTANTLY (Email) ───────────────────────────────────────────────
 
 async function sendViaInstantly(replyToUuid, emailBody, subject) {
+  emailBody = cleanArtifacts(emailBody); // final backstop
   const res = await fetch('https://api.instantly.ai/api/v1/unibox/emails/reply', {
     method: 'POST',
     headers: {
@@ -932,6 +2229,22 @@ async function sendViaInstantly(replyToUuid, emailBody, subject) {
   const data = await res.json();
   if (!res.ok) throw new Error(`Instantly error: ${JSON.stringify(data)}`);
   return data;
+}
+
+// ─── CALL-REQUEST DETECTION ───────────────────────────────────────────────────
+// A lead who drops a phone number or says "pokliči me" is the hottest signal we get.
+// Those must NOT get an auto Calendly/offer reply - they need a personal call from Žan.
+// Returns { wantsCall, phone } where phone is the number found in their message (if any).
+function detectCallRequest(text) {
+  if (!text) return { wantsCall: false, phone: '' };
+  const callIntent = /(pokli[čc]|na\s+(mojo\s+)?(tel|[šs]tevilk)|moja\s+(tel|[šs]tevilk)|call me|give me a call|reach me at|ring me|tel[:.]?\s*\+?\d)/i.test(text);
+  let phone = '';
+  const candidates = text.match(/\+?\d[\d\s\/().\-]{6,}\d/g) || [];
+  for (const cand of candidates) {
+    const digits = cand.replace(/[^\d]/g, '');
+    if (digits.length >= 8 && digits.length <= 15) { phone = cand.trim().replace(/\s+/g, ' '); break; }
+  }
+  return { wantsCall: callIntent || !!phone, phone };
 }
 
 // ─── SEND APPROVAL EMAIL VIA RESEND ───────────────────────────────────────────
@@ -967,16 +2280,79 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
 
   const channelBadge = `<span style="background:${channelBadgeColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">${channelLabel.toUpperCase()}</span>`;
 
-  // Inbound message - always show, prominent. If empty say so.
-  const messageSection = leadData.theirMessage
+  // A/B variant badge (#6)
+  const variantBadge = leadData.abVariant
+    ? `<span style="background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">VAR ${leadData.abVariant}</span>`
+    : '';
+
+  // Offer-type badge (lets you see classifier choice at a glance)
+  const offerTypeBadge = leadData.offerType
+    ? `<span style="background:#ede9fe;color:#5b21b6;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">OFFER ${leadData.offerType.toUpperCase()}</span>`
+    : '';
+
+  // Language badge - spot a wrong-language draft BEFORE approving it.
+  const langBadge = leadData.language
+    ? `<span style="background:${leadData.language === 'sl' ? '#f3f4f6' : '#fff7ed'};color:${leadData.language === 'sl' ? '#4b5563' : '#9a3412'};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">JEZIK ${leadData.language.toUpperCase()}</span>`
+    : '';
+
+  // Inbound message - always show, prominent, WITHOUT quoted email history (the
+  // raw chain made it confusing what they wrote vs what we wrote). If empty say so.
+  // Fallback to leadData.lastMessage (used by followup/cold crons that pull from Airtable's "Last Message" field).
+  const esc = s => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inboundRaw = leadData.theirMessage || leadData.lastMessage || '';
+  const inboundMessage = stripQuotedHistory(inboundRaw);
+  const messageSection = inboundMessage
     ? `<div style="margin-bottom:24px">
-         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
-         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
+         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">🟢 ONI so napisali (novo sporočilo)</p>
+         <div style="border-left:3px solid #16a34a;padding:14px 18px;color:#222;background:#f0fdf4;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${esc(inboundMessage).replace(/\n/g,'<br>')}</div>
        </div>`
     : `<div style="margin-bottom:24px">
-         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
+         <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">🟢 ONI so napisali</p>
          <div style="border-left:3px solid #d1d5db;padding:14px 18px;color:#6b7280;background:#f9fafb;font-size:13px;font-style:italic;border-radius:4px">Besedilo ni bilo v notifikaciji (LinkedIn digest). Odpri profil za polni kontekst.</div>
        </div>`;
+
+  // Thread history as chat bubbles: our messages right/blue, theirs left/gray.
+  // Ends the "kaj sem jaz poslal, kaj oni" confusion in threads with history.
+  let threadRows = [];
+  if (leadData.linkedinUrl) {
+    try { threadRows = await airtableGetThreadRows(leadData.linkedinUrl, 6); } catch { /* non-blocking */ }
+  }
+  // Drop the current inbound if it's already logged (avoid double display).
+  while (threadRows.length && threadRows[threadRows.length - 1].dir === 'inbound'
+         && inboundRaw && threadRows[threadRows.length - 1].text.substring(0, 80) === inboundRaw.trim().substring(0, 80)) {
+    threadRows.pop();
+  }
+  const ourLabel = leadData.accountName || 'MI';
+  const bubble = r => r.dir === 'outbound'
+    ? `<div style="margin:0 0 10px 48px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px 10px 2px 10px;padding:10px 14px;font-size:13px;color:#1e3a5f;line-height:1.55;white-space:pre-wrap"><p style="margin:0 0 4px;font-size:10px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:0.4px">🔵 ${esc(ourLabel)} (mi)${r.ts ? ` · ${r.ts}` : ''}${r.sent ? '' : ' · osnutek'}</p>${esc(r.text.substring(0, 600))}${r.text.length > 600 ? '…' : ''}</div>`
+    : `<div style="margin:0 48px 10px 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px 10px 10px 2px;padding:10px 14px;font-size:13px;color:#111;line-height:1.55;white-space:pre-wrap"><p style="margin:0 0 4px;font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px">🟢 ${esc(`${leadData.firstName || ''} ${leadData.lastName || ''}`.trim() || 'Lead')}${r.ts ? ` · ${r.ts}` : ''}</p>${esc(stripQuotedHistory(r.text).substring(0, 600))}</div>`;
+  const threadSection = threadRows.length
+    ? `<div style="margin-bottom:24px">
+         <p style="color:#111;margin:0 0 10px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Pogovor do zdaj</p>
+         ${threadRows.map(bubble).join('')}
+       </div>`
+    : '';
+
+  // HIGH-INTENT CALL BAR (#1): show big click-to-call when positive + a number exists.
+  // Prefer the lead's personal phone; fall back to the company main line (Apollo almost
+  // always returns the org number even when no personal mobile is revealed).
+  const messagePhone = (leadData.messagePhone || '').toString().trim();
+  const personalPhone = (leadData.phone || '').toString().trim();
+  const companyPhone = (leadData.companyPhone || '').toString().trim();
+  // A number the lead typed in their own message beats anything Apollo guessed.
+  const callPhone = messagePhone || personalPhone || companyPhone;
+  const callPhoneLabel = messagePhone ? 'iz sporočila' : (personalPhone ? 'osebni' : 'podjetje');
+  const phoneE164 = callPhone.replace(/[^\d+]/g, '');
+  const showCallBar = (leadData.wantsCall || leadData.intent === 'positive' || leadData.intent === 'question') && phoneE164.length >= 7;
+  const callBar = showCallBar
+    ? `<div style="background:#ecfdf5;border:2px solid #16a34a;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+         <div>
+           <p style="margin:0;color:#15803d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">High-intent lead - pokliči zdaj (${callPhoneLabel})</p>
+           <p style="margin:4px 0 0;color:#065f46;font-size:13px">Klic v isti uri konvertira 3-5x bolje kot Calendly čez teden.</p>
+         </div>
+         <a href="tel:${phoneE164}" style="background:#16a34a;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;font-weight:700;font-size:18px;letter-spacing:0.3px;display:inline-block;white-space:nowrap">📞 ${callPhone}</a>
+       </div>`
+    : '';
 
   // Context info panel - all the metadata we have
   const infoRows = [];
@@ -985,6 +2361,17 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
     : '';
 
   if (leadData.email) infoRows.push(['Email', `<a href="mailto:${leadData.email}" style="color:#2563eb;text-decoration:none">${leadData.email}</a>`]);
+  // Telefon: always show a row so it's never silently missing. Personal + company line
+  // when available, otherwise an explicit note so you know nothing was found.
+  if (personalPhone) {
+    infoRows.push(['Telefon (osebni)', `<a href="tel:${personalPhone.replace(/[^\d+]/g, '')}" style="color:#16a34a;text-decoration:none;font-weight:600">${personalPhone}</a>`]);
+  }
+  if (companyPhone) {
+    infoRows.push(['Telefon (podjetje)', `<a href="tel:${companyPhone.replace(/[^\d+]/g, '')}" style="color:#16a34a;text-decoration:none;font-weight:600">${companyPhone}</a>`]);
+  }
+  if (!personalPhone && !companyPhone) {
+    infoRows.push(['Telefon', `<span style="color:#9ca3af">ni v Apollu, odpri LinkedIn profil</span>`]);
+  }
   if (profileLink) infoRows.push(['LinkedIn', profileLink]);
   if (leadData.title) infoRows.push(['Vloga', leadData.title]);
   if (leadData.company && leadData.company !== 'LinkedIn') infoRows.push(['Podjetje', leadData.company]);
@@ -998,6 +2385,9 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
   if (leadData.eventType) infoRows.push(['Outflo event', leadData.eventType]);
   if (leadData.source) infoRows.push(['Vir', leadData.source]);
   if (leadData.messageSentAt) infoRows.push(['Poslano ob', leadData.messageSentAt]);
+  // Diagnostika zamikov: kdaj je bot ta event dejansko obdelal. Če je razlika do
+  // "Poslano ob" velika, je zamik NASTAL PRED botom (spin-down / Make / LinkedIn notif).
+  infoRows.push(['Bot obdelal', new Date().toLocaleString('sl-SI', { timeZone: 'Europe/Ljubljana', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })]);
   if (leadData.subject) infoRows.push(['Subject', leadData.subject]);
   if (leadData.conversationId) infoRows.push(['Conversation ID', `<code style="font-size:11px;color:#6b7280">${leadData.conversationId}</code>`]);
 
@@ -1019,6 +2409,21 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
       : inWindow
         ? `<p style="color:#059669;font-size:12px;margin:16px 0 0">Sporočilo bo poslano v 2-9 minutah po potrditvi.</p>`
         : `<p style="color:#d97706;font-size:12px;margin:16px 0 0">Zunaj okna (${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00). Pošlje ob ${SEND_WINDOW_START}:00 po potrditvi.</p>`;
+
+  // Company front and center: header line under the name (was buried in the info table).
+  const realCompanyForHeader = (leadData.company && leadData.company !== 'LinkedIn') ? leadData.company : '';
+  const headerCompanyLine = (realCompanyForHeader || leadData.title)
+    ? `<p style="margin:6px 0 0;font-size:15px;color:#374151;font-weight:600">${[realCompanyForHeader, leadData.title].filter(Boolean).map(s => `${s}`.replace(/</g,'&lt;')).join(' · ')}</p>`
+    : `<p style="margin:6px 0 0;font-size:13px;color:#9ca3af">Podjetje neznano - preveri LinkedIn profil</p>`;
+
+  // CALL-REQUEST ALARM (#5): lead asked to be called or gave a number. Loudest banner,
+  // sits above everything. Do NOT just fire the drafted Calendly/offer reply - call them.
+  const callAlarm = leadData.wantsCall
+    ? `<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+         <p style="margin:0;color:#9a3412;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:0.4px">⚠️ Lead želi klic${messagePhone ? ` · ${messagePhone}` : ''}</p>
+         <p style="margin:6px 0 0;color:#7c2d12;font-size:13px">Pokliči ga osebno, ne zanašaj se samo na predlagani odgovor. To je najtoplejši signal, ki ga dobiš.</p>
+       </div>`
+    : '';
 
   // Auto-send banner at the top (clearly different from manual approval)
   const autoSendBanner = isAutoSend
@@ -1047,17 +2452,21 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
 
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#fff;color:#111">
+      ${callAlarm}
       ${autoSendBanner}
+      ${callBar}
       <div style="border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:20px">
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-          ${channelBadge}${intentBadge}${accountBadge}
+          ${channelBadge}${intentBadge}${langBadge}${accountBadge}${offerTypeBadge}${variantBadge}
         </div>
         <h2 style="margin:0;font-size:20px;color:#111;font-weight:700">${leadData.firstName} ${leadData.lastName} ${actionLabel}</h2>
+        ${headerCompanyLine}
       </div>
+      ${threadSection}
       ${messageSection}
       ${infoPanel}
       <div style="margin-bottom:24px">
-        <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Predlog odgovora</p>
+        <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">🔵 Predlog TVOJEGA odgovora (še ni poslano)</p>
         <div style="border-left:3px solid #2563eb;padding:14px 18px;background:#eff6ff;font-size:15px;line-height:1.7;color:#1e3a5f;white-space:pre-wrap;border-radius:4px">${draft.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
       </div>
       ${offerUrl ? `
@@ -1087,7 +2496,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
     body: JSON.stringify({
       from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
       to: process.env.MY_EMAIL,
-      subject: `[${channelTag}${subjectIntent}${subjectAccount}${autoTag}] ${leadData.firstName} ${leadData.lastName} ${actionLabel}`,
+      subject: `[${channelTag}${subjectIntent}${subjectAccount}${autoTag}] ${leadData.firstName} ${leadData.lastName}${realCompanyForHeader ? ` (${realCompanyForHeader})` : ''} ${actionLabel}`,
       html
     })
   });
@@ -1112,7 +2521,8 @@ async function enqueueReply({ channel, leadData, draft, intent, hasRealMessage =
   const eligible = isAutoSendEligible({ channel, leadData, intent, hasRealMessage, draft, isHandoff });
   if (eligible) {
     const minSendMs = Date.now() + AUTO_SEND_HOLD_MIN * 60 * 1000;
-    const naturalSendMs = getSendAt(channel).getTime();
+    const accountKey = `${channel}::${leadData?.accountFirstName || 'unknown'}`;
+    const naturalSendMs = getSendAt(channel, accountKey).getTime();
     const sendAtISO = new Date(Math.max(minSendMs, naturalSendMs)).toISOString();
     await storePending(id, { channel, leadData, draft, source: source || 'auto-send', ...extraData });
     await markScheduled(id, draft, sendAtISO);
@@ -1162,12 +2572,12 @@ async function detectEmailHandoff(message) {
       max_tokens: 10,
       messages: [{
         role: 'user',
-        content: `Does this LinkedIn message ask the sender to send an offer, presentation, more info, or details to email? Or does it ask for an email contact?
+        content: `Does this LinkedIn message EXPLICITLY ask us to send something to EMAIL, or explicitly mention email/e-pošta/e-mail as the channel? Only then is it a handoff.
 
 Return ONLY "yes" or "no".
 
-yes examples: "Pošljite mi ponudbo na email", "Lahko mi pošljete predstavitev na e-pošto?", "Send me details to my email", "Mi lahko pošljete več informacij?"
-no examples: "Zanima me", "Pokličite me", "Hvala", "Kdaj se lahko slišimo?"
+yes examples (email is explicitly mentioned): "Pošljite mi ponudbo na email", "Lahko mi pošljete predstavitev na e-pošto?", "Send me details to my email", "Moj mail je ...", "na e-naslov mi pošljite"
+no examples (no email mentioned, even if they want info): "Mi lahko pošljete več informacij?", "Več informacij mi lahko delite kar preko LinkedIna", "Zanima me", "Kako bi to naredili?", "Pokličite me", "Hvala", "Kdaj se lahko slišimo?"
 
 Message: "${message.substring(0, 400)}"`
       }]
@@ -1193,6 +2603,37 @@ async function airtableLookupEmailForLead(linkedinUrl) {
   } catch (e) {
     console.error('[AIRTABLE] lookupEmail error:', e.message);
     return null;
+  }
+}
+
+// Store Generator URL on lead record so engagement tracking can look it up by slug.
+async function airtableSaveGeneratorUrl(linkedinUrl, leadName, generatorUrl) {
+  if (!AIRTABLE_PAT || !generatorUrl) return;
+  try {
+    let rec = null;
+    if (linkedinUrl) {
+      const filter = encodeURIComponent(`{LinkedIn URL}="${linkedinUrl}"`);
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    if (!rec && leadName) {
+      const filter = encodeURIComponent(`{Lead Name}="${leadName}"`);
+      const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+      rec = r?.records?.[0];
+    }
+    const fields = { 'Offer Generator URL': generatorUrl, 'Offer Type': 'generator' };
+    if (rec) {
+      await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, { fields });
+    } else {
+      await airtableRequest('POST', AT_LEADS, { records: [{ fields: {
+        'Lead Name': leadName || '',
+        'LinkedIn URL': linkedinUrl || '',
+        ...fields
+      }}]});
+    }
+    console.log(`[AIRTABLE] Generator URL saved: ${leadName} → ${generatorUrl}`);
+  } catch (e) {
+    console.error('[AIRTABLE] saveGeneratorUrl error:', e.message);
   }
 }
 
@@ -1224,26 +2665,64 @@ async function airtableMarkOfferSent(linkedinUrl, leadName, email, offerType) {
   }
 }
 
-const HANDOFF_EMAIL_PROMPT = `You draft outreach emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
+const HANDOFF_EMAIL_PROMPT = `You draft short offer emails on behalf of Žan Bagarič, CEO of AIERA (aiera.si) / B2Booster (b2booster.eu).
 
-CONTEXT: The lead asked on LinkedIn for details/offer/presentation via email. You write the follow-up email.
+CONTEXT: The lead asked on LinkedIn for details/offer via email. You write that email. When the user prompt says an offer page link is available, the WHOLE email is built around the single [OFFER LINK] token - that pattern books the meetings.
 
-ABOUT AIERA / B2Booster:
-AI automation agency for B2B companies. We build AI Sales Machines (automated LinkedIn + email outreach, reply bots), AI Workflow Engines (document AI, data extraction), AI Business Apps (custom dashboards/CRMs), and AI Marketing Engines.
+THE PATTERN THAT WINS (follow it exactly):
+1. Personal greeting with their first name ("Boris pozdravljeni," / "Spoštovani," if no name).
+2. One sentence referencing the LinkedIn agreement ("kot dogovorjeno na Linkedinu, vam pošiljam ...") - or Vesna ("kot ste se dogovorili z mojo kolegico Vesno Pevec ...") ONLY if they actually spoke with Vesna first.
+3. One sentence framing what we prepared for THEIR company/department (use their industry/role if known).
+4. The [OFFER LINK] token on its own line.
+5. One closing sentence proposing a short meeting ("Predlagam kratek sestanek, kjer lažje dorečemo in nato pripravimo uradno ponudbo." / "Lahko se na kratko slišimo in dorečemo naslednje korake.").
+6. Sign-off: "Lep pozdrav,\nŽan Bagarič" (the email signature with phone is appended automatically - NEVER add phone/company info yourself).
 
-WRITING RULES (strict):
-- Slovenian, šumniki correct (š, č, ž)
-- NEVER use dashes (pomišljaji). Use commas or periods.
-- Never use negative words: problem, težava, izziv, zamudno, zapleteno
-- Frame as opportunity, not pain
-- Polite, professional, modern SaaS tone
-- No bullet points
-- 4 to 6 short sentences total
-- Sign as: Žan Bagarič
-- End with one clear CTA: 15-min razgovor preko Calendly link [CALENDLY_15MIN]
-- Never include a phone number in the body
-- First sentence references the LinkedIn conversation naturally
-- Tikamo NIKOLI. Vedno vikamo (Vi, Vas, Vam)
+REAL EMAILS ŽAN SENT THAT GOT MEETINGS (mimic this rhythm and length exactly):
+
+Example 1 - SUBJECT: AI za Gorsko
+"Spoštovani,
+
+pošiljam vam nekaj izhodišč, kje vse bi lahko AI pomagal poslovanju celotne skupine Gorsko.
+
+[OFFER LINK]
+
+Predlagam kratek sestanek, kjer lažje dorečemo in nato pripravimo uradno ponudbo.
+
+Lep pozdrav,
+Žan Bagarič"
+
+Example 2 - SUBJECT: AI za Cinkarno Celje
+"Boris pozdravljeni,
+
+kot dogovorjeno na Linkedinu, vam pošiljam več informacij o možnosti sodelovanja. Fokus smo dali predvsem na vaš oddelek nabave in logistike.
+
+[OFFER LINK]
+
+Lahko se na kratko slišimo in dorečemo naslednje korake.
+
+Lep pozdrav,
+Žan Bagarič"
+
+Example 3 (lead used tikanje, so the email matches) - SUBJECT: AI za Habeco
+"Branko, pošiljam ti dogovorjen predlog sodelovanja.
+
+[OFFER LINK]
+
+Cene za nekatere storitve lažje definiramo po sestanku, ker so odvisne od več stvari, ki jih v živo hitreje dorečemo.
+
+Lep pozdrav,
+Žan Bagarič"
+
+RULES (strict):
+- 2 to 4 sentences plus the link line. NEVER more. Short beats complete.
+- SUBJECT pattern: "AI za {Company}" (or "AI za {oddelek/področje}" if a specific department was discussed). NEVER "AI predstavitev za {first name}", never salesy subjects.
+- If an offer link is available: [OFFER LINK] is the ONLY link in the email. Do NOT add a Calendly link and do NOT ask them to book a slot (Calendly comes later in followups). Propose a short meeting in words instead.
+- If NO offer link is available: end with one natural Calendly sentence using [CALENDLY_15MIN] ("Če vam ustreza, lahko izberete termin tukaj: [CALENDLY_15MIN]").
+- Language: write in the language the lead used on LinkedIn (Slovenian default). Slovenian: vikanje unless THEIR message used tikanje; correct šumniki (š, č, ž).
+- NEVER use dashes (pomišljaji "—"); use commas or hyphens "-". No bullet points. No negative words (problem, težava, izziv).
+- NEVER use dvojina ("se slišiva", "pogledava") - use 1st plural. No banned cliches ("rezerviraj si termin", "se vidiva").
+- Pricing only if they explicitly asked: 790 EUR setup + 890 EUR na mesec, never ranges. NEVER promise reply/meeting counts.
+- Never include a phone number in the body.
 
 OUTPUT FORMAT (strict):
 Line 1: SUBJECT: <subject line>
@@ -1262,6 +2741,7 @@ async function generateHandoffEmail(leadData, theirMessage) {
     leadData.seniority && `Seniority: ${leadData.seniority}`
   ].filter(Boolean).join('\n');
 
+  const offerUrl = leadData.offerUrl || null;
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 600,
@@ -1271,23 +2751,32 @@ async function generateHandoffEmail(leadData, theirMessage) {
       content: `Lead: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}
 Their LinkedIn message: "${theirMessage || '(prosil za email predstavitev)'}"
+Offer page link available: ${offerUrl ? 'YES - build the email around the [OFFER LINK] token, no Calendly' : 'NO - use the [CALENDLY_15MIN] fallback CTA'}
 
-Write the handoff email.`
+Write the handoff email.${buildLanguageRule(theirMessage, true, leadData.language || null)}`
     }]
   });
 
   let raw = response.content[0].text.trim();
-  raw = raw.replace(/\[CALENDLY_15MIN\]/g, CALENDLY_AI_15MIN);
-  raw = raw.replace(/\[CALENDLY LINK\]/g, CALENDLY_AI_15MIN);
 
-  // Parse SUBJECT: line
-  let subject = `AI predstavitev za ${leadData.firstName}`;
+  // Parse SUBJECT: line. Default follows Žan's proven pattern: "AI za {Company}".
+  const companyForSubject = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : null;
+  let subject = companyForSubject ? `AI za ${companyForSubject}` : `AI za ${leadData.firstName}`;
   let body = raw;
   const subjMatch = raw.match(/^\s*SUBJECT:\s*(.+)$/im);
   if (subjMatch) {
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
+  // Lektorski pass on the body (URLs and link tokens are preserved verbatim by the polisher).
+  body = (await polishSlovenian(body, { signature: 'Žan Bagarič' })) || body;
+
+  // Swap placeholders AFTER polish. Offer link first; Calendly only as fallback so
+  // the first email never double-CTAs (Calendly belongs in the followups).
+  const calendlyForEmail = leadData.offerType === 'b2booster' ? CALENDLY_B2BOOSTER : CALENDLY_AI_15MIN;
+  body = body.replace(/\[OFFER LINK\]/g, offerUrl || calendlyForEmail);
+  body = body.replace(/\[CALENDLY_15MIN\]/g, calendlyForEmail);
+  body = body.replace(/\[CALENDLY LINK\]/g, calendlyForEmail);
   return { subject, body };
 }
 
@@ -1310,13 +2799,14 @@ async function generateHandoffLinkedInReply(leadData, providedEmail) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 120,
-    system: HANDOFF_LI_REPLY_PROMPT,
+    system: HANDOFF_LI_REPLY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.`
+      content: `Lead: ${leadData.firstName}. Email used: ${providedEmail}. Write the LinkedIn confirmation reply.\n${addressingRuleFor(leadData)}${buildLanguageRule(leadData.theirMessage || '', true, leadData.language || null)}`
     }]
   });
-  return response.content[0].text.trim();
+  const raw = response.content[0].text.trim();
+  return cleanArtifacts((await polishSlovenian(raw, { signature: 'Žan Bagarič' })) || raw);
 }
 
 const ASK_EMAIL_LI_PROMPT = `You write very short Slovenian LinkedIn replies (1 sentence) that ask the prospect for their work email so we can send a tailored offer.
@@ -1335,16 +2825,19 @@ async function generateAskForEmailReply(leadData) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 100,
-    system: ASK_EMAIL_LI_PROMPT,
+    system: ASK_EMAIL_LI_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
-      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.`
+      content: `Lead: ${leadData.firstName}. Write the LinkedIn message asking for their email.\n${addressingRuleFor(leadData)}${buildLanguageRule(leadData.theirMessage || '', true, leadData.language || null)}`
     }]
   });
-  return response.content[0].text.trim();
+  const raw = response.content[0].text.trim();
+  return cleanArtifacts((await polishSlovenian(raw, { signature: 'Žan Bagarič' })) || raw);
 }
 
 async function sendOfferEmailViaResend({ to, subject, bodyText }) {
+  bodyText = cleanArtifacts(bodyText); // final backstop
+  subject = cleanArtifacts(subject || '');
   const htmlBody = bodyText
     .split('\n')
     .map(line => line.trim() === '' ? '<br>' : `<p style="margin:0 0 10px 0;font-family:Arial,sans-serif;font-size:14px;color:#111827;line-height:1.6">${line}</p>`)
@@ -1395,10 +2888,11 @@ async function sendHandoffApprovalEmail(id, leadData, payload) {
     ? `<span style="background:#eef2ff;color:#4338ca;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:0.3px">→ ${leadData.accountName}</span>`
     : '';
 
-  const messageSection = leadData.theirMessage
+  const inboundMessage = leadData.theirMessage || leadData.lastMessage || '';
+  const messageSection = inboundMessage
     ? `<div style="margin-bottom:24px">
          <p style="color:#111;margin:0 0 8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px">Njihovo sporočilo</p>
-         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${leadData.theirMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
+         <div style="border-left:3px solid #111;padding:14px 18px;color:#222;background:#f9fafb;font-size:15px;line-height:1.65;border-radius:4px;white-space:pre-wrap">${inboundMessage.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
        </div>`
     : '';
 
@@ -1531,7 +3025,20 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
   const id = uuidv4();
 
   if (email) {
-    // We have an email - build full handoff package
+    // We have an email - build full handoff package.
+    // Deploy the personalized offer page FIRST: the winning email pattern is
+    // 2-4 sentences built around that one link (not a Calendly pitch).
+    if (!leadData.offerUrl && !leadData.wantsCall) {
+      try {
+        const ou = await createAndDeployOffer(leadData);
+        if (ou) {
+          leadData.offerUrl = ou;
+          console.log(`[HANDOFF] Offer page ready for email: ${ou}`);
+        }
+      } catch (e) {
+        console.error('[HANDOFF] offer deploy failed (email falls back to Calendly):', e.message);
+      }
+    }
     const { subject, body } = await generateHandoffEmail(leadData, theirMessage);
     const liReply = await generateHandoffLinkedInReply(leadData, email);
 
@@ -1595,6 +3102,56 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
 
   try {
     if (mode === 'send_email') {
+      // Vesna channel (#5): LinkedIn confirm goes out NOW, offer email DELAYS 60-180 min.
+      // This makes it feel like Vesna coordinated with Žan, who then prepared the offer.
+      const isVesnaHandoff = channel === 'vesna';
+      const delayMs = isVesnaHandoff ? getVesnaHandoffDelayMs() : 0;
+      const emailSendAt = new Date(Date.now() + delayMs);
+
+      if (isVesnaHandoff) {
+        // 1. LinkedIn confirm in Vesna's name FIRST (immediate, acknowledging)
+        try {
+          await sendViaOutflo(leadData.linkedinUrl, liReply, VESNA_LINKEDIN_URL);
+        } catch (e) {
+          console.error('[HANDOFF] Vesna LinkedIn confirm failed:', e.message);
+        }
+        // 2. Schedule the offer email for later
+        const delayedId = uuidv4();
+        await storePending(delayedId, {
+          kind: 'delayed_offer_email',
+          channel: 'email',
+          leadData,
+          recipientEmail,
+          emailSubject,
+          emailBody,
+          source: 'vesna-handoff-delayed'
+        });
+        await markScheduled(delayedId, emailBody, emailSendAt.toISOString(), {
+          kind: 'delayed_offer_email',
+          channel: 'email',
+          leadData,
+          recipientEmail,
+          emailSubject,
+          emailBody
+        });
+        airtableLogMessage(
+          `${leadData.firstName} ${leadData.lastName}`,
+          leadData.linkedinUrl, 'outbound', 'email_handoff',
+          '[LINKEDIN confirm Vesna]', liReply, true
+        ).catch(() => {});
+        await deletePending(id);
+        return res.send(page('Vesna handoff', `
+          <div style="text-align:center;padding:40px 0">
+            <div style="font-size:48px;margin-bottom:16px">⏰✉️</div>
+            <h2 style="color:#15803d;margin:0 0 8px">Vesna confirm poslan, email v vrsti</h2>
+            <p style="color:#666;margin:0 0 4px">${leadData.firstName} ${leadData.lastName}</p>
+            <p style="color:#16a34a;font-weight:600;font-size:16px;margin:8px 0">${recipientEmail}</p>
+            <p style="color:#9a3412;font-size:14px;margin:8px 0">Email se pošlje ob ${formatSendTime(emailSendAt)} (delay ${Math.round(delayMs/60000)} min, da zveni naravno)</p>
+          </div>
+        `));
+      }
+
+      // Žan / direct flow: send immediately as before
       // 1. Send the offer email via Resend
       await sendOfferEmailViaResend({
         to: recipientEmail,
@@ -1604,11 +3161,7 @@ app.get('/approve/email-handoff/:id', async (req, res) => {
 
       // 2. Send LinkedIn confirmation reply (via Outflo, respecting channel)
       try {
-        if (channel === 'vesna') {
-          await sendViaOutflo(leadData.linkedinUrl, liReply, VESNA_LINKEDIN_URL);
-        } else {
-          await sendViaOutflo(leadData.linkedinUrl, liReply, leadData.senderUrl || null);
-        }
+        await sendViaOutflo(leadData.linkedinUrl, liReply, leadData.senderUrl || null);
       } catch (e) {
         console.error('[HANDOFF] LinkedIn confirm send failed (email still sent):', e.message);
       }
@@ -1846,10 +3399,15 @@ Write the value-add follow-up email (step 2 of 3). Lead with a concrete industry
 Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, low pressure.`;
   }
 
+  // Write the followup in the LEAD's language (persisted on the lead record).
+  const langRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write the ENTIRE email INCLUDING the SUBJECT line in ${LANG_NAMES[leadData.language]}. Do NOT write in Slovenian.`
+    : '';
+
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 400,
-    system: systemPrompt,
+    system: systemPrompt + SHARED_LANG_RULES + langRule,
     messages: [{ role: 'user', content: userPrompt }]
   });
 
@@ -1867,7 +3425,7 @@ Write the breakup / loop-close follow-up email (step 3 of 3). Polite, easy out, 
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  return { subject, body, step: stepNum };
+  return { subject: cleanArtifacts(subject), body: cleanArtifacts(body), step: stepNum };
 }
 
 async function airtableFindLeadsForFollowup() {
@@ -1899,6 +3457,7 @@ async function airtableFindLeadsForFollowup() {
     company: rec.fields['Campaign'] || '',
     title: rec.fields['Title'] || '',
     industry: rec.fields['Industry'] || '',
+    language: rec.fields['Language'] || '',
     emailSentAt: rec.fields['Email Sent At'] || '',
     nextStep
   });
@@ -1947,7 +3506,8 @@ async function processFollowups() {
           company: c.company || '',
           linkedinUrl: c.linkedinUrl,
           title: c.title || '',
-          industry: c.industry || ''
+          industry: c.industry || '',
+          language: c.language || ''
         };
 
         const { subject, body, step } = await generateFollowupEmail(leadData, c.nextStep);
@@ -1996,6 +3556,178 @@ app.get('/trigger-followups', async (req, res) => {
   await processFollowups();
 });
 
+// ─── GENERATOR ENGAGEMENT CRON (72h no-open / shallow-peek / read-but-no-action) ──
+// Runs every 6h. Finds Generator leads who haven't booked a meeting + 72h since URL sent.
+// 4 cases based on engagement:
+//   A: Calendly clicked      → already filtered out (no nudge needed)
+//   B: Opened, scroll < 50%  → "peeked shallow" nudge
+//   C: Opened, scroll >= 50% → "read but no action" nudge
+//   D: Never opened          → "you didn't see this" nudge
+
+const GENERATOR_NUDGE_HOURS = parseInt(process.env.GENERATOR_NUDGE_HOURS || '72', 10);
+
+const GEN_NUDGE_PROMPT = `You write very short Slovenian LinkedIn or email nudge messages (3 to 4 sentences) sent by Žan Bagarič, CEO of AIERA, to a lead who received a personalized AIERA Generator ponudb demo link but hasn't booked a call yet.
+
+Rules:
+- Slovenian only, vikanje (Vi)
+- Šumniki correct (š, č, ž)
+- No em dashes, only hyphens
+- Warm, not pushy
+- One concrete value point, then soft CTA
+- Sign off: "Lep pozdrav, Žan Bagarič, AIERA"
+- No clichés ("se slišiva", "rezerviraj termin")
+
+You will receive a CASE (B, C, or D) - tailor the opening line to that case:
+- CASE B (peeked but didn't read): "Vidim, da ste si vzeli minuto za pregled, a niste šli skozi celotno predstavitev."
+- CASE C (read but didn't book): "Vidim, da ste pregledali predstavitev. Kaj vas zadržuje, da ne bi rezervirali kratkega klica?"
+- CASE D (didn't open): "Pred dnevi sem vam pripravil osebno predstavitev našega Generatorja ponudb, a je niste odprli. Morda se je izgubila med maili."
+
+Always include Calendly link or phone number 040 708 327 as soft alternative.
+
+OUTPUT FORMAT: Return JSON only:
+{
+  "subject": "<email subject, only used if channel=email>",
+  "body": "<the nudge text, plain Slovenian, no markdown>"
+}`;
+
+async function generateGeneratorNudge(leadData, kase, offerUrl, channel) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+  const anthropic = new Anthropic({ apiKey });
+
+  const nudgeLangRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write subject AND body in ${LANG_NAMES[leadData.language]}.`
+    : '';
+  const userBlock = `Lead: ${leadData.firstName || ''} ${leadData.lastName || ''}
+Company: ${leadData.company || 'unknown'}
+Title: ${leadData.title || 'unknown'}
+Channel: ${channel}
+Case: ${kase}
+Offer URL (Generator): ${offerUrl}
+Calendly: ${process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar'}
+
+Generate the JSON now.`;
+
+  const r = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 500,
+    system: GEN_NUDGE_PROMPT + nudgeLangRule,
+    messages: [{ role: 'user', content: userBlock }]
+  });
+  let raw = r.content[0].text.trim();
+  raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+  try { return JSON.parse(raw); }
+  catch (e) {
+    console.error('[GEN-NUDGE] JSON parse failed, fallback:', raw.slice(0, 200));
+    return {
+      subject: `Kratek follow-up · AIERA Generator ponudb`,
+      body: `Pozdravljeni ${leadData.firstName || ''},\n\npred dnevi sem vam poslal osebno predstavitev. Če bi bilo lažje, sem dosegljiv tudi na 040 708 327.\n\nLep pozdrav, Žan Bagarič, AIERA`
+    };
+  }
+}
+
+async function processGeneratorEngagement() {
+  if (!AIRTABLE_PAT) return;
+  try {
+    const cutoffIso = new Date(Date.now() - GENERATOR_NUDGE_HOURS * 3600 * 1000).toISOString();
+    // Find candidates: Generator URL set + no calendly click + no nudge sent yet
+    // Filter old enough by "Email Sent At" (when offer link was emailed) or fallback to record creation
+    const filter = encodeURIComponent(
+      `AND(` +
+      `{Offer Generator URL}!="",` +
+      `{Status}!="Not Interested", {Status}!="Do Not Contact",` +
+      `NOT({Offer Calendly Clicked}),` +
+      `OR(NOT({Offer Nudge Sent At}),{Offer Nudge Sent At}=""),` +
+      `OR(IS_BEFORE({Email Sent At}, "${cutoffIso}"),IS_BEFORE({Last Activity}, "${cutoffIso.slice(0, 10)}"))` +
+      `)`
+    );
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=20`);
+    const records = r?.records || [];
+    if (!records.length) return;
+    console.log(`[GEN-CRON] ${records.length} candidate(s) for engagement nudge`);
+
+    for (const rec of records) {
+      try {
+        const f = rec.fields || {};
+        const name = f['Lead Name'] || '';
+        const nameParts = name.trim().split(' ');
+        const leadData = {
+          firstName: nameParts[0] || 'Lead',
+          lastName: nameParts.slice(1).join(' '),
+          company: f['Company'] || '',
+          linkedinUrl: f['LinkedIn URL'] || '',
+          title: f['Title'] || '',
+          industry: f['Industry'] || '',
+          language: f['Language'] || ''
+        };
+        const offerUrl = f['Offer Generator URL'];
+        const opened = !!f['Offer Opened At'];
+        const maxScroll = Number(f['Offer Max Scroll'] || 0);
+        const calendlyClicked = !!f['Offer Calendly Clicked'];
+
+        if (calendlyClicked) continue; // CASE A - skip
+
+        let kase = 'D';
+        if (opened && maxScroll >= 50) kase = 'C';
+        else if (opened && maxScroll < 50) kase = 'B';
+        else if (!opened) kase = 'D';
+
+        // Choose channel: email if we have one, else LinkedIn
+        const channel = f['Email'] ? 'email' : 'linkedin';
+
+        const nudge = await generateGeneratorNudge(leadData, kase, offerUrl, channel);
+
+        const id = uuidv4();
+        if (channel === 'email') {
+          await storePending(id, {
+            kind: 'email_handoff',
+            mode: 'send_email',
+            channel: 'linkedin',
+            leadData,
+            recipientEmail: f['Email'],
+            emailSubject: nudge.subject || `Kratek follow-up · AIERA`,
+            emailBody: nudge.body,
+            liReply: null,
+            source: `gen-nudge-cron-case-${kase}`
+          });
+          await sendHandoffApprovalEmail(id, leadData, {
+            mode: 'send_email',
+            recipientEmail: f['Email'],
+            subject: `[GEN-NUDGE ${kase}] ${nudge.subject || 'Kratek follow-up'}`,
+            body: nudge.body,
+            liReply: null
+          });
+        } else {
+          // LinkedIn nudge via approval queue
+          await storePending(id, {
+            channel: 'linkedin',
+            leadData,
+            draft: nudge.body,
+            source: `gen-nudge-cron-case-${kase}`
+          });
+          await sendApprovalEmail(id, leadData, nudge.body, 'linkedin', offerUrl);
+        }
+
+        // Mark Offer Nudge Sent At so we don't double-send
+        await airtableRequest('PATCH', `${AT_LEADS}/${rec.id}`, {
+          fields: { 'Offer Nudge Sent At': new Date().toISOString() }
+        });
+
+        console.log(`[GEN-CRON] Queued ${channel} nudge (case ${kase}): ${name}`);
+      } catch (e) {
+        console.error('[GEN-CRON] per-lead error:', e.message);
+      }
+    }
+  } catch (err) {
+    console.error('[GEN-CRON] processGeneratorEngagement error:', err.message);
+  }
+}
+
+app.get('/trigger-gen-engagement', async (req, res) => {
+  res.json({ status: 'running' });
+  await processGeneratorEngagement();
+});
+
 // ─── COLD LEAD CRON (3-day LinkedIn silence → first email outreach) ──────────
 
 const COLD_LEAD_DAYS = parseInt(process.env.COLD_LEAD_DAYS || '3', 10);
@@ -2017,6 +3749,9 @@ Rules:
 
 async function generateColdReachEmail(leadData) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const coldLangRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write subject AND body in ${LANG_NAMES[leadData.language]}.`
+    : '';
   const prompt = `Lead: ${leadData.firstName} ${leadData.lastName}
 Company context: ${leadData.company || 'unknown'}
 Their last LinkedIn message: "${leadData.lastMessage || '(no message recorded)'}"
@@ -2026,7 +3761,7 @@ Write the cold follow-up email. Return JSON: { "subject": "...", "body": "..." }
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    system: COLD_REACH_PROMPT,
+    system: COLD_REACH_PROMPT + SHARED_LANG_RULES + coldLangRule,
     messages: [{ role: 'user', content: prompt }]
   });
 
@@ -2046,7 +3781,7 @@ async function airtableFindColdLeads() {
   try {
     const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const formula = encodeURIComponent(
-      `AND({Asked for Email}="Yes", {Email}!="", IS_BEFORE({Last Activity}, "${cutoff}"), {Cold Email Sent At}=BLANK(), {Booked At}=BLANK())`
+      `AND({Asked for Email}="Yes", {Email}!="", IS_BEFORE({Last Activity}, "${cutoff}"), {Cold Email Sent At}=BLANK(), {Booked At}=BLANK(), {Status}!="Not Interested", {Status}!="Do Not Contact")`
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
     if (!r?.records) return [];
@@ -2056,7 +3791,8 @@ async function airtableFindColdLeads() {
       linkedinUrl: rec.fields['LinkedIn URL'] || '',
       email: rec.fields['Email'] || '',
       company: rec.fields['Campaign'] || '',
-      lastMessage: rec.fields['Last Message'] || ''
+      lastMessage: rec.fields['Last Message'] || '',
+      language: rec.fields['Language'] || ''
     })).filter(x => x.email);
   } catch (e) {
     console.error('[COLD] find error:', e.message);
@@ -2146,13 +3882,16 @@ Rules:
 
 async function generateLiFollowupMessage(leadData) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const langRule = leadData.language && leadData.language !== 'sl' && LANG_NAMES[leadData.language]
+    ? `\nLANGUAGE (hard, OVERRIDES the Slovenian default): This lead communicates in ${LANG_NAMES[leadData.language]}. Write the ENTIRE message in ${LANG_NAMES[leadData.language]}.`
+    : '';
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 150,
-    system: LI_FOLLOWUP_PROMPT,
+    system: LI_FOLLOWUP_PROMPT + SHARED_LANG_RULES + langRule,
     messages: [{ role: 'user', content: `Lead: ${leadData.firstName} ${leadData.lastName}\nCompany: ${leadData.company || 'unknown'}\nLast message from them: "${leadData.lastMessage || '(no message)'}"\n\nWrite the LinkedIn nudge.` }]
   });
-  return response.content[0].text.trim();
+  return cleanArtifacts(response.content[0].text.trim());
 }
 
 async function airtableFindSilentLeads() {
@@ -2160,18 +3899,25 @@ async function airtableFindSilentLeads() {
   try {
     const cutoff = new Date(Date.now() - COLD_LEAD_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const formula = encodeURIComponent(
-      `AND({Status}="Replied", IS_BEFORE({Last Activity}, "${cutoff}"), {LI Followup Sent At}=BLANK(), {Asked for Email}=BLANK(), {Booked At}=BLANK())`
+      `AND({Status}="Replied", IS_BEFORE({Last Activity}, "${cutoff}"), {LI Followup Sent At}=BLANK(), {Asked for Email}=BLANK(), {Booked At}=BLANK(), {Status}!="Do Not Contact")`
     );
     const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${formula}&maxRecords=10`);
     if (!r?.records) return [];
-    return r.records.map(rec => ({
-      recordId: rec.id,
-      leadName: rec.fields['Lead Name'] || '',
-      linkedinUrl: rec.fields['LinkedIn URL'] || '',
-      company: rec.fields['Campaign'] || '',
-      lastMessage: rec.fields['Last Message'] || '',
-      channel: rec.fields['Channel'] || 'linkedin'
-    })).filter(x => x.linkedinUrl);
+    return r.records.map(rec => {
+      // Campaign is named after the SENDER (Zan/Vesna), never the lead's company.
+      // Using it as "company" leaked "Zan Bagaric" into nudges. Drop those values.
+      const campaign = rec.fields['Campaign'] || '';
+      const company = /zan|vesna|bagaric|pevec/i.test(campaign) ? '' : campaign;
+      return {
+        recordId: rec.id,
+        leadName: rec.fields['Lead Name'] || '',
+        linkedinUrl: rec.fields['LinkedIn URL'] || '',
+        company,
+        lastMessage: rec.fields['Last Message'] || '',
+        language: rec.fields['Language'] || '',
+        channel: rec.fields['Channel'] || 'linkedin'
+      };
+    }).filter(x => x.linkedinUrl);
   } catch (e) {
     console.error('[LI-FOLLOWUP] find error:', e.message);
     return [];
@@ -2186,13 +3932,30 @@ async function processLiFollowups() {
 
     for (const c of candidates) {
       try {
+        // Intent guard: never nudge someone whose last message was a rejection
+        // ("Tema ni aktualna", "ne zanima", "morda kdaj"). Mark them so we stop re-checking.
+        if (c.lastMessage && c.lastMessage.trim().length > 3) {
+          const lastIntent = await classifyIntent(c.lastMessage);
+          if (lastIntent === 'unsubscribe' || lastIntent === 'negative' || lastIntent === 'soft_negative') {
+            console.log(`[LI-FOLLOWUP] Skipping ${c.leadName} - last message intent=${lastIntent}`);
+            // Persist the right suppression status so the lead never re-enters any cron.
+            const supStatus = lastIntent === 'unsubscribe' ? 'Do Not Contact' : 'Not Interested';
+            await airtableSetLeadStatus(c.linkedinUrl, null, supStatus, c.leadName).catch(() => {});
+            await airtableRequest('PATCH', `${AT_LEADS}/${c.recordId}`, {
+              fields: { 'LI Followup Sent At': new Date().toISOString() }
+            }).catch(() => {});
+            continue;
+          }
+        }
+
         const nameParts = c.leadName.trim().split(' ');
         const leadData = {
           firstName: nameParts[0] || 'Lead',
           lastName: nameParts.slice(1).join(' '),
           company: c.company || '',
           linkedinUrl: c.linkedinUrl,
-          lastMessage: c.lastMessage
+          lastMessage: c.lastMessage,
+          language: c.language || ''
         };
 
         const nudge = await generateLiFollowupMessage(leadData);
@@ -2247,8 +4010,52 @@ app.post('/webhook/instantly', async (req, res) => {
       source: 'instantly-webhook'
     };
     if (!leadData.theirMessage) return;
-    leadData.intent = await classifyIntent(leadData.theirMessage);
-    const draft = await generateReply('email', leadData, leadData.theirMessage);
+    if (isOurOwnAddress(leadData.email)) {
+      console.log(`[EMAIL] Skipped self-address (anti-loop): ${leadData.email}`);
+      return;
+    }
+    // Paused campaign (e.g. Valtheron): don't draft. Check any account/campaign hint.
+    if (belongsToPausedCampaign({ eaccount: req.body.eaccount, to_address_email_list: req.body.to_email || req.body.eaccount, campaign: req.body.campaign_name })
+        || PAUSED_CAMPAIGN_DOMAINS.some(d => String(req.body.campaign_name || '').toLowerCase().includes(d.split('.')[0]))) {
+      console.log(`[EMAIL] Skipped paused campaign: ${leadData.email}`);
+      return;
+    }
+    // Dedup: never queue the same reply twice.
+    if (emailUuidSeen(leadData.emailUuid)) {
+      console.log(`[EMAIL] Skipped duplicate uuid: ${leadData.emailUuid} (${leadData.email})`);
+      return;
+    }
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(null, leadData.email)) {
+      console.log(`[EMAIL] Do Not Contact - skipping ${leadData.email}`);
+      return;
+    }
+    const { intent, language } = await classifyMessage(leadData.theirMessage);
+    leadData.intent = intent;
+    leadData.language = language || null;
+    console.log(`[EMAIL] Intent: ${intent} | lang: ${language || '?'} | ${leadData.email}`);
+
+    if (intent === 'unsubscribe') {
+      await airtableSetLeadStatus(null, leadData.email, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+      await sendUnsubscribeNotif(leadData, leadData.theirMessage, 'email');
+      console.log(`[EMAIL] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.email}`);
+      return;
+    }
+
+    if (intent === 'vendor_pitch') {
+      // They are selling to US - no draft, no offer page, just log.
+      airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, null, 'inbound', 'vendor_pitch', leadData.theirMessage, null, false).catch(() => {});
+      console.log(`[EMAIL] Vendor pitch - no reply: ${leadData.email}`);
+      return;
+    }
+
+    let draft;
+    if (intent === 'negative') {
+      await airtableSetLeadStatus(null, leadData.email, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+      draft = buildNegativeCloseout(language, leadData.firstName, 'Žan Bagarič');
+    } else {
+      draft = await generateReply('email', leadData, leadData.theirMessage);
+    }
     const id = uuidv4();
     await storePending(id, { channel: 'email', leadData, draft });
     await sendApprovalEmail(id, leadData, draft, 'email');
@@ -2283,7 +4090,7 @@ function parseLinkedInEmail(subject, from, body) {
   for (const pattern of subjectPatterns) {
     const m = subject && subject.match(pattern);
     if (m) {
-      const parts = m[1].trim().split(' ');
+      const parts = stripLeadingTitles(m[1].trim()).split(' ');
       firstName = parts[0] || 'Unknown';
       lastName = parts.slice(1).join(' ');
       break;
@@ -2319,6 +4126,10 @@ function parseLinkedInEmail(subject, from, body) {
       );
     message = lines[0] || '';
   }
+
+  // Drop LinkedIn digest boilerplate ("You have N new messages") so it never
+  // passes as the lead's real message and triggers a needy "resend" reply.
+  if (isLinkedInBoilerplate(message)) message = '';
 
   const urlMatch = body && body.match(/https?:\/\/(?:www\.|[a-z]{2}\.)?linkedin\.com\/in\/[a-zA-Z0-9\-_%]+/);
   const linkedinUrl = urlMatch ? urlMatch[0].split('?')[0] : null;
@@ -2362,15 +4173,64 @@ app.post('/webhook/linkedin', async (req, res) => {
       return;
     }
 
+    // Skip phantom digests: a "messaged"/"replied" notification with no real
+    // text is just LinkedIn's "You have N new messages" placeholder - no signal
+    // to act on. "accepted" notifications legitimately have no text (opener flow).
+    if (!hasRealMessage && parsed.notificationType !== 'accepted') {
+      console.log(`[LINKEDIN] Skipping phantom notif (no real message) - ${parsed.firstName}`);
+      return;
+    }
+    if (parsed.firstName === 'Unknown') {
+      console.log('[LINKEDIN] Skipping - unparseable sender (digest)');
+      return;
+    }
+    // Dedup re-fired notifications (Make forwards the same email repeatedly).
+    // Discriminate by message content so a real reply isn't swallowed by an
+    // earlier no-text notification for the same person.
+    const liDiscriminator = hasRealMessage
+      ? `msg:${crypto.createHash('sha1').update(parsed.message).digest('hex').slice(0, 16)}`
+      : `opener:${parsed.notificationType}`;
+    if (isLinkedInNotifDuplicate(parsed.linkedinUrl, liDiscriminator)) {
+      console.log(`[LINKEDIN] Duplicate notif for ${parsed.firstName} - skipping`);
+      return;
+    }
+
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(parsed.linkedinUrl)) {
+      console.log(`[LINKEDIN] Do Not Contact - skipping ${parsed.firstName} ${parsed.lastName}`);
+      return;
+    }
+
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
-      const intent = await classifyIntent(parsed.message);
+      const { intent, language } = await classifyMessage(parsed.message);
       leadData.intent = intent;
-      console.log(`[LINKEDIN] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[LINKEDIN] Intent: ${intent} | lang: ${language || '?'} | ${leadData.firstName} ${leadData.lastName}`);
+
+      if (intent === 'unsubscribe') {
+        // Opt-out: NO reply, hard suppression, FYI-only notif.
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'unsubscribe', parsed.message, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, parsed.message, 'linkedin');
+        console.log(`[LINKEDIN] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
+
+      if (intent === 'vendor_pitch') {
+        // They are selling to US - no draft, no offer page, just log.
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'vendor_pitch', parsed.message, null, false).catch(() => {});
+        console.log(`[LINKEDIN] Vendor pitch - no reply: ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
 
       if (intent === 'negative') {
-        // Polite closeout - same pattern as /webhook/outflo (don't silently drop)
-        const draft = `Razumem, hvala za odgovor ${leadData.firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, Žan`;
+        // Polite closeout in THEIR language + stop all future crons via status.
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+        const draft = buildNegativeCloseout(language, leadData.firstName, 'Žan');
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
         await sendApprovalEmail(id, leadData, draft, 'linkedin');
@@ -2378,9 +4238,16 @@ app.post('/webhook/linkedin', async (req, res) => {
         return;
       }
 
+      if (intent === 'neutral' && isBareAck(parsed.message)) {
+        // Bare "ok"/"hvala" - replying with a pitch reads pushy. Log and stay quiet.
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'neutral', parsed.message, null, false).catch(() => {});
+        console.log(`[LINKEDIN] Bare ack ("${parsed.message.substring(0, 30)}") - no reply needed for ${leadData.firstName}`);
+        return;
+      }
+
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, parsed.message);
-        const sendAt = getSendAt('linkedin');
+        const sendAt = getSendAt('linkedin', `linkedin::${leadData.accountFirstName || 'Žan'}`);
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft: closing });
         await markScheduled(id, closing, sendAt);
@@ -2394,10 +4261,31 @@ app.post('/webhook/linkedin', async (req, res) => {
     }
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
-    const [draft, offerUrl] = await Promise.all([
-      generateReply('linkedin', leadData, messageForAI, hasRealMessage),
-      createAndDeployOffer(leadData)
-    ]);
+
+    // First-party enrichment so the draft + offer page have substance (this path
+    // used to run with company='LinkedIn' and no title/industry at all).
+    try {
+      const ownData = await enrichFromOwnDB(leadData.linkedinUrl);
+      if (ownData) {
+        if (ownData.company) leadData.company = ownData.company;
+        if (ownData.title) leadData.title = ownData.title;
+        if (ownData.industry) leadData.industry = ownData.industry;
+        if (ownData.employees) leadData.employees = ownData.employees;
+        if (ownData.fitReason) leadData.fitReason = ownData.fitReason;
+        if (ownData.researchSummary) leadData.researchSummary = ownData.researchSummary;
+        if (ownData.email && !leadData.email) leadData.email = ownData.email;
+      }
+    } catch (e) { console.log('[LINKEDIN] enrich skipped:', e.message); }
+
+    // SEQUENTIAL, not Promise.all: the offer must exist BEFORE drafting, otherwise
+    // generateReply sees leadData.offerUrl=null and falls back to Calendly while
+    // the freshly built offer link only ever shows up in the approval email.
+    let offerUrl = null;
+    try {
+      offerUrl = await createAndDeployOffer(leadData);
+      if (offerUrl) leadData.offerUrl = offerUrl;
+    } catch (e) { console.error('[LINKEDIN] Offer deploy failed:', e.message); }
+    const draft = await generateReply('linkedin', leadData, messageForAI, hasRealMessage);
     await enqueueReply({
       channel: 'linkedin',
       leadData,
@@ -2431,6 +4319,23 @@ app.post('/webhook/vesna', async (req, res) => {
       return;
     }
 
+    // Skip phantom digests (same fix as /webhook/linkedin).
+    if (!hasRealMessage && parsed.notificationType !== 'accepted') {
+      console.log(`[VESNA] Skipping phantom notif (no real message) - ${parsed.firstName}`);
+      return;
+    }
+    if (parsed.firstName === 'Unknown') {
+      console.log('[VESNA] Skipping - unparseable sender (digest)');
+      return;
+    }
+    const vesnaDiscriminator = hasRealMessage
+      ? `msg:${crypto.createHash('sha1').update(parsed.message).digest('hex').slice(0, 16)}`
+      : `opener:${parsed.notificationType}`;
+    if (isLinkedInNotifDuplicate(parsed.linkedinUrl, `vesna:${vesnaDiscriminator}`)) {
+      console.log(`[VESNA] Duplicate notif for ${parsed.firstName} - skipping`);
+      return;
+    }
+
     const leadData = {
       firstName: parsed.firstName,
       lastName: parsed.lastName,
@@ -2451,20 +4356,51 @@ app.post('/webhook/vesna', async (req, res) => {
       notificationContext = `${parsed.firstName} sent a message to Vesna on LinkedIn but text wasn't in the email.`;
     }
 
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(parsed.linkedinUrl)) {
+      console.log(`[VESNA] Do Not Contact - skipping ${parsed.firstName} ${parsed.lastName}`);
+      return;
+    }
+
     // Classify intent - only if there's a real message
     if (hasRealMessage) {
-      const intent = await classifyIntent(parsed.message);
+      const { intent, language } = await classifyMessage(parsed.message);
       leadData.intent = intent;
-      console.log(`[VESNA] Intent: ${intent} | ${leadData.firstName} ${leadData.lastName}`);
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[VESNA] Intent: ${intent} | lang: ${language || '?'} | ${leadData.firstName} ${leadData.lastName}`);
+
+      if (intent === 'unsubscribe') {
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Do Not Contact', `${leadData.firstName} ${leadData.lastName}`);
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'unsubscribe', parsed.message, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, parsed.message, 'vesna');
+        console.log(`[VESNA] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.firstName}`);
+        return;
+      }
+
+      if (intent === 'vendor_pitch') {
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'vendor_pitch', parsed.message, null, false).catch(() => {});
+        console.log(`[VESNA] Vendor pitch - no reply: ${leadData.firstName}`);
+        return;
+      }
 
       if (intent === 'negative') {
+        await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
         console.log(`[VESNA] Skipping - negative response from ${leadData.firstName}`);
+        return;
+      }
+
+      if (intent === 'neutral' && isBareAck(parsed.message)) {
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'neutral', parsed.message, null, false).catch(() => {});
+        console.log(`[VESNA] Bare ack - no reply needed for ${leadData.firstName}`);
         return;
       }
 
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, parsed.message);
-        const sendAt = getSendAt('linkedin');
+        const sendAt = getSendAt('linkedin', 'vesna::Vesna');
         const id = uuidv4();
         await storePending(id, { channel: 'vesna', leadData, draft: closing });
         await markScheduled(id, closing, sendAt);
@@ -2479,23 +4415,30 @@ app.post('/webhook/vesna', async (req, res) => {
 
     const messageForAI = hasRealMessage ? parsed.message : notificationContext;
 
-    // Generate reply in Vesna's style
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 200,
-      system: VESNA_STYLE_GUIDE,
-      messages: [{
-        role: 'user',
-        content: `Lead name: ${leadData.firstName} ${leadData.lastName}
-${hasRealMessage ? `Their message: "${messageForAI}"` : `Context: ${messageForAI}`}
+    // First-party enrichment (company/title/industry) - this email-notif path used
+    // to draft with zero context, which produced generic replies and random slugs.
+    try {
+      const ownData = await enrichFromOwnDB(leadData.linkedinUrl);
+      if (ownData) {
+        if (ownData.company) leadData.company = ownData.company;
+        if (ownData.title) leadData.title = ownData.title;
+        if (ownData.industry) leadData.industry = ownData.industry;
+        if (ownData.employees) leadData.employees = ownData.employees;
+        if (ownData.fitReason) leadData.fitReason = ownData.fitReason;
+        if (ownData.researchSummary) leadData.researchSummary = ownData.researchSummary;
+        if (ownData.email && !leadData.email) leadData.email = ownData.email;
+      }
+    } catch (e) { console.log('[VESNA] enrich skipped:', e.message); }
 
-Write a short LinkedIn reply in Vesna's name that warmly acknowledges their interest and smoothly sets up the director (Žan) reaching out with a tailored offer.`
-      }]
-    });
+    // Deploy the offer BEFORE drafting so the link lands IN the reply
+    // (was deployed after, so the link only ever showed in the approval email).
+    let offerUrl = null;
+    try {
+      offerUrl = await createAndDeployOffer(leadData);
+      if (offerUrl) leadData.offerUrl = offerUrl;
+    } catch (e) { console.error('[VESNA] Offer deploy failed:', e.message); }
 
-    const draft = response.content[0].text.trim();
-    const offerUrl = await createAndDeployOffer(leadData);
+    const draft = await generateVesnaReply(leadData, messageForAI, hasRealMessage);
     const id = uuidv4();
     await storePending(id, { channel: 'vesna', leadData, draft });
     await sendApprovalEmail(id, leadData, draft, 'linkedin', offerUrl);
@@ -2527,7 +4470,7 @@ app.get('/approve/:id', async (req, res) => {
   }
 
   const { channel, leadData, draft } = pending;
-  const sendAt = getSendAt(channel);
+  const sendAt = getSendAt(channel, `${channel}::${leadData?.accountFirstName || 'Žan'}`);
 
   await markScheduled(req.params.id, draft, sendAt.toISOString(), pending);
 
@@ -2640,7 +4583,7 @@ app.post('/edit/:id', async (req, res) => {
     saveTrainingExample(originalDraft, updatedDraft, leadData.theirMessage || '');
   }
 
-  const sendAt = getSendAt(channel);
+  const sendAt = getSendAt(channel, `${channel}::${leadData?.accountFirstName || 'Žan'}`);
   await markScheduled(req.params.id, updatedDraft, sendAt.toISOString(), pending);
 
   const hour = getCETHour();
@@ -2742,6 +4685,473 @@ app.get('/force-send/:id', async (req, res) => {
 // ─── PING (keep-alive for UptimeRobot) ───────────────────────────────────────
 
 app.get('/ping', (req, res) => res.send('pong'));
+
+// ─── SERVE OFFER PAGE (Render-hosted, no Netlify) ────────────────────────────
+// Serves the HTML stored in Airtable Proposals by createAndServeOffer.
+// The page's own pixel/tracking still posts back to this same bot.
+app.get('/o/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  try {
+    const rec = await airtableProposalGet(slug);
+    const html = rec?.fields?.HTML;
+    if (!html) {
+      return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[OFFER-SERVE] serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
+
+// ─── SERVE GENERATOR PAGES (Render-hosted, no Netlify) ───────────────────────
+// Multi-file: landing at /g/{slug}/ + themed offers at /g/{slug}/offer-{theme}.html,
+// all stored in Airtable Proposals by createAndServeGeneratorOffer. The landing uses
+// relative ./offer-{theme}.html links, so it MUST be served with a trailing slash.
+// Themed offer pages are registered first (more specific) so they win the match.
+app.get('/g/:slug/:file', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  const m = (req.params.file || '').match(/^offer-([a-z]+)\.html$/i);
+  if (!m) return res.status(404).send(page('Ni najdeno', '<p>Stran ne obstaja.</p>'));
+  const theme = m[1].toLowerCase();
+  try {
+    const rec = await airtableProposalGet(`g/${slug}/offer-${theme}`);
+    const html = rec?.fields?.HTML;
+    if (!html) return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[GENERATOR-SERVE] offer serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
+
+app.get('/g/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  // Redirect to the trailing-slash form so the landing's relative offer links resolve.
+  if (!req.originalUrl.split('?')[0].endsWith('/')) {
+    return res.redirect(301, `/g/${slug}/`);
+  }
+  try {
+    const rec = await airtableProposalGet(`g/${slug}/index`);
+    const html = rec?.fields?.HTML;
+    if (!html) return res.status(404).send(page('Ni najdeno', '<p>Ta stran ne obstaja ali ni več na voljo.</p>'));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[GENERATOR-SERVE] landing serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju strani.');
+  }
+});
+
+// ─── PROPOSAL TRACKING (Airtable Proposals table) ────────────────────────────
+
+async function airtableProposalUpsert(slug, fields) {
+  if (!AIRTABLE_PAT) return null;
+  try {
+    const filter = encodeURIComponent(`{Slug}="${slug}"`);
+    const existing = await airtableRequest('GET', `${AT_PROPOSALS}?filterByFormula=${filter}&maxRecords=1`);
+    if (existing?.records?.length > 0) {
+      const id = existing.records[0].id;
+      await airtableRequest('PATCH', `${AT_PROPOSALS}/${id}`, { fields });
+      return { id, created: false, current: existing.records[0].fields };
+    }
+    const created = await airtableRequest('POST', AT_PROPOSALS, { records: [{ fields: { Slug: slug, ...fields } }] });
+    return { id: created?.records?.[0]?.id, created: true, current: {} };
+  } catch (e) {
+    console.error('[PROPOSAL-AT] upsert error:', e.message);
+    return null;
+  }
+}
+
+async function airtableProposalGet(slug) {
+  if (!AIRTABLE_PAT) return null;
+  const filter = encodeURIComponent(`{Slug}="${slug}"`);
+  const res = await airtableRequest('GET', `${AT_PROPOSALS}?filterByFormula=${filter}&maxRecords=1`);
+  return res?.records?.[0] || null;
+}
+
+// Compute the field changes for a single tracking event against the current known
+// field values. Pure function — no Airtable calls. Returns a delta object.
+function _computeProposalEventFields(current, event, value, ua, ip, now) {
+  const fields = {};
+
+  // Append to events log
+  const existingLog = current['Events Log'] || '';
+  const logLine = JSON.stringify({ t: now, e: event, v: value, ua: (ua || '').slice(0, 120), ip: (ip || '').slice(0, 45) });
+  const newLog = (existingLog ? existingLog + '\n' : '') + logLine;
+  // Airtable multilineText cap ~100k chars - trim oldest if huge
+  fields['Events Log'] = newLog.length > 90000 ? newLog.slice(-90000) : newLog;
+
+  // Counters
+  if (event === 'page_view') {
+    fields['Opens'] = (current['Opens'] || 0) + 1;
+    fields['Last Open At'] = now;
+    if (!current['First Open At']) fields['First Open At'] = now;
+  }
+  if (event === 'cta_click') {
+    fields['CTA Clicks'] = (current['CTA Clicks'] || 0) + 1;
+  }
+  if (event === 'calendly_click') {
+    fields['Calendly Clicks'] = (current['Calendly Clicks'] || 0) + 1;
+  }
+  if (event && event.indexOf('scroll_') === 0 && typeof value === 'number') {
+    if (!current['Max Scroll'] || value > current['Max Scroll']) fields['Max Scroll'] = value;
+  }
+  if (event === 'heartbeat' || event === 'unload') {
+    const secs = (value && typeof value === 'object') ? value.secs : null;
+    const maxScrollIn = (value && typeof value === 'object') ? value.maxScroll : null;
+    if (typeof secs === 'number') {
+      if (!current['Time On Page (s)'] || secs > current['Time On Page (s)']) fields['Time On Page (s)'] = secs;
+    }
+    if (typeof maxScrollIn === 'number') {
+      if (!current['Max Scroll'] || maxScrollIn > current['Max Scroll']) fields['Max Scroll'] = maxScrollIn;
+    }
+    fields['Last Open At'] = now;
+  }
+  // Exit-intent: hot-signal that lead was about to leave (#15)
+  if (event === 'exit_intent') {
+    fields['Exit Intent'] = (current['Exit Intent'] || 0) + 1;
+    fields['Last Exit Intent At'] = now;
+  }
+  // Pricing dwell: lead spent meaningful time on pricing section
+  if (event === 'pricing_dwell') {
+    fields['Pricing Dwell Bucket'] = (value && value.bucket) || 'unknown';
+    fields['Pricing Dwell Ms'] = (value && value.ms) || 0;
+    fields['Last Pricing Dwell At'] = now;
+  }
+  if (event === 'pagehide') {
+    fields['Last Pagehide At'] = now;
+  }
+  return fields;
+}
+
+// ── Buffered proposal tracking ──────────────────────────────────────────────
+// Previously every pixel event did 3 Airtable calls (GET + upsert's GET + PATCH),
+// so one engaged visitor (heartbeat every 30s + scrolls) cost 45-60 calls. Now
+// events accumulate in memory and flush as ONE PATCH per slug every 120s (plus an
+// immediate flush for hot signals: calendly/cta click, exit-intent). A visitor now
+// costs ~1 seed GET + a couple of PATCHes instead of dozens of calls.
+const proposalAgg = {}; // slug -> { current, changed, recordId, dirty, lastTouch, seeded }
+const PROPOSAL_FLUSH_MS = 120 * 1000;
+const PROPOSAL_EVICT_MS = 30 * 60 * 1000;
+const PROPOSAL_HOT_EVENTS = new Set(['calendly_click', 'cta_click', 'exit_intent']);
+
+async function _ensureProposalAgg(slug) {
+  let agg = proposalAgg[slug];
+  if (agg && agg.seeded) return agg;
+  agg = proposalAgg[slug] || { current: {}, changed: {}, recordId: null, dirty: false, lastTouch: Date.now(), seeded: false };
+  try {
+    let rec = await airtableProposalGet(slug); // one GET per slug per server lifetime
+    if (!rec) {
+      // Create a stub so events are captured even if generation insert failed
+      const up = await airtableProposalUpsert(slug, {});
+      agg.recordId = up?.id || null;
+      agg.current = {};
+    } else {
+      agg.recordId = rec.id;
+      agg.current = { ...rec.fields };
+    }
+  } catch (e) {
+    console.error('[PROPOSAL-AT] seed error:', e.message);
+    agg.current = agg.current || {};
+  }
+  agg.seeded = true;
+  proposalAgg[slug] = agg;
+  return agg;
+}
+
+async function _flushProposal(slug) {
+  const agg = proposalAgg[slug];
+  if (!agg || !agg.dirty) return;
+  const payload = agg.changed;
+  agg.changed = {};
+  agg.dirty = false;
+  try {
+    if (agg.recordId) {
+      await airtableRequest('PATCH', `${AT_PROPOSALS}/${agg.recordId}`, { fields: payload });
+    } else {
+      const up = await airtableProposalUpsert(slug, payload);
+      if (up?.id) agg.recordId = up.id;
+    }
+  } catch (e) {
+    // Re-queue the changes on failure so we don't lose them
+    agg.changed = { ...payload, ...agg.changed };
+    agg.dirty = true;
+    console.error('[PROPOSAL-AT] flush error:', e.message);
+  }
+}
+
+async function flushAllProposals() {
+  const now = Date.now();
+  for (const slug of Object.keys(proposalAgg)) {
+    const agg = proposalAgg[slug];
+    if (agg.dirty) await _flushProposal(slug);
+    // Evict idle, clean slugs to bound memory (they re-seed on next event)
+    if (!agg.dirty && now - agg.lastTouch > PROPOSAL_EVICT_MS) delete proposalAgg[slug];
+  }
+}
+
+async function airtableProposalLogEvent(slug, event, value, ua, ip) {
+  if (!AIRTABLE_PAT) return null;
+  const agg = await _ensureProposalAgg(slug);
+  const now = new Date().toISOString();
+  const delta = _computeProposalEventFields(agg.current, event, value, ua, ip, now);
+  Object.assign(agg.current, delta);   // keep in-memory counters/max cumulative
+  Object.assign(agg.changed, delta);   // accumulate what needs writing
+  agg.dirty = true;
+  agg.lastTouch = Date.now();
+  // Hot signals: flush immediately so a buying intent is never lost to a crash/spin-down
+  if (PROPOSAL_HOT_EVENTS.has(event)) await _flushProposal(slug);
+  return true;
+}
+
+// Pixel endpoint - accepts beacons from generated proposal pages
+app.post('/pixel/:slug', express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    const slug = (req.params.slug || '').slice(0, 80);
+    const { event, value } = req.body || {};
+    if (!slug || !event) return res.status(200).end();
+    const ua = req.headers['user-agent'] || '';
+    const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
+    // Skip bot crawlers (Slackbot, LinkedInBot, etc.) - they fetch link previews and shouldn't count as opens
+    if (/bot|crawler|spider|preview|facebookexternalhit|linkedinbot|slackbot|whatsapp|telegrambot/i.test(ua)) {
+      return res.status(200).end();
+    }
+    await airtableProposalLogEvent(slug, event, value, ua, ip);
+  } catch (e) {
+    console.error('[PIXEL] Error:', e.message);
+  }
+  // Always 204 - never leak errors to the browser
+  res.status(204).end();
+});
+
+// GET fallback for older browsers (image beacon style)
+app.get('/pixel/:slug.gif', async (req, res) => {
+  try {
+    const slug = (req.params.slug || '').slice(0, 80);
+    const event = (req.query.e || 'page_view').toString().slice(0, 40);
+    const ua = req.headers['user-agent'] || '';
+    if (slug && !/bot|crawler|spider|preview/i.test(ua)) {
+      await airtableProposalLogEvent(slug, event, null, ua, '');
+    }
+  } catch (e) {}
+  // 1x1 transparent GIF
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  res.set('Content-Type', 'image/gif');
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.send(gif);
+});
+
+// Per-proposal stats JSON (for dashboard)
+app.get('/proposal-stats/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').slice(0, 80);
+  const rec = await airtableProposalGet(slug);
+  if (!rec) return res.status(404).json({ error: 'not found' });
+  res.json({ slug, fields: rec.fields });
+});
+
+// Register hook so every generated proposal creates a Proposals row
+setOnProposalGenerated(async ({ slug, persona, theme, url, leadData }) => {
+  const fullName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+  const company = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : fullName;
+  await airtableProposalUpsert(slug, {
+    'Lead Name': fullName || company,
+    'LinkedIn URL': leadData.linkedinUrl || leadData.LinkedInUrl || '',
+    'Company': company,
+    'Title': leadData.title || leadData.role || '',
+    'Persona': persona,
+    'Theme': theme,
+    'URL': url,
+    'Generated At': new Date().toISOString(),
+    'Opens': 0,
+    'CTA Clicks': 0,
+    'Calendly Clicks': 0,
+    'Max Scroll': 0,
+  });
+  console.log(`[PROPOSAL-AT] Tracked in Proposals table: ${slug}`);
+});
+
+// ─── PROPOSAL PREVIEW (no deploy, returns HTML inline) ───────────────────────
+// Usage: GET /preview-proposal?company=KRKA&firstName=Marko&lastName=Novak&title=Head%20of%20IT&industry=farmacija
+// Or:    POST /preview-proposal with JSON body of leadData
+// Renders the proposal in the browser without uploading to Netlify - useful for testing copy/design.
+app.all('/preview-proposal', async (req, res) => {
+  try {
+    const leadData = req.method === 'POST'
+      ? req.body
+      : {
+          firstName: req.query.firstName || '',
+          lastName: req.query.lastName || '',
+          company: req.query.company || '',
+          title: req.query.title || req.query.role || '',
+          industry: req.query.industry || '',
+          theirMessage: req.query.context || req.query.theirMessage || '',
+          gender: req.query.gender || undefined,
+          personaOverride: req.query.persona || undefined,
+          themeOverride: req.query.theme || undefined,
+        };
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).send('Missing company or firstName/lastName');
+    }
+    const { buildProposalHTML } = require('./proposal');
+    const { html, persona, theme, slug } = await buildProposalHTML(leadData);
+    console.log(`[PROPOSAL-PREVIEW] ${leadData.company || leadData.firstName} | persona=${persona} | theme=${theme} | slug=${slug}`);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[PROPOSAL-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── B2BOOSTER PREVIEW (HTML render, no deploy) ───────────────────────────────
+// GET /b2booster-preview?company=Acme&firstName=John&lastName=Smith&title=CEO&industry=Manufacturing&employees=120&country=Austria
+// POST /b2booster-preview with JSON body
+app.all('/b2booster-preview', async (req, res) => {
+  try {
+    const leadData = (req.method === 'POST' && req.body)
+      ? req.body
+      : {
+          firstName: req.query.firstName || 'John',
+          lastName: req.query.lastName || 'Smith',
+          company: req.query.company || 'Acme Industries',
+          title: req.query.title || 'CEO',
+          industry: req.query.industry || 'Manufacturing',
+          employees: req.query.employees || '120',
+          country: req.query.country || 'Austria',
+          theirMessage: req.query.context || '',
+        };
+    const { html, slots, slug } = await buildB2BoosterHTML(leadData);
+    console.log(`[B2BOOSTER-PREVIEW] ${leadData.company || leadData.firstName} → slug=${slug}`);
+    if (req.query.format === 'json') {
+      return res.json({ slug, slots, htmlLength: html.length });
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[B2BOOSTER-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── B2BOOSTER DEPLOY (full pipeline, returns URL) ────────────────────────────
+app.post('/b2booster-deploy', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployB2BoosterOffer(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed, check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[B2BOOSTER-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GENERATOR PONUDB PREVIEW (HTML only, no deploy) ──────────────────────────
+// GET /generator-preview?company=Acme&firstName=John&lastName=Smith&title=Sales+Director&industry=Manufacturing&employees=80&country=Slovenia
+app.all('/generator-preview', async (req, res) => {
+  try {
+    const leadData = (req.method === 'POST' && req.body)
+      ? req.body
+      : {
+          firstName: req.query.firstName || 'Janez',
+          lastName: req.query.lastName || 'Novak',
+          company: req.query.company || 'Big Bang',
+          title: req.query.title || 'Direktor prodaje',
+          industry: req.query.industry || 'IT distribucija',
+          employees: req.query.employees || '120',
+          country: req.query.country || 'Slovenia',
+          theirMessage: req.query.context || '',
+        };
+    const { html, slots, slug } = await buildGeneratorHTML(leadData);
+    console.log(`[GENERATOR-PREVIEW] ${leadData.company || leadData.firstName} → slug=${slug}`);
+    if (req.query.format === 'json') {
+      return res.json({ slug, slots, htmlLength: html.length });
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[GENERATOR-PREVIEW] Error:', err.message);
+    res.status(500).send(`<pre>Error: ${err.message}\n\n${err.stack}</pre>`);
+  }
+});
+
+// ─── GENERATOR PONUDB DEPLOY (full pipeline) ──────────────────────────────────
+app.post('/generator-deploy', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployGeneratorOffer(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed, check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[GENERATOR-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── TRACKING: 1x1 pixel for open detection (no JS needed) ────────────────────
+// Hit from <img src="/g-pixel/{slug}.gif"> on page load. Logs first open to Airtable.
+const TRANSPARENT_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+app.get('/g-pixel/:slugWithExt', async (req, res) => {
+  const slug = (req.params.slugWithExt || '').replace(/\.(gif|png|jpg)$/i, '');
+  res.set({
+    'Content-Type': 'image/gif',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.send(TRANSPARENT_GIF);
+  // Async log (don't block response)
+  if (slug) {
+    logOfferEngagement(slug, 'page-open', {
+      ip: (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim(),
+      ua: (req.headers['user-agent'] || '').slice(0, 200),
+      ref: (req.headers['referer'] || '').slice(0, 200),
+      via: 'pixel'
+    }).catch(e => console.error('[G-PIXEL] log error:', e.message));
+  }
+});
+
+// ─── TRACKING: JS beacon for scroll/time/clicks/tabs ──────────────────────────
+app.post('/g-track', express.json({ limit: '20kb' }), async (req, res) => {
+  res.set('Content-Type', 'text/plain');
+  res.status(204).end();
+  try {
+    const { slug, event, data } = req.body || {};
+    if (slug && event) {
+      await logOfferEngagement(slug, event, data || {});
+    }
+  } catch (e) {
+    console.error('[G-TRACK] error:', e.message);
+  }
+});
+
+// ─── PROPOSAL DEPLOY (full pipeline, returns URL) ─────────────────────────────
+app.post('/generate-proposal', async (req, res) => {
+  try {
+    const leadData = req.body || {};
+    if (!leadData.company && !(leadData.firstName || leadData.lastName)) {
+      return res.status(400).json({ error: 'Missing company or firstName/lastName' });
+    }
+    const url = await createAndDeployProposalSpirit(leadData);
+    if (!url) return res.status(500).json({ error: 'Generation failed - check logs' });
+    res.json({ ok: true, url });
+  } catch (err) {
+    console.error('[PROPOSAL-DEPLOY] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── HEALTHCHECK (all-in-one server-side test) ────────────────────────────────
 
@@ -2890,8 +5300,16 @@ async function dashboardLatestMessages(limit = 10) {
       leadName: rec.fields['Lead Name'] || '',
       direction: rec.fields['Direction'] || '',
       intent: rec.fields['Intent'] || '',
-      text: (rec.fields['Text'] || rec.fields['Draft Reply'] || '').substring(0, 140),
-      messageId: rec.fields['Message ID'] || ''
+      text: (rec.fields['Text'] || '').substring(0, 280),
+      draftReply: rec.fields['Draft Reply'] || '',
+      messageId: rec.fields['Message ID'] || '',
+      timestamp: rec.fields['Timestamp'] || '',
+      sent: !!rec.fields['Sent'],
+      variant: rec.fields['Variant'] || '',
+      feedbackRating: rec.fields['Feedback Rating'] || '',
+      feedbackTags: rec.fields['Feedback Tags'] || [],
+      feedbackComment: rec.fields['Feedback Comment'] || '',
+      feedbackAt: rec.fields['Feedback At'] || ''
     }));
   } catch (e) {
     console.error('[DASHBOARD] messages error:', e.message);
@@ -2899,7 +5317,43 @@ async function dashboardLatestMessages(limit = 10) {
   }
 }
 
-app.get('/dashboard', async (req, res) => {
+// Feedback save endpoint - patches the Messages record with rating/tags/comment
+app.post('/api/feedback', async (req, res) => {
+  try {
+    if (!AIRTABLE_PAT) return res.status(503).json({ error: 'Airtable not configured' });
+    const { recordId, rating, tags, comment } = req.body || {};
+    if (!recordId || typeof recordId !== 'string') {
+      return res.status(400).json({ error: 'recordId required' });
+    }
+    const ALLOWED_RATINGS = ['good', 'needs_edit', 'bad', ''];
+    const ALLOWED_TAGS = new Set(['ton ni ok', 'pregenerično', 'napačen angle', 'predolgo', 'prekratko', 'manjka context', 'wrong offer', 'opening weak', 'CTA weak', 'slovnica', 'preveč sales']);
+    const fields = {};
+    if (rating !== undefined) {
+      if (!ALLOWED_RATINGS.includes(rating)) return res.status(400).json({ error: 'invalid rating' });
+      fields['Feedback Rating'] = rating || null;
+    }
+    if (Array.isArray(tags)) {
+      const clean = tags.filter(t => typeof t === 'string' && ALLOWED_TAGS.has(t));
+      fields['Feedback Tags'] = clean;
+    }
+    if (comment !== undefined) {
+      fields['Feedback Comment'] = (typeof comment === 'string' ? comment : '').substring(0, 5000);
+    }
+    fields['Feedback At'] = new Date().toISOString();
+    const result = await airtableRequest('PATCH', `${AT_MESSAGES}/${recordId}`, { fields });
+    if (!result || result.error) {
+      console.error('[FEEDBACK] Airtable error:', result?.error || 'unknown');
+      return res.status(500).json({ error: result?.error?.message || 'Airtable save failed' });
+    }
+    console.log(`[FEEDBACK] Saved ${recordId} rating=${rating || '-'} tags=${(tags || []).length} comment=${(comment || '').length}ch`);
+    res.json({ ok: true, fields: result.fields });
+  } catch (e) {
+    console.error('[FEEDBACK] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/dashboard', dashboardAuth, async (req, res) => {
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -2915,7 +5369,14 @@ app.get('/dashboard', async (req, res) => {
     statusOfferSent,
     statusMeetingBooked,
     statusNoShow,
-    latestMessages
+    latestMessages,
+    // Funnel: 30d cohort drop-off
+    funnelReplies30d,
+    funnelOffersSent30d,
+    funnelOffersOpened30d,
+    funnelCalendlyClicked30d,
+    funnelBooked30d,
+    funnelShown30d
   ] = await Promise.all([
     loadPending(),
     dashboardCountLeads(`AND({Last Activity}!=BLANK(), IS_AFTER({Last Activity}, "${since7d.split('T')[0]}"))`),
@@ -2927,8 +5388,31 @@ app.get('/dashboard', async (req, res) => {
     dashboardCountLeads(`{Status}="Offer Sent (Email)"`),
     dashboardCountLeads(`{Status}="Meeting Booked"`),
     dashboardCountLeads(`{Status}="No Show"`),
-    dashboardLatestMessages(12)
+    dashboardLatestMessages(30),
+    // Funnel queries (30d window, all use Last Activity as the cohort anchor when possible)
+    dashboardCountLeads(`AND({Status}!="",IS_AFTER({Last Activity}, "${since30d.split('T')[0]}"))`),
+    dashboardCountLeads(`AND({Email Sent At}!=BLANK(),IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Offer Open Count}>0,IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Offer Calendly Clicked}=TRUE(),IS_AFTER({Email Sent At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Booked At}!=BLANK(),IS_AFTER({Booked At}, "${since30d}"))`),
+    dashboardCountLeads(`AND({Meeting Status}="Shown",IS_AFTER({Booked At}, "${since30d}"))`)
   ]);
+
+  // Variant stats from in-memory latestMessages (cheap, no extra Airtable call)
+  const variantStats = { 'A-baseline': { sent: 0, booked: 0 }, 'B-curiosity': { sent: 0, booked: 0 }, 'C-direct-value': { sent: 0, booked: 0 } };
+  for (const m of latestMessages) {
+    const v = m.variant;
+    if (!v || !variantStats[v]) continue;
+    if (m.sent) variantStats[v].sent++;
+  }
+
+  // Feedback filter via query string: ?filter=needs_feedback | flagged | all (default)
+  const feedbackFilter = (req.query.filter || 'all').toString();
+  const filteredMessages = latestMessages.filter(m => {
+    if (feedbackFilter === 'needs_feedback') return !m.feedbackRating;
+    if (feedbackFilter === 'flagged') return m.feedbackRating === 'bad' || m.feedbackRating === 'needs_edit';
+    return true;
+  });
 
   const pendingItems = Object.entries(pendingAll).map(([id, item]) => ({
     id,
@@ -2997,15 +5481,98 @@ app.get('/dashboard', async (req, res) => {
           <td style="padding:8px 10px;font-size:11px;color:#9ca3af">${i.source}</td>
         </tr>`).join('');
 
-  const messageRows = latestMessages.length === 0
-    ? '<tr><td colspan="4" style="padding:12px;color:#9ca3af;text-align:center">Ni zadnjih sporočil.</td></tr>'
-    : latestMessages.map(m => `
-        <tr style="border-top:1px solid #f3f4f6">
-          <td style="padding:8px 10px;font-size:12px;color:#6b7280">${m.direction}</td>
-          <td style="padding:8px 10px;font-size:12px;font-weight:600">${m.leadName || '<em style="color:#9ca3af">unknown</em>'}</td>
-          <td style="padding:8px 10px">${intentBadge(m.intent)}</td>
-          <td style="padding:8px 10px;font-size:12px;color:#374151">${m.text.replace(/</g,'&lt;')}</td>
-        </tr>`).join('');
+  // Feedback aggregate stats (for the filter bar at top of section)
+  const totalMessages = latestMessages.length;
+  const ratedCount = latestMessages.filter(m => m.feedbackRating).length;
+  const flaggedCount = latestMessages.filter(m => m.feedbackRating === 'bad' || m.feedbackRating === 'needs_edit').length;
+  const needsFeedbackCount = totalMessages - ratedCount;
+
+  const TAG_OPTIONS = ['ton ni ok', 'pregenerično', 'napačen angle', 'predolgo', 'prekratko', 'manjka context', 'wrong offer', 'opening weak', 'CTA weak', 'slovnica', 'preveč sales'];
+
+  const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const ratingBadge = (r) => {
+    if (r === 'good') return '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">👍 GOOD</span>';
+    if (r === 'needs_edit') return '<span style="background:#fef3c7;color:#a16207;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">⚠️ NEEDS EDIT</span>';
+    if (r === 'bad') return '<span style="background:#fee2e2;color:#b91c1c;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">👎 BAD</span>';
+    return '';
+  };
+
+  const timeAgo = (iso) => {
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    return `${d}d`;
+  };
+
+  const messageCard = (m) => {
+    const tagsSet = new Set(m.feedbackTags || []);
+    const tagChips = TAG_OPTIONS.map(t => {
+      const active = tagsSet.has(t);
+      return `<button type="button" class="tag-chip" data-tag="${escapeHtml(t)}" data-active="${active ? '1' : '0'}" style="cursor:pointer;border:1px solid ${active ? '#2563eb' : '#e5e7eb'};background:${active ? '#dbeafe' : '#fff'};color:${active ? '#1d4ed8' : '#6b7280'};padding:3px 9px;border-radius:12px;font-size:11px;font-weight:600;margin:2px">${escapeHtml(t)}</button>`;
+    }).join('');
+
+    const ratingBtn = (val, emoji, label, color) => {
+      const active = m.feedbackRating === val;
+      return `<button type="button" class="rating-btn" data-rating="${val}" data-color="${color}" data-active="${active ? '1' : '0'}" style="cursor:pointer;border:2px solid ${active ? color : '#e5e7eb'};background:${active ? color : '#fff'};color:${active ? '#fff' : '#374151'};padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;margin-right:6px">${emoji} ${label}</button>`;
+    };
+
+    const hasInbound = m.text && m.direction === 'inbound';
+    const hasDraft = m.draftReply;
+
+    return `
+      <div class="msg-card" data-record-id="${m.id}" style="background:#fff;border:1px solid ${m.feedbackRating ? (m.feedbackRating === 'good' ? '#bbf7d0' : (m.feedbackRating === 'bad' ? '#fecaca' : '#fde68a')) : '#e5e7eb'};border-radius:10px;padding:16px 18px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+          <div>
+            <strong style="font-size:13px">${escapeHtml(m.leadName) || '<em style="color:#9ca3af">unknown</em>'}</strong>
+            <span style="font-size:11px;color:#9ca3af;margin-left:8px">${m.direction}</span>
+            <span style="margin-left:8px">${intentBadge(m.intent)}</span>
+            ${m.sent ? '<span style="background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:6px">SENT</span>' : ''}
+            ${m.feedbackRating ? `<span style="margin-left:6px">${ratingBadge(m.feedbackRating)}</span>` : ''}
+          </div>
+          <span style="font-size:11px;color:#9ca3af">${timeAgo(m.timestamp)}</span>
+        </div>
+
+        ${hasInbound ? `
+          <div style="background:#f9fafb;border-left:3px solid #cbd5e1;padding:8px 12px;font-size:12px;color:#374151;border-radius:4px;margin-bottom:8px;white-space:pre-wrap">${escapeHtml(m.text)}</div>
+        ` : ''}
+
+        ${hasDraft ? `
+          <div style="background:#eff6ff;border-left:3px solid #2563eb;padding:8px 12px;font-size:12px;color:#1e3a8a;border-radius:4px;margin-bottom:10px;white-space:pre-wrap"><strong style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#2563eb;display:block;margin-bottom:4px">Draft reply</strong>${escapeHtml(m.draftReply)}</div>
+        ` : ''}
+
+        <details class="feedback-details" ${m.feedbackRating ? 'open' : ''} style="border-top:1px dashed #e5e7eb;padding-top:10px;margin-top:10px">
+          <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;list-style:none">💬 Feedback ${m.feedbackComment ? '(has comment)' : ''}</summary>
+          <div style="margin-top:10px">
+            <div style="margin-bottom:8px">
+              ${ratingBtn('good', '👍', 'Good', '#16a34a')}
+              ${ratingBtn('needs_edit', '⚠️', 'Needs edit', '#d97706')}
+              ${ratingBtn('bad', '👎', 'Bad', '#dc2626')}
+            </div>
+            <div style="margin-bottom:8px">${tagChips}</div>
+            <textarea class="feedback-comment" placeholder="Komentar za Claude (kaj izboljšati...)" style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;min-height:50px;resize:vertical">${escapeHtml(m.feedbackComment)}</textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+              <span class="feedback-status" style="font-size:11px;color:#9ca3af">${m.feedbackAt ? 'Saved ' + timeAgo(m.feedbackAt) + ' ago' : ''}</span>
+              <button type="button" class="save-feedback-btn" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:700">Save</button>
+            </div>
+          </div>
+        </details>
+      </div>`;
+  };
+
+  const messageCards = filteredMessages.length === 0
+    ? `<div style="padding:24px;color:#9ca3af;text-align:center;font-size:13px">Ni sporočil za ta filter.</div>`
+    : filteredMessages.map(messageCard).join('');
+
+  const filterPill = (val, label, count) => {
+    const active = feedbackFilter === val;
+    return `<a href="?filter=${val}" style="text-decoration:none;display:inline-block;padding:5px 12px;border-radius:14px;font-size:12px;font-weight:600;margin-right:6px;background:${active ? '#111' : '#fff'};color:${active ? '#fff' : '#374151'};border:1px solid ${active ? '#111' : '#e5e7eb'}">${label} <span style="opacity:0.6;margin-left:4px">${count}</span></a>`;
+  };
 
   const envChecks = {
     Anthropic: !!process.env.ANTHROPIC_API_KEY,
@@ -3056,6 +5623,60 @@ app.get('/dashboard', async (req, res) => {
         ${funnelBar('No Show', statusNoShow, '#dc2626')}
       </div>
 
+      <h2>30d conversion funnel & drop-off</h2>
+      <div class="card">
+        ${(() => {
+          const stages = [
+            { label: 'Replied', count: funnelReplies30d, color: '#0a66c2' },
+            { label: 'Offer Email Sent', count: funnelOffersSent30d, color: '#7c3aed' },
+            { label: 'Offer Opened', count: funnelOffersOpened30d, color: '#a855f7' },
+            { label: 'Calendly Clicked', count: funnelCalendlyClicked30d, color: '#ec4899' },
+            { label: 'Meeting Booked', count: funnelBooked30d, color: '#16a34a' },
+            { label: 'Meeting Shown', count: funnelShown30d, color: '#15803d' }
+          ];
+          const top = Math.max(stages[0].count, 1);
+          return stages.map((s, i) => {
+            const prev = i === 0 ? top : (stages[i - 1].count || 1);
+            const pctFromTop = Math.round((s.count / top) * 100);
+            const dropFromPrev = i === 0 ? null : Math.round(((prev - s.count) / Math.max(prev, 1)) * 100);
+            const conversionFromPrev = i === 0 ? null : Math.round((s.count / Math.max(prev, 1)) * 100);
+            return `
+              <div style="margin-bottom:14px">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
+                  <span style="color:#374151;font-weight:600">${s.label}</span>
+                  <span style="color:#6b7280;font-size:12px">
+                    <strong>${s.count}</strong>
+                    ${conversionFromPrev !== null ? ` <span style="color:${conversionFromPrev >= 40 ? '#16a34a' : (conversionFromPrev >= 15 ? '#d97706' : '#dc2626')};font-weight:600;margin-left:8px">${conversionFromPrev}% prev</span>` : ''}
+                    ${dropFromPrev !== null && dropFromPrev > 0 ? ` <span style="color:#9ca3af;font-size:11px;margin-left:6px">−${dropFromPrev}%</span>` : ''}
+                  </span>
+                </div>
+                <div style="background:#f3f4f6;border-radius:4px;height:10px;overflow:hidden">
+                  <div style="background:${s.color};height:100%;width:${Math.max(pctFromTop, s.count > 0 ? 3 : 0)}%"></div>
+                </div>
+              </div>`;
+          }).join('');
+        })()}
+        <p style="margin:8px 0 0;color:#9ca3af;font-size:11px">Pct prev = conversion od prejšnje stopnje. Pct -X = drop-off. Cilj: vsak stage >40% konverzije.</p>
+      </div>
+
+      <h2>A/B variant performance (sent v zadnjih 30 sporočilih)</h2>
+      <div class="card">
+        <table style="width:100%;font-size:13px">
+          <thead><tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase">
+            <th style="padding:6px 8px">Variant</th><th style="padding:6px 8px">Sent</th><th style="padding:6px 8px">Note</th>
+          </tr></thead>
+          <tbody>
+            ${Object.entries(variantStats).map(([name, s]) => `
+              <tr style="border-top:1px solid #f3f4f6">
+                <td style="padding:6px 8px;font-weight:600">${name}</td>
+                <td style="padding:6px 8px">${s.sent}</td>
+                <td style="padding:6px 8px;color:#9ca3af;font-size:12px">${name === 'A-baseline' ? 'control (default style)' : name === 'B-curiosity' ? 'opens with observation/question' : 'leads with concrete outcome'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        <p style="margin:8px 0 0;color:#9ca3af;font-size:11px">Razširi okno z dodatnim 30d query-jem na Messages tabelo, ko bo dovolj podatkov za signifikantno primerjavo.</p>
+      </div>
+
       <h2>Approval queue (${pendingItems.length})</h2>
       <div class="card" style="padding:0;overflow:hidden">
         <div style="padding:10px 16px;background:#fafafa;border-bottom:1px solid #f3f4f6;font-size:12px;color:#6b7280">
@@ -3073,18 +5694,13 @@ app.get('/dashboard', async (req, res) => {
         </table>
       </div>
 
-      <h2>Zadnja sporočila (Airtable)</h2>
-      <div class="card" style="padding:0;overflow:hidden">
-        <table>
-          <thead><tr style="background:#fafafa">
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Smer</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Lead</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Intent</th>
-            <th style="text-align:left;padding:8px 10px;font-size:11px;color:#6b7280;text-transform:uppercase">Tekst</th>
-          </tr></thead>
-          <tbody>${messageRows}</tbody>
-        </table>
+      <h2>Zadnja sporočila & feedback <span style="text-transform:none;font-weight:400;color:#9ca3af">(${filteredMessages.length}/${totalMessages})</span></h2>
+      <div style="margin-bottom:10px">
+        ${filterPill('all', 'Vsa', totalMessages)}
+        ${filterPill('needs_feedback', 'Brez feedbacka', needsFeedbackCount)}
+        ${filterPill('flagged', 'Flagged 👎⚠️', flaggedCount)}
       </div>
+      <div id="messages-list">${messageCards}</div>
 
       <h2>System health</h2>
       <div class="card">
@@ -3101,6 +5717,69 @@ app.get('/dashboard', async (req, res) => {
 
       <p style="text-align:center;color:#9ca3af;font-size:11px;margin-top:32px">B2Booster Reply Bot · Dashboard</p>
     </div>
+    <script>
+      // Feedback interactivity: rating buttons, tag chips, save button
+      function styleRating(btn) {
+        const active = btn.dataset.active === '1';
+        const color = btn.dataset.color;
+        btn.style.border = '2px solid ' + (active ? color : '#e5e7eb');
+        btn.style.background = active ? color : '#fff';
+        btn.style.color = active ? '#fff' : '#374151';
+      }
+      function styleChip(chip) {
+        const active = chip.dataset.active === '1';
+        chip.style.border = '1px solid ' + (active ? '#2563eb' : '#e5e7eb');
+        chip.style.background = active ? '#dbeafe' : '#fff';
+        chip.style.color = active ? '#1d4ed8' : '#6b7280';
+      }
+      document.querySelectorAll('.msg-card').forEach(card => {
+        const recordId = card.dataset.recordId;
+        card.querySelectorAll('.rating-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const wasActive = btn.dataset.active === '1';
+            card.querySelectorAll('.rating-btn').forEach(b => { b.dataset.active = '0'; styleRating(b); });
+            if (!wasActive) { btn.dataset.active = '1'; styleRating(btn); }
+          });
+        });
+        card.querySelectorAll('.tag-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            chip.dataset.active = chip.dataset.active === '1' ? '0' : '1';
+            styleChip(chip);
+          });
+        });
+        card.querySelector('.save-feedback-btn').addEventListener('click', async () => {
+          const btn = card.querySelector('.save-feedback-btn');
+          const status = card.querySelector('.feedback-status');
+          const activeRating = card.querySelector('.rating-btn[data-active="1"]');
+          const rating = activeRating ? activeRating.dataset.rating : '';
+          const tags = Array.from(card.querySelectorAll('.tag-chip[data-active="1"]')).map(c => c.dataset.tag);
+          const comment = card.querySelector('.feedback-comment').value;
+          btn.textContent = 'Saving...';
+          btn.disabled = true;
+          status.style.color = '#9ca3af';
+          status.textContent = '';
+          try {
+            const r = await fetch('/api/feedback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ recordId, rating, tags, comment })
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Save failed');
+            status.style.color = '#16a34a';
+            status.textContent = '✓ Saved';
+            btn.textContent = 'Save';
+            btn.disabled = false;
+            setTimeout(() => { status.textContent = 'Saved just now'; status.style.color = '#9ca3af'; }, 2500);
+          } catch (err) {
+            status.style.color = '#dc2626';
+            status.textContent = '✗ ' + err.message;
+            btn.textContent = 'Save';
+            btn.disabled = false;
+          }
+        });
+      });
+    </script>
   </body></html>`;
   res.send(html);
 });
@@ -3137,6 +5816,52 @@ function getLastPollTime() {
 
 function saveLastPollTime(ts) {
   fs.writeFileSync(LAST_POLL_FILE, JSON.stringify({ timestamp: ts }));
+}
+
+// ─── EMAIL UUID DEDUP (anti-duplicate) ────────────────────────────────────────
+// Without this, the same Instantly reply (e.g. a lead like "Glorija") gets
+// re-queued on every poll: Render's disk is ephemeral so lastpoll.json resets on
+// restart and the poll re-ingests the last window of replies. Also persisted to
+// disk so in-session repeats are caught even after a single item throws.
+const EMAIL_UUID_DEDUP = new Map(); // uuid -> ts
+const EMAIL_UUID_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const EMAIL_UUID_FILE = './seen_emails.json';
+(function loadSeenEmails() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(EMAIL_UUID_FILE, 'utf8'));
+    for (const [k, t] of Object.entries(obj)) EMAIL_UUID_DEDUP.set(k, t);
+  } catch {}
+})();
+function emailUuidSeen(uuid) {
+  if (!uuid) return false;
+  const now = Date.now();
+  const prev = EMAIL_UUID_DEDUP.get(uuid);
+  if (prev && now - prev < EMAIL_UUID_TTL_MS) return true;
+  EMAIL_UUID_DEDUP.set(uuid, now);
+  // prune + persist
+  if (EMAIL_UUID_DEDUP.size > 3000) {
+    for (const [k, t] of EMAIL_UUID_DEDUP) if (now - t > EMAIL_UUID_TTL_MS) EMAIL_UUID_DEDUP.delete(k);
+  }
+  try { fs.writeFileSync(EMAIL_UUID_FILE, JSON.stringify(Object.fromEntries(EMAIL_UUID_DEDUP))); } catch {}
+  return false;
+}
+
+// ─── PAUSED CAMPAIGNS (do not draft replies) ──────────────────────────────────
+// The bot must NOT prepare replies for these Instantly sending accounts/campaigns.
+// valtheron.eu is an active cold-outreach campaign run manually via Instantly —
+// the user does not want bot-drafted replies for that business right now.
+const PAUSED_CAMPAIGN_DOMAINS = (process.env.PAUSED_CAMPAIGN_DOMAINS || 'valtheron.eu')
+  .split(',').map(d => d.toLowerCase().trim()).filter(Boolean);
+function belongsToPausedCampaign(item) {
+  if (!PAUSED_CAMPAIGN_DOMAINS.length) return false;
+  // eaccount = our mailbox the reply landed in (= the campaign's sending identity).
+  const candidates = [
+    item.eaccount,
+    item.to_address_email_list,
+    Array.isArray(item.to_address_email_list) ? item.to_address_email_list.join(',') : '',
+    item.cc_address_email_list
+  ].map(v => String(v || '').toLowerCase());
+  return PAUSED_CAMPAIGN_DOMAINS.some(dom => candidates.some(c => c.includes('@' + dom) || c.includes(dom)));
 }
 
 async function pollInstantlyReplies() {
@@ -3176,12 +5901,37 @@ async function pollInstantlyReplies() {
         source: 'instantly-poll'
       };
       if (!leadData.theirMessage) continue;
-      leadData.intent = await classifyIntent(leadData.theirMessage);
-      const draft = await generateReply('email', leadData, leadData.theirMessage);
-      const id = uuidv4();
-      await storePending(id, { channel: 'email', leadData, draft });
-      await sendApprovalEmail(id, leadData, draft, 'email');
-      console.log(`[POLL] Queued: ${leadData.firstName} ${leadData.lastName}`);
+      // Anti-loop: Instantly sometimes returns our own outbound (e.g. the Valtheron
+      // campaign sender zan.bagaric@valtheron.eu) as "received". Never reply to ourselves.
+      if (isOurOwnAddress(leadData.email)) {
+        console.log(`[POLL] Skipped self-address (anti-loop): ${leadData.email}`);
+        continue;
+      }
+      // Paused campaign: don't draft replies for e.g. the Valtheron Instantly campaign.
+      if (belongsToPausedCampaign(item)) {
+        console.log(`[POLL] Skipped paused campaign (${item.eaccount || item.to_address_email_list}): ${leadData.email}`);
+        emailUuidSeen(leadData.emailUuid); // mark so we never reconsider it
+        continue;
+      }
+      // Dedup: never queue the same reply twice (survives restarts via disk).
+      if (emailUuidSeen(leadData.emailUuid)) {
+        console.log(`[POLL] Skipped duplicate uuid: ${leadData.emailUuid} (${leadData.email})`);
+        continue;
+      }
+      try {
+        leadData.intent = await classifyIntent(leadData.theirMessage);
+        const draft = await generateReply('email', leadData, leadData.theirMessage);
+        const id = uuidv4();
+        await storePending(id, { channel: 'email', leadData, draft });
+        await sendApprovalEmail(id, leadData, draft, 'email');
+        console.log(`[POLL] Queued: ${leadData.firstName} ${leadData.lastName}`);
+      } catch (itemErr) {
+        // One bad item must not block the cursor from advancing (else the whole
+        // window gets re-polled and re-queued forever). Roll back its dedup mark
+        // so it can be retried on the next poll.
+        EMAIL_UUID_DEDUP.delete(leadData.emailUuid);
+        console.error(`[POLL] Item failed (${leadData.email}):`, itemErr.message);
+      }
     }
 
     saveLastPollTime(now);
@@ -3361,17 +6111,48 @@ async function pollLinkedInInbox() {
         source: 'linkedin-poll'
       };
 
-      // Classify intent
-      const intent = await classifyIntent(body);
+      // Hard suppression: never process a lead who opted out.
+      if (await isDoNotContactLead(linkedinUrl)) {
+        console.log(`[POLL] Do Not Contact - skipping ${firstName} ${lastName}`);
+        continue;
+      }
+
+      // Classify intent + language in one call
+      const { intent, language } = await classifyMessage(body);
       leadData.intent = intent;
-      console.log(`[POLL] Intent: ${intent} | ${firstName} ${lastName}`);
-      if (intent === 'negative') continue;
+      if (language) {
+        leadData.language = language;
+        airtableSaveLanguage(linkedinUrl, language).catch(() => {});
+      }
+      console.log(`[POLL] Intent: ${intent} | lang: ${language || '?'} | ${firstName} ${lastName}`);
+
+      if (intent === 'unsubscribe') {
+        await airtableSetLeadStatus(linkedinUrl, null, 'Do Not Contact', `${firstName} ${lastName}`);
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
+        await sendUnsubscribeNotif(leadData, body, 'linkedin');
+        console.log(`[POLL] UNSUBSCRIBE - Do Not Contact, no reply: ${firstName} ${lastName}`);
+        continue;
+      }
+      if (intent === 'vendor_pitch') {
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'vendor_pitch', body, null, false).catch(() => {});
+        console.log(`[POLL] Vendor pitch - no reply: ${firstName} ${lastName}`);
+        continue;
+      }
+      if (intent === 'negative') {
+        await airtableSetLeadStatus(linkedinUrl, null, 'Not Interested', `${firstName} ${lastName}`);
+        continue;
+      }
+      if (intent === 'neutral' && isBareAck(body)) {
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'neutral', body, null, false).catch(() => {});
+        console.log(`[POLL] Bare ack - no reply needed for ${firstName}`);
+        continue;
+      }
 
       if (intent === 'soft_negative') {
         const closing = await generateClosingReply(leadData, body);
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft: closing });
-        await markScheduled(id, closing, getSendAt('linkedin'));
+        await markScheduled(id, closing, getSendAt('linkedin', 'linkedin::Žan'));
         continue;
       }
 
@@ -3379,10 +6160,27 @@ async function pollLinkedInInbox() {
       const handoffTriggered = await maybeHandleEmailHandoff('linkedin', leadData, body);
       if (handoffTriggered) continue;
 
-      const [draft, offerUrl] = await Promise.all([
-        generateReply('linkedin', leadData, body, true),
-        createAndDeployOffer(leadData)
-      ]);
+      // Enrich, then deploy the offer BEFORE drafting (same race fix as the webhook
+      // path: Promise.all meant the draft never saw the offer link).
+      try {
+        const ownData = await enrichFromOwnDB(linkedinUrl);
+        if (ownData) {
+          if (ownData.company) leadData.company = ownData.company;
+          if (ownData.title) leadData.title = ownData.title;
+          if (ownData.industry) leadData.industry = ownData.industry;
+          if (ownData.employees) leadData.employees = ownData.employees;
+          if (ownData.fitReason) leadData.fitReason = ownData.fitReason;
+          if (ownData.researchSummary) leadData.researchSummary = ownData.researchSummary;
+          if (ownData.email && !leadData.email) leadData.email = ownData.email;
+        }
+      } catch (e) { console.log('[POLL] enrich skipped:', e.message); }
+
+      let offerUrl = null;
+      try {
+        offerUrl = await createAndDeployOffer(leadData);
+        if (offerUrl) leadData.offerUrl = offerUrl;
+      } catch (e) { console.error('[POLL] Offer deploy failed:', e.message); }
+      const draft = await generateReply('linkedin', leadData, body, true);
       await enqueueReply({
         channel: 'linkedin',
         leadData,
@@ -3415,6 +6213,41 @@ app.post('/poll-linkedin', async (req, res) => {
   }
 });
 
+// ─── OWN DB ENRICHMENT (B2Booster Campaigns app, Supabase edge fn) ────────────
+// First-party lead data: company, title, industry, location, employee count.
+// Matches on the same LinkedIn URL format Outflo sends (normalized). This is the
+// PRIMARY enrichment source - richer + free + no Apollo dependency.
+async function enrichFromOwnDB(linkedinUrl) {
+  const base = process.env.B2BOOSTER_LEAD_API_URL;
+  const key = process.env.B2BOOSTER_LEAD_API_KEY;
+  if (!base || !key || !linkedinUrl) return null;
+  try {
+    const url = `${base}${base.includes('?') ? '&' : '?'}linkedin_url=${encodeURIComponent(linkedinUrl)}`;
+    const r = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!r.ok) { console.log(`[OWNDB] ${r.status} for ${linkedinUrl}`); return null; }
+    const d = await r.json();
+    if (!d || d.error || (!d.company && !d.title)) return null;
+    const clean = v => (v && v !== 'null') ? v : '';
+    console.log(`[OWNDB] Hit: ${clean(d.company) || '(no company)'} | ${clean(d.title) || '(no title)'} | ${clean(d.industry)}`);
+    return {
+      company: clean(d.company),
+      title: clean(d.title),
+      industry: clean(d.industry),
+      employees: clean(d.employeeCount),
+      location: clean(d.location),
+      email: clean(d.email),
+      fitReason: clean(d.fitReason),
+      researchSummary: clean(d.websiteResearchSummary)
+    };
+  } catch (e) {
+    console.log('[OWNDB] error:', e.message);
+    return null;
+  }
+}
+
 // ─── APOLLO ENRICHMENT ───────────────────────────────────────────────────────
 
 async function enrichLeadWithApollo(linkedinUrl) {
@@ -3437,17 +6270,30 @@ async function enrichLeadWithApollo(linkedinUrl) {
       return null;
     }
     const email = p.email || p.personal_emails?.[0] || '';
-    const phone = p.phone_numbers?.[0]?.sanitized_number || '';
+    // Personal phone: Apollo exposes it across a few fields depending on reveal status.
+    const phone = p.phone_numbers?.[0]?.sanitized_number
+      || p.phone_numbers?.[0]?.raw_number
+      || p.sanitized_phone
+      || p.mobile_phone
+      || '';
+    // Company phone fallback: Apollo almost always returns the org's main line, which
+    // gives Žan a number to call even when no personal mobile is revealed.
+    const org = p.organization || {};
+    const companyPhone = org.primary_phone?.number
+      || org.sanitized_phone
+      || org.phone
+      || '';
     return {
       title: p.title || '',
       seniority: p.seniority || '',
-      companyName: p.organization?.name || '',
-      industry: p.organization?.industry || '',
-      employees: p.organization?.estimated_num_employees || '',
+      companyName: org.name || '',
+      industry: org.industry || '',
+      employees: org.estimated_num_employees || '',
       city: p.city || '',
       country: p.country || '',
       email,
-      phone
+      phone,
+      companyPhone
     };
   } catch (e) {
     console.log('[APOLLO] Enrichment failed:', e.message);
@@ -3487,6 +6333,38 @@ app.get('/test-apollo', async (req, res) => {
   }
 });
 
+// Debug: probe Outflo public API to discover which endpoints return lead/company data.
+// Uses the real OUTFLO_API_KEY from env. Read-only. Remove once enrichment is wired.
+app.get('/debug/outflo', async (req, res) => {
+  const key = process.env.OUTFLO_API_KEY;
+  if (!key) return res.json({ error: 'OUTFLO_API_KEY not set' });
+  const base = 'https://live.outflo.in/api/public';
+  const candidates = [
+    `${base}/conversations?limit=2`,
+    `${base}/conversations?page=1&limit=2`,
+    `${base}/leads?limit=2`,
+    `${base}/prospects?limit=2`,
+    `${base}/contacts?limit=2`,
+    `${base}/campaigns?limit=2`,
+  ];
+  if (req.query.conv) candidates.unshift(`${base}/conversations/${encodeURIComponent(req.query.conv)}`);
+  if (req.query.path) candidates.unshift(`${base}/${req.query.path}`);
+  const out = [];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, {
+        headers: { 'x-api-key': key, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(8000)
+      });
+      const text = await r.text();
+      out.push({ url, status: r.status, body: text.slice(0, 1500) });
+    } catch (e) {
+      out.push({ url, error: e.message });
+    }
+  }
+  res.json(out);
+});
+
 // ─── OUTFLO WEBHOOK ───────────────────────────────────────────────────────────
 
 app.post('/webhook/outflo', async (req, res) => {
@@ -3514,11 +6392,34 @@ app.post('/webhook/outflo', async (req, res) => {
     const msg = payload.message || {};
     const acct = payload.account || {};
 
+    // TEMP DEBUG: log the full Outflo payload so we can see EVERY field Outflo sends
+    // (we want to know if company/headline/title arrive here, to avoid depending on Apollo).
+    console.log('[OUTFLO RAW]', JSON.stringify(payload).slice(0, 2500));
+
     const messageText = msg.text || msg.body || msg.content || payload.text || '';
     const leadProfileUrl = msg.sender_profile_url || msg.sender_url || payload.lead?.profile_url || payload.lead?.linkedin_url || '';
     const leadFirstNameFromPayload = msg.sender_first_name || payload.lead?.first_name || '';
     const leadLastNameFromPayload = msg.sender_last_name || payload.lead?.last_name || '';
     const leadFullName = [leadFirstNameFromPayload, leadLastNameFromPayload].filter(Boolean).join(' ') || payload.lead?.full_name || payload.lead?.name || 'Lead';
+
+    // Outflo MAY carry the lead's company/title/headline (field names vary across
+    // Outflo versions). Try every plausible field so that, if present, we use it
+    // directly and do NOT depend on Apollo for the company. Harmless if absent.
+    const _ld = payload.lead || payload.prospect || payload.contact || {};
+    const outfloCompany = msg.sender_company || msg.sender_company_name || msg.sender_organization
+      || _ld.company || _ld.company_name || _ld.organization || _ld.organization_name || '';
+    const outfloTitle = msg.sender_title || msg.sender_job_title || _ld.title || _ld.job_title || _ld.position || '';
+    const outfloHeadline = msg.sender_headline || msg.sender_occupation || _ld.headline || _ld.occupation || '';
+    // Headlines are often "Title at Company" / "Title @ Company" / "Title - Company".
+    const headlineCompany = (() => {
+      const h = (outfloHeadline || '').trim();
+      const m = h.match(/(?:\bat\b|@|\||–|—|-)\s*([^|@–—-]{2,60})$/i);
+      return m ? m[1].trim() : '';
+    })();
+    const leadCompanyFromOutflo = (outfloCompany || headlineCompany || '').trim();
+    if (leadCompanyFromOutflo || outfloTitle || outfloHeadline) {
+      console.log(`[OUTFLO] Lead meta from payload: company="${leadCompanyFromOutflo}" title="${outfloTitle}" headline="${outfloHeadline}"`);
+    }
 
     // Safety: skip if "sender" is actually one of our own accounts (e.g. echo of an outbound message)
     if (leadProfileUrl && acct.profile_url && leadProfileUrl === acct.profile_url) {
@@ -3532,6 +6433,12 @@ app.post('/webhook/outflo', async (req, res) => {
     }
     if (!leadProfileUrl) {
       console.log('[OUTFLO] Missing lead profile URL - message obj:', JSON.stringify(msg).substring(0, 500));
+      return;
+    }
+
+    // Idempotence: dedup on conversation_id + sha1(message_text). Outflo re-sends events occasionally.
+    if (isOutfloDuplicate(payload.conversation_id || leadProfileUrl, messageText)) {
+      console.log(`[OUTFLO] Duplicate event skipped (conv=${payload.conversation_id || 'no-id'}, lead=${leadFullName})`);
       return;
     }
 
@@ -3550,16 +6457,48 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
 
-    // Classify intent
-    const intent = await classifyIntent(messageText);
-    console.log(`[${senderLabel}] Intent: ${intent}`);
+    // Hard suppression: never process a lead who opted out.
+    if (await isDoNotContactLead(leadProfileUrl)) {
+      console.log(`[${senderLabel}] Do Not Contact - skipping ${leadFullName}`);
+      return;
+    }
 
-    // Parse name
-    const nameParts = leadFullName.trim().split(' ');
+    // Classify intent + language in one call
+    const { intent, language } = await classifyMessage(messageText);
+    console.log(`[${senderLabel}] Intent: ${intent} | lang: ${language || '?'}`);
+
+    // Parse name (titles stripped: "mag. Marjana Skubic" was getting addressed as "mag.")
+    const nameParts = stripLeadingTitles(leadFullName.trim()).split(' ');
     const firstName = nameParts[0] || 'Lead';
     const lastName = nameParts.slice(1).join(' ') || '';
 
-    // Apollo enrichment - only for interested leads (skip negatives to save credits)
+    if (intent === 'unsubscribe') {
+      // Opt-out: NO reply ever, hard suppression, FYI-only notif to Žan.
+      await airtableSetLeadStatus(leadProfileUrl, null, 'Do Not Contact', leadFullName);
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'unsubscribe', messageText, null, false).catch(() => {});
+      await sendUnsubscribeNotif({ firstName, lastName, linkedinUrl: leadProfileUrl }, messageText, isVesna ? 'vesna' : 'linkedin');
+      console.log(`[${senderLabel}] UNSUBSCRIBE - Do Not Contact, no reply: ${leadFullName}`);
+      return;
+    }
+
+    if (intent === 'vendor_pitch') {
+      // They are selling to US - no draft, no offer page, no enrichment. Just log.
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'vendor_pitch', messageText, null, false).catch(() => {});
+      console.log(`[${senderLabel}] Vendor pitch - no reply: ${leadFullName}`);
+      return;
+    }
+
+    if (intent === 'neutral' && isBareAck(messageText)) {
+      // Bare "ok"/"hvala" - a pitch reply here reads pushy. Log and stay quiet.
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'neutral', messageText, null, false).catch(() => {});
+      console.log(`[${senderLabel}] Bare ack ("${messageText.substring(0, 30)}") - no reply needed`);
+      return;
+    }
+
+    // Enrichment - only for interested leads. PRIMARY: our own DB (B2Booster
+    // Campaigns app) - first-party company/title/industry, matches Outflo's URL
+    // format. FALLBACK: Apollo (mainly for email/phone, which own DB lacks).
+    const ownData = (intent !== 'negative') ? await enrichFromOwnDB(leadProfileUrl) : null;
     const apolloData = (intent !== 'negative')
       ? await enrichLeadWithApollo(leadProfileUrl)
       : null;
@@ -3572,16 +6511,24 @@ app.post('/webhook/outflo', async (req, res) => {
     const leadData = {
       firstName,
       lastName,
-      company: apolloData?.companyName || campaignName || '',
+      // Priority: own DB (first-party) -> Apollo -> Outflo payload. NEVER campaignName
+      // (campaigns are named after the SENDER, which leaked into slugs/message text).
+      company: ownData?.company || apolloData?.companyName || leadCompanyFromOutflo || '',
       linkedinUrl: leadProfileUrl,
-      title: apolloData?.title || '',
-      industry: apolloData?.industry || '',
-      employees: apolloData?.employees || '',
+      title: ownData?.title || apolloData?.title || outfloTitle || outfloHeadline || '',
+      industry: ownData?.industry || apolloData?.industry || '',
+      employees: ownData?.employees || apolloData?.employees || '',
       seniority: apolloData?.seniority || '',
       city: apolloData?.city || '',
-      country: apolloData?.country || '',
+      country: apolloData?.country || ownData?.location || '',
+      email: apolloData?.email || ownData?.email || '',
+      phone: apolloData?.phone || '',
+      companyPhone: apolloData?.companyPhone || '',
+      fitReason: ownData?.fitReason || '',
+      researchSummary: ownData?.researchSummary || '',
       theirMessage: messageText,
       intent,
+      language: language || null,
       campaignName,
       accountName: acct.full_name || (isVesna ? 'Vesna Pevec' : 'Žan Bagarič'),
       accountFirstName: acct.first_name || (isVesna ? 'Vesna' : 'Žan'),
@@ -3591,30 +6538,62 @@ app.post('/webhook/outflo', async (req, res) => {
       source: isVesna ? 'outflo-vesna' : 'outflo-zan'
     };
 
+    // Flag call requests (phone in message or "pokliči me") so the approval email
+    // alarms instead of quietly auto-drafting a Calendly reply to a hot lead.
+    const callReq = detectCallRequest(messageText);
+    if (callReq.wantsCall) {
+      leadData.wantsCall = true;
+      if (callReq.phone) leadData.messagePhone = callReq.phone;
+      console.log(`[${senderLabel}] CALL REQUEST detected${callReq.phone ? ` (${callReq.phone})` : ''} - approval email will alarm`);
+    }
+
+    // Offer classification (aiera vs b2booster). Skip for negative intent (saves API call).
+    if (intent !== 'negative') {
+      const classification = await classifyOffer(leadData, messageText);
+      leadData.offerType = classification.offer;
+      leadData.classifierSignal = classification.key_signal;
+      leadData.personalizationHook = classification.personalization_hook;
+      console.log(`[CLASSIFY-OFFER] ${firstName} ${lastName} → ${classification.offer} (conf ${classification.confidence}, b2b=${classification.b2b_check}): ${classification.key_signal}`);
+    }
+
     let draft;
+    let offerUrl = null;
     const channel = isVesna ? 'vesna' : 'linkedin';
 
     if (intent === 'negative') {
+      // Sign as whoever owns the profile the reply goes out from (Vesna stays Vesna).
+      // Closeout goes out in THEIR language; status stops all future crons.
+      await airtableSetLeadStatus(leadProfileUrl, null, 'Not Interested', leadFullName);
       const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
-      draft = `Razumem, hvala za odgovor ${firstName}. Če se kdaj situacija spremeni, sem tu. Lep pozdrav, ${signoff}`;
+      draft = buildNegativeCloseout(language, firstName, signoff);
     } else {
       // Check for email handoff before drafting normal reply
       const handoffTriggered = await maybeHandleEmailHandoff(channel, leadData, messageText);
       if (handoffTriggered) return;
 
+      // Deploy the personalized offer page BEFORE drafting, so a Žan reply can link
+      // straight to it. Failure is non-blocking - the draft then falls back to Calendly.
+      // SKIP entirely when the lead wants a call: no link belongs in a call-arranging reply.
+      if (leadData.wantsCall) {
+        console.log(`[${senderLabel}] Call request - skipping offer deploy (reply will arrange a call, no link)`);
+      } else {
+        try {
+          offerUrl = await createAndDeployOffer(leadData);
+          if (offerUrl) {
+            leadData.offerUrl = offerUrl;
+            console.log(`[${senderLabel}] Offer URL (${leadData.offerType || 'default'}): ${offerUrl}`);
+          } else {
+            console.log(`[${senderLabel}] Offer deploy returned null - reply will use Calendly only`);
+          }
+        } catch (e) {
+          console.error(`[${senderLabel}] Offer deploy failed:`, e.message);
+        }
+      }
+
       if (isVesna) {
-        // Vesna style: warm, hands off to Žan, no Calendly, no email
-        const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-        const response = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 150,
-          system: VESNA_STYLE_GUIDE,
-          messages: [{
-            role: 'user',
-            content: `Lead name: ${firstName} ${lastName}\nTheir message: "${messageText}"\n\nWrite a short LinkedIn reply in Vesna's name.`
-          }]
-        });
-        draft = response.content[0].text.trim();
+        // Vesna replies from her own profile, always signed Vesna. Shared generator:
+        // enrichment + thread context + offer link straight in the LinkedIn reply.
+        draft = await generateVesnaReply(leadData, messageText, true);
       } else {
         draft = await generateReply('linkedin', leadData, messageText, true);
       }
@@ -3636,6 +6615,7 @@ app.post('/webhook/outflo', async (req, res) => {
         draft,
         intent,
         hasRealMessage: true,
+        offerUrl,
         source: 'outflo-webhook'
       });
     }
@@ -3643,12 +6623,195 @@ app.post('/webhook/outflo', async (req, res) => {
     console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
     // Log to Airtable (non-blocking)
-    airtableUpsertLead(leadProfileUrl, leadFullName, campaignName, channel, 'Replied', messageText, apolloData || {}).catch(() => {});
+    airtableUpsertLead(
+      leadProfileUrl, leadFullName, campaignName, channel,
+      intent === 'negative' ? 'Not Interested' : 'Replied',
+      messageText,
+      { ...(apolloData || {}), language: language || null }
+    ).catch(() => {});
     airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', intent, messageText, null, false).catch(() => {});
-    airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false).catch(() => {});
+    airtableLogMessage(leadFullName, leadProfileUrl, 'outbound', intent, null, draft, false, leadData.abVariant || null).catch(() => {});
 
   } catch (err) {
     console.error('[WEBHOOK] Error:', err.message);
+  }
+});
+
+// ─── REPLY-TO-OFFER-EMAIL WEBHOOK (#14) ───────────────────────────────────────
+// Fed by Make.com / Zapier scenario that watches Žan's Gmail for replies on
+// threads matching the offer email subjects (or replies-to to bot@b2booster.eu).
+// Expected payload: { from, fromName?, subject, body, inReplyTo?, threadId? }
+// Behavior:
+//   1. Dedup on (from email + sha1(subject+body))
+//   2. Look up lead in Airtable by email
+//   3. Classify intent
+//   4. Generate draft reply (handoff or offer-followup style)
+//   5. Send approval email to Žan (=his notification that reply is waiting)
+
+const EMAIL_REPLY_DEDUP = new Map();
+const EMAIL_REPLY_TTL_MS = 24 * 60 * 60 * 1000;
+
+// ─── SELF-ADDRESS GUARD (anti-loop) ───────────────────────────────────────────
+// The bot must NEVER process an inbound "reply" that came from one of our own
+// addresses. Without this, our own approval/notification/sent mail gets forwarded
+// back in by the Make Gmail-watch scenario and the bot replies to itself in an
+// endless loop. Make has a skip_self filter too, but it breaks silently, so this
+// is the authoritative defense-in-depth guard.
+const OUR_EMAIL_ADDRESSES = new Set([
+  (process.env.MY_EMAIL || 'zan.bagaric@gmail.com'),
+  (process.env.SENDING_EMAIL || 'zan@b2booster.si'),
+  'zan@aiera.si',
+  'zan.bagaric@valtheron.eu',
+  'bot@b2booster.eu',
+  'vesna@b2booster.eu',
+  'vesna@aiera.si'
+].map(e => String(e).toLowerCase().trim()));
+// Any address on one of our own sending domains is also "us".
+// valtheron.eu is one of our own Instantly cold-outreach sending identities -
+// without it the poll re-ingests our own Valtheron campaign mail as "lead replies".
+const OUR_EMAIL_DOMAINS = (process.env.OUR_EMAIL_DOMAINS || 'b2booster.eu,b2booster.si,aiera.si,valtheron.eu')
+  .split(',').map(d => d.toLowerCase().trim()).filter(Boolean);
+function isOurOwnAddress(rawFrom) {
+  if (!rawFrom) return false;
+  // Extract bare address from a possible "Name <addr@x>" header.
+  const m = String(rawFrom).match(/<([^>]+)>/);
+  const addr = (m ? m[1] : rawFrom).toLowerCase().trim();
+  if (OUR_EMAIL_ADDRESSES.has(addr)) return true;
+  // Pull our own gmail/domain matches even if wrapped in display name.
+  const at = addr.lastIndexOf('@');
+  if (at === -1) return false;
+  const domain = addr.slice(at + 1);
+  if (OUR_EMAIL_DOMAINS.includes(domain)) return true;
+  // Catch zan.bagaric@gmail.com (personal) explicitly.
+  if (addr === 'zan.bagaric@gmail.com') return true;
+  return false;
+}
+
+async function airtableFindLeadByEmailReply(email) {
+  if (!AIRTABLE_PAT || !email) return null;
+  try {
+    const filter = encodeURIComponent(`LOWER({Email})="${email.toLowerCase()}"`);
+    const r = await airtableRequest('GET', `${AT_LEADS}?filterByFormula=${filter}&maxRecords=1`);
+    return r?.records?.[0] || null;
+  } catch (e) {
+    console.error('[EMAIL-REPLY] lookup error:', e.message);
+    return null;
+  }
+}
+
+app.post('/webhook/email-reply', async (req, res) => {
+  res.json({ ok: true }); // ack immediately
+
+  try {
+    const { from, fromName, subject, body, inReplyTo, threadId } = req.body || {};
+    if (!from || !body) {
+      console.warn('[EMAIL-REPLY] Missing from or body');
+      return;
+    }
+
+    // Anti-loop: never reply to our own addresses (broken Make skip_self safety net).
+    if (isOurOwnAddress(from)) {
+      console.log(`[EMAIL-REPLY] Skipped self-address (anti-loop): ${from}`);
+      return;
+    }
+
+    // Dedup
+    const dedupKey = `${from}::${crypto.createHash('sha1').update((subject || '') + (body || '')).digest('hex').slice(0, 16)}`;
+    const now = Date.now();
+    const prev = EMAIL_REPLY_DEDUP.get(dedupKey);
+    if (prev && now - prev < EMAIL_REPLY_TTL_MS) {
+      console.log(`[EMAIL-REPLY] Duplicate skipped: ${from} | ${subject}`);
+      return;
+    }
+    EMAIL_REPLY_DEDUP.set(dedupKey, now);
+    // Prune
+    if (EMAIL_REPLY_DEDUP.size > 2000) {
+      for (const [k, t] of EMAIL_REPLY_DEDUP) if (now - t > EMAIL_REPLY_TTL_MS) EMAIL_REPLY_DEDUP.delete(k);
+    }
+
+    // Try to look up the lead (gives us context: name, company, LinkedIn url, offer type)
+    const leadRec = await airtableFindLeadByEmailReply(from);
+    const f = leadRec?.fields || {};
+
+    // Hard suppression: lead opted out earlier - never process.
+    if (f['Status'] === 'Do Not Contact') {
+      console.log(`[EMAIL-REPLY] Do Not Contact - skipping ${from}`);
+      return;
+    }
+
+    const leadName = f['Lead Name'] || fromName || from.split('@')[0];
+    const nameParts = leadName.trim().split(' ');
+    const firstName = nameParts[0] || 'Lead';
+    const lastName = nameParts.slice(1).join(' ');
+
+    const leadData = {
+      firstName,
+      lastName,
+      email: from,
+      company: f['Company'] || from.split('@')[1] || 'Unknown',
+      linkedinUrl: f['LinkedIn URL'] || '',
+      title: f['Title'] || '',
+      industry: f['Industry'] || '',
+      country: f['Country'] || '',
+      employees: f['Employees'] || '',
+      offerType: f['Offer Type Cached'] || f['Offer Type'] || '',
+      theirMessage: body,
+      subject: subject || '',
+      source: 'email-reply-webhook',
+      accountName: 'Žan Bagarič',
+      accountFirstName: 'Žan',
+      // Important: emailUuid is needed for sendViaInstantly. We don't have it here
+      // (reply came via Gmail webhook, not Instantly), so we route the approval
+      // path to also send via Resend reply if Žan clicks POŠLJI.
+      threadId: threadId || '',
+      inReplyTo: inReplyTo || ''
+    };
+
+    // Classify intent + language in one call
+    const { intent, language } = await classifyMessage(body);
+    leadData.intent = intent;
+    leadData.language = (language || f['Language'] || null) || null;
+    if (language && leadData.linkedinUrl) airtableSaveLanguage(leadData.linkedinUrl, language).catch(() => {});
+    console.log(`[EMAIL-REPLY] ${from} | intent=${intent} | lang=${language || '?'} | subj="${subject}"`);
+
+    if (intent === 'unsubscribe') {
+      // Opt-out: NO reply, hard suppression, FYI-only notif.
+      await airtableSetLeadStatus(leadData.linkedinUrl || null, from, 'Do Not Contact', leadName);
+      airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
+      await sendUnsubscribeNotif(leadData, body, 'email');
+      console.log(`[EMAIL-REPLY] UNSUBSCRIBE - Do Not Contact, no reply: ${from}`);
+      return;
+    }
+
+    if (intent === 'vendor_pitch') {
+      airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'vendor_pitch', body, null, false).catch(() => {});
+      console.log(`[EMAIL-REPLY] Vendor pitch - no reply: ${from}`);
+      return;
+    }
+
+    if (intent === 'negative') {
+      // Closeout in THEIR language; status flip stops the 3-touch followup cron.
+      await airtableSetLeadStatus(leadData.linkedinUrl || null, from, 'Not Interested', leadName);
+      const draft = buildNegativeCloseout(leadData.language, firstName, 'Žan Bagarič');
+      const id = uuidv4();
+      await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-negative' });
+      await sendApprovalEmail(id, leadData, draft, 'email');
+      return;
+    }
+
+    // Positive / neutral / question → generate full draft
+    const draft = await generateReply('email', leadData, body, true);
+    const id = uuidv4();
+    await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-webhook' });
+    await sendApprovalEmail(id, leadData, draft, 'email');
+
+    // Log
+    airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', intent, body, null, false).catch(() => {});
+    airtableLogMessage(leadName, leadData.linkedinUrl, 'outbound', intent, null, draft, false, leadData.abVariant || null).catch(() => {});
+
+    console.log(`[EMAIL-REPLY] Approval queued for ${firstName} ${lastName}`);
+  } catch (err) {
+    console.error('[EMAIL-REPLY] Error:', err.message);
   }
 });
 
@@ -3793,7 +6956,7 @@ async function generateNoShowRecoveryEmail(leadData) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    system: NO_SHOW_RECOVERY_PROMPT,
+    system: NO_SHOW_RECOVERY_PROMPT + SHARED_LANG_RULES,
     messages: [{
       role: 'user',
       content: `Lead: ${leadData.firstName} ${leadData.lastName}${leadData.company && leadData.company !== 'LinkedIn' ? ', ' + leadData.company : ''}
@@ -3812,7 +6975,7 @@ Write the no-show recovery email.`
     subject = subjMatch[1].trim().replace(/^["']|["']$/g, '');
     body = raw.replace(subjMatch[0], '').trim();
   }
-  return { subject, body };
+  return { subject: cleanArtifacts(subject), body: cleanArtifacts(body) };
 }
 
 async function fetchCalendlyInvitee(inviteeUri) {
@@ -4078,45 +7241,113 @@ async function ensureCalendlySubscription() {
   }
 }
 
+// ─── CLEAN OFFER URLS (root-level slugs) ─────────────────────────────────────
+// Registered LAST so every named route above wins first. Serves the same Airtable
+// HTML as /o/:slug but at ponudbe.aiera.si/{slug} - the premium look that matches
+// Žan's manual aiera.si/{company} pages. Guarded: slug pattern only, no dots
+// (favicon.ico/robots.txt skip Airtable entirely).
+const ROOT_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,59}$/;
+app.get('/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim().toLowerCase();
+  if (!ROOT_SLUG_RE.test(slug)) {
+    return res.status(404).send(page('Ni najdeno', '<p>Ta stran ne obstaja.</p>'));
+  }
+  try {
+    const rec = await airtableProposalGet(slug);
+    const html = rec?.fields?.HTML;
+    if (!html) {
+      return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(html);
+  } catch (e) {
+    console.error('[OFFER-SERVE] root serve error:', e.message);
+    return res.status(500).send('Napaka pri nalaganju ponudbe.');
+  }
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`B2Booster Reply Bot on port ${PORT}`);
   console.log(`Send window: ${SEND_WINDOW_START}:00-${SEND_WINDOW_END}:00 CET`);
 
-  // Recover scheduled sends on startup (survives server restart/spin-up)
-  setTimeout(processScheduledSends, 10 * 1000);
+  // Recover scheduled sends on startup (survives server restart/spin-up):
+  // seed the in-memory cache from Airtable once, then process.
+  setTimeout(async () => { await seedScheduledItems(); await processScheduledSends(); }, 10 * 1000);
 
-  // Check queue every 60s
+  // Check queue every 60s — reads the in-memory cache, no Airtable call.
   setInterval(processScheduledSends, 60 * 1000);
 
-  // Poll Instantly after warmup, then every 15 min
+  // Reconcile the scheduled cache from Airtable once a day (drift safety, ~1 GET/day).
+  // Was 6h; lowered to cut Airtable public-API usage on the free plan.
+  setInterval(seedScheduledItems, 24 * 60 * 60 * 1000);
+
+  // Flush buffered offer-page tracking every 120s (one PATCH per active slug).
+  setInterval(flushAllProposals, PROPOSAL_FLUSH_MS);
+
+  // Poll Instantly after warmup, then every 30 min (lower intensity — replies don't need to be instant)
   setTimeout(pollInstantlyReplies, 30 * 1000);
-  setInterval(pollInstantlyReplies, 15 * 60 * 1000);
+  setInterval(pollInstantlyReplies, 30 * 60 * 1000);
 
-  // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + every 6h
-  setTimeout(processFollowups, 60 * 1000);
-  setInterval(processFollowups, 6 * 60 * 60 * 1000);
+  // Outbound funnel crons (followups, LinkedIn nudges, cold email, generator nudges).
+  // Each scans Airtable daily and drafts approval emails. Off by default to save
+  // Airtable free-plan API calls when the funnel isn't actively used. Set
+  // FUNNEL_CRONS_ENABLED=true to turn the whole outbound sequence back on.
+  const FUNNEL_CRONS_ENABLED = (process.env.FUNNEL_CRONS_ENABLED || 'false').toLowerCase() === 'true';
+  if (FUNNEL_CRONS_ENABLED) {
+    // Email handoff follow-ups: check Airtable for 3-day overdue leads, once after warmup + once a day
+    setTimeout(processFollowups, 60 * 1000);
+    setInterval(processFollowups, 24 * 60 * 60 * 1000);
 
-  // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
-  setTimeout(processLiFollowups, 75 * 1000);
-  setInterval(processLiFollowups, 6 * 60 * 60 * 1000);
+    // Cron A: LinkedIn silent 3+ days (no email discussed) → LinkedIn nudge approval
+    setTimeout(processLiFollowups, 75 * 1000);
+    setInterval(processLiFollowups, 24 * 60 * 60 * 1000);
 
-  // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
-  setTimeout(processColdLinkedInLeads, 90 * 1000);
-  setInterval(processColdLinkedInLeads, 6 * 60 * 60 * 1000);
+    // Cron B: Asked for email on LinkedIn, went silent 3+ days + has Apollo email → email outreach
+    setTimeout(processColdLinkedInLeads, 90 * 1000);
+    setInterval(processColdLinkedInLeads, 24 * 60 * 60 * 1000);
+
+    // Cron D: Generator engagement nudge (72h no-Calendly-click → tailored case B/C/D message)
+    setTimeout(processGeneratorEngagement, 105 * 1000);
+    setInterval(processGeneratorEngagement, 24 * 60 * 60 * 1000);
+    console.log('[CRON] Funnel crons ENABLED');
+  } else {
+    console.log('[CRON] Funnel crons OFF (set FUNNEL_CRONS_ENABLED=true to enable)');
+  }
 
   // Calendly webhook auto-subscribe (idempotent - only creates if missing)
   setTimeout(ensureCalendlySubscription, 20 * 1000);
 
-  // Self-ping every 14 min to prevent Render free tier spin-down
+  // DAYTIME-ONLY keepalive (free-tier hour saver).
+  // Render free = 750 instance hours/month; staying warm 24/7 (~730h) is right at the
+  // cap and risks suspension. Since we work the Slovenian market (CET), we keep the bot
+  // warm only during active hours and let it sleep overnight. ~17h/day ≈ 510h/month,
+  // safely under the cap, with real-time approvals when leads actually reply. A rare
+  // night reply just cold-starts (30-60s) - you're asleep anyway, and queued work is
+  // recovered on wake via processScheduledSends. (When we expand to EU/US, widen this
+  // window or move to Render Starter - see project_render_upgrade_pending.)
+  const KEEPALIVE_START = parseInt(process.env.KEEPALIVE_START_HOUR || '6', 10);   // CET
+  const KEEPALIVE_END = parseInt(process.env.KEEPALIVE_END_HOUR || '23', 10);      // CET
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || 'https://b2booster-reply-bot.onrender.com';
-  setInterval(async () => {
+  function inKeepaliveWindow() {
+    const h = getCETHour();
+    return h >= KEEPALIVE_START && h < KEEPALIVE_END;
+  }
+  async function selfPing() {
+    if (!inKeepaliveWindow()) return; // let it spin down overnight to save free hours
     try {
       await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) });
       console.log('[KEEPALIVE] Self-ping OK');
     } catch(e) {
-      console.error('[KEEPALIVE] Self-ping failed:', e.message);
+      console.error('[KEEPALIVE] Self-ping failed, retrying in 20s:', e.message);
+      setTimeout(async () => {
+        try { await fetch(`${SELF_URL}/ping`, { signal: AbortSignal.timeout(10000) }); console.log('[KEEPALIVE] Self-ping retry OK'); }
+        catch(e2) { console.error('[KEEPALIVE] Self-ping retry failed:', e2.message); }
+      }, 20 * 1000);
     }
-  }, 14 * 60 * 1000);
+  }
+  console.log(`[KEEPALIVE] Daytime window ${KEEPALIVE_START}:00-${KEEPALIVE_END}:00 CET (sleeps overnight to save free-tier hours)`);
+  setInterval(selfPing, 10 * 60 * 1000);
 });
