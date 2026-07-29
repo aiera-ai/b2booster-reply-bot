@@ -8,6 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 
 // New deterministic-template proposal generator (spirit-style, no prices, meeting-focused)
 const { createAndDeployProposal: createAndDeployProposalSpirit, buildProposalHTML, setOnProposalGenerated } = require('./proposal');
+const { buildSolutionsHTML } = require('./proposal-solutions');
 
 // B2Booster offer (template-driven, with pricing, sales-focused). For B2B sales/growth roles + international.
 const {
@@ -402,6 +403,81 @@ function stripQuotedHistory(text) {
 
 // FYI-only mail (no action buttons) when a lead unsubscribes. The bot never replies
 // to an opt-out; this just tells Žan it happened and that suppression is active.
+// ─── NEGATIVE DIGEST ─────────────────────────────────────────────────────────
+// Hard "negative" replies used to each fire a per-lead approval email (9 of 15
+// recent approvals were negative noise, real approvals drowned). Now: the status
+// flip + Airtable log stay, but the notification is ONE daily digest mail at
+// 17:00 CET. Set NEGATIVE_DIGEST=false to restore per-lead closeout approvals.
+const NEGATIVE_DIGEST_ENABLED = (process.env.NEGATIVE_DIGEST || 'true').toLowerCase() !== 'false';
+const NEGATIVE_DIGEST_FILE = './negative_digest.json';
+let negativeDigestBuffer = [];
+try { negativeDigestBuffer = JSON.parse(fs.readFileSync(NEGATIVE_DIGEST_FILE, 'utf8')) || []; } catch {}
+let lastNegativeDigestDay = null;
+
+function queueNegativeForDigest({ name, company, channel, account, message, link }) {
+  try {
+    negativeDigestBuffer.push({
+      ts: new Date().toISOString(),
+      name: name || '',
+      company: company || '',
+      channel: channel || '',
+      account: account || '',
+      link: link || '',
+      message: (message || '').slice(0, 400),
+    });
+    fs.writeFileSync(NEGATIVE_DIGEST_FILE, JSON.stringify(negativeDigestBuffer));
+  } catch (e) { console.warn('[NEG-DIGEST] queue failed:', e.message); }
+}
+
+async function flushNegativeDigest(force = false) {
+  if (!negativeDigestBuffer.length) return;
+  const now = new Date();
+  const cetHour = parseInt(now.toLocaleString('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Europe/Ljubljana' }), 10);
+  const today = now.toLocaleDateString('sl-SI', { timeZone: 'Europe/Ljubljana' });
+  if (!force) {
+    if (cetHour !== 17) return;
+    if (lastNegativeDigestDay === today) return;
+  }
+  const items = negativeDigestBuffer.splice(0);
+  try { fs.writeFileSync(NEGATIVE_DIGEST_FILE, '[]'); } catch {}
+  lastNegativeDigestDay = today;
+  const esc = s => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const rows = items.map(i => `
+    <tr>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;white-space:nowrap;vertical-align:top">
+        <strong>${esc(i.name)}</strong>${i.company ? `<br><span style="color:#6b7280">${esc(i.company)}</span>` : ''}<br>
+        <span style="color:#9ca3af;font-size:11px">${esc(i.channel)}${i.account ? ` → ${esc(i.account)}` : ''}</span>
+        ${i.link ? `<br><a href="${/^https?:/.test(i.link) ? esc(i.link) : 'mailto:' + esc(i.link)}" style="color:#0a66c2;font-size:11px">${esc(i.link.replace(/^https?:\/\//, '').slice(0, 40))}</a>` : ''}
+      </td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#374151;line-height:1.5">${esc(i.message)}</td>
+    </tr>`).join('');
+  const html = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#111">
+      <h2 style="margin:0 0 4px;font-size:18px">Negativni odgovori - ${esc(today)}</h2>
+      <p style="margin:0 0 16px;color:#6b7280;font-size:13px">${items.length} leadov označenih Not Interested. Status in log sta urejena, akcija ni potrebna. Če hočeš kateremu vseeno odgovoriti, odpri profil/mail ročno.</p>
+      <table style="width:100%;border-collapse:collapse;background:#fafafa;border:1px solid #e5e7eb;border-radius:8px">${rows}</table>
+      <p style="color:#ccc;font-size:11px;margin-top:20px">B2Booster Reply Bot · negative digest</p>
+    </div>`;
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: process.env.BOT_FROM_EMAIL || 'B2Booster Bot <bot@b2booster.eu>',
+        to: process.env.MY_EMAIL,
+        subject: `[BOT DIGEST] ${items.length} negativnih odgovorov`,
+        html
+      })
+    });
+    console.log(`[NEG-DIGEST] Sent digest with ${items.length} items`);
+  } catch (e) {
+    console.error('[NEG-DIGEST] send failed:', e.message);
+    negativeDigestBuffer.unshift(...items); // retry next flush window
+    try { fs.writeFileSync(NEGATIVE_DIGEST_FILE, JSON.stringify(negativeDigestBuffer)); } catch {}
+  }
+}
+setInterval(() => flushNegativeDigest().catch(e => console.warn('[NEG-DIGEST]', e.message)), 30 * 60 * 1000);
+
 async function sendUnsubscribeNotif(leadData, message, channel) {
   try {
     const html = `
@@ -1619,10 +1695,21 @@ async function createAndServeOffer(leadData) {
   try {
     let html, slug;
     const offerType = leadData && leadData.offerType;
-    const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'spirit';
+    // Default style is now "solutions" (habeco-style module pages). Env
+    // PROPOSAL_STYLE=spirit restores the old default; per-lead offerStyle wins.
+    const style = (leadData && leadData.offerStyle) || process.env.PROPOSAL_STYLE || 'solutions';
 
     if (offerType === 'b2booster') {
       ({ html, slug } = await buildB2BoosterHTML(leadData));
+    } else if (style === 'solutions') {
+      // Solution-module page; falls back to spirit for non-SI leads or on error.
+      try {
+        const built = await buildSolutionsHTML(leadData);
+        if (built) ({ html, slug } = built);
+      } catch (e) {
+        console.warn('[SOLUTIONS] build failed, falling back to spirit:', e.message);
+      }
+      if (!html) ({ html, slug } = await buildProposalHTML(leadData));
     } else if (style === 'classic') {
       // Slug: company or neutral hash - NEVER the person's name in the URL.
       const realCompany = leadData.company && leadData.company !== 'LinkedIn' ? leadData.company : '';
@@ -4232,6 +4319,12 @@ app.post('/webhook/instantly', async (req, res) => {
     let draft;
     if (intent === 'negative') {
       await airtableSetLeadStatus(null, leadData.email, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+      if (NEGATIVE_DIGEST_ENABLED) {
+        queueNegativeForDigest({ name: `${leadData.firstName} ${leadData.lastName}`, company: leadData.company, channel: 'email', account: 'Žan', message: leadData.theirMessage, link: leadData.email });
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, null, 'inbound', 'negative', leadData.theirMessage, null, false).catch(() => {});
+        console.log(`[EMAIL] Negative → digest: ${leadData.email}`);
+        return;
+      }
       draft = buildNegativeCloseout(language, leadData.firstName, 'Žan Bagarič');
     } else {
       draft = await generateReply('email', leadData, leadData.theirMessage);
@@ -4415,8 +4508,14 @@ app.post('/webhook/linkedin', async (req, res) => {
       }
 
       if (intent === 'negative') {
-        // Polite closeout in THEIR language + stop all future crons via status.
+        // Status flip stops all future crons. Notification goes to the daily digest.
         await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
+        if (NEGATIVE_DIGEST_ENABLED) {
+          queueNegativeForDigest({ name: `${leadData.firstName} ${leadData.lastName}`, company: leadData.company, channel: 'linkedin', account: 'Žan', message: parsed.message, link: leadData.linkedinUrl });
+          airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'negative', parsed.message, null, false).catch(() => {});
+          console.log(`[LINKEDIN] Negative → digest: ${leadData.firstName} ${leadData.lastName}`);
+          return;
+        }
         const draft = buildNegativeCloseout(language, leadData.firstName, 'Žan');
         const id = uuidv4();
         await storePending(id, { channel: 'linkedin', leadData, draft, source: 'linkedin-negative' });
@@ -4581,7 +4680,8 @@ app.post('/webhook/vesna', async (req, res) => {
 
       if (intent === 'negative') {
         await airtableSetLeadStatus(leadData.linkedinUrl, null, 'Not Interested', `${leadData.firstName} ${leadData.lastName}`);
-        console.log(`[VESNA] Skipping - negative response from ${leadData.firstName}`);
+        queueNegativeForDigest({ name: `${leadData.firstName} ${leadData.lastName}`, company: leadData.company, channel: 'linkedin', account: 'Vesna', message: parsed.message, link: leadData.linkedinUrl });
+        console.log(`[VESNA] Negative → digest: ${leadData.firstName}`);
         return;
       }
 
@@ -6337,6 +6437,7 @@ async function pollLinkedInInbox() {
       }
       if (intent === 'negative') {
         await airtableSetLeadStatus(linkedinUrl, null, 'Not Interested', `${firstName} ${lastName}`);
+        queueNegativeForDigest({ name: `${firstName} ${lastName}`, company: '', channel: 'linkedin-poll', account: 'Žan', message: body, link: linkedinUrl });
         continue;
       }
       if (intent === 'neutral' && isBareAck(body)) {
@@ -6765,9 +6866,20 @@ app.post('/webhook/outflo', async (req, res) => {
     const channel = isVesna ? 'vesna' : 'linkedin';
 
     if (intent === 'negative') {
-      // Sign as whoever owns the profile the reply goes out from (Vesna stays Vesna).
-      // Closeout goes out in THEIR language; status stops all future crons.
+      // Status flip stops all future crons. Notification goes to the daily
+      // digest instead of a per-lead approval mail (approval inbox noise).
       await airtableSetLeadStatus(leadProfileUrl, null, 'Not Interested', leadFullName);
+      if (NEGATIVE_DIGEST_ENABLED) {
+        queueNegativeForDigest({ name: leadFullName, company: leadData.company, channel: 'linkedin', account: isVesna ? 'Vesna' : 'Žan', message: messageText, link: leadProfileUrl });
+        airtableUpsertLead(
+          leadProfileUrl, leadFullName, campaignName, channel,
+          'Not Interested', messageText,
+          { ...(apolloData || {}), language: language || null }
+        ).catch(() => {});
+        airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'negative', messageText, null, false).catch(() => {});
+        console.log(`[${senderLabel}] Negative → digest: ${leadFullName}`);
+        return;
+      }
       const signoff = isVesna ? 'Vesna Pevec' : 'Žan';
       draft = buildNegativeCloseout(language, firstName, signoff);
     } else {
@@ -7000,8 +7112,14 @@ app.post('/webhook/email-reply', async (req, res) => {
     }
 
     if (intent === 'negative') {
-      // Closeout in THEIR language; status flip stops the 3-touch followup cron.
+      // Status flip stops the 3-touch followup cron. Notification → daily digest.
       await airtableSetLeadStatus(leadData.linkedinUrl || null, from, 'Not Interested', leadName);
+      if (NEGATIVE_DIGEST_ENABLED) {
+        queueNegativeForDigest({ name: leadName, company: leadData.company, channel: 'email-reply', account: 'Žan', message: body, link: from });
+        airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'negative', body, null, false).catch(() => {});
+        console.log(`[EMAIL-REPLY] Negative → digest: ${from}`);
+        return;
+      }
       const draft = buildNegativeCloseout(leadData.language, firstName, 'Žan Bagarič');
       const id = uuidv4();
       await storePending(id, { channel: 'email', leadData, draft, source: 'email-reply-negative' });
