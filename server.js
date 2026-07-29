@@ -1400,11 +1400,42 @@ async function createAndDeployOfferClassic(leadData) {
   }
 }
 
+// Company sanity for offer pages. Returns '' when the "company" is actually a
+// person's name (the lead's own name, or one of OUR sender accounts leaking in
+// from Outflo/campaign data) - the root cause of hero sections like
+// "PRIPRAVLJENO ZA MARJANA SKUBIC" reading as if the person were the company.
+// "Janez Novak s.p." style names survive (the legal suffix makes it a company).
+function resolveOfferCompany(leadData) {
+  const raw = ((leadData && leadData.company) || '').trim();
+  if (!raw || raw === 'LinkedIn') return '';
+  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const c = norm(raw);
+  if (!c) return '';
+  const first = norm(leadData.firstName);
+  const last = norm(leadData.lastName);
+  const full = `${first} ${last}`.trim();
+  if (full && (c === full || c === `${last} ${first}`.trim())) return '';
+  if (first && last && c === first) return '';
+  const OWN_NAMES = ['zan bagaric', 'vesna pevec', 'mojca bagaric'];
+  if (OWN_NAMES.includes(c)) return '';
+  return raw;
+}
+
 // Router: chooses between Generator ponudb, B2Booster, spirit-style, or classic offer.
 // Priority: leadData.offerType === 'generator' or 'b2booster' takes precedence over offerStyle.
 // Env: PROPOSAL_STYLE=spirit (default) | classic
 // Per-call override: leadData.offerStyle = 'spirit' | 'classic'
 async function createAndDeployOffer(leadData) {
+  // GATE: no offer page without a real company. A page addressed to a person or
+  // to "VAŠE PODJETJE" reads generic, hurts premium positioning, and is exactly
+  // why hand-made aiera.si/{company} pages outperform. The draft falls back to
+  // its no-link flow (question / Calendly / email-ask) automatically.
+  const offerCompany = resolveOfferCompany(leadData);
+  if (!offerCompany) {
+    console.log(`[OFFER] Skip - company unknown or is a person name ("${(leadData && leadData.company) || ''}") - no offer page generated`);
+    return null;
+  }
+  leadData.company = offerCompany;
   // Render-hosted serving (default): single-page offers served by this bot, no Netlify.
   // Generator stays on Netlify (multi-file). Set OFFER_HOST=netlify to force old behavior.
   if (OFFER_HOST === 'render' && !(leadData && leadData.offerType === 'generator')) {
@@ -1450,23 +1481,137 @@ async function createAndDeployOffer(leadData) {
 const OFFER_SERVE_BASE = process.env.OFFER_SERVE_URL || process.env.SERVER_URL || `http://localhost:${PORT}`;
 const OFFER_HOST = (process.env.OFFER_HOST || 'render').toLowerCase(); // 'render' | 'netlify'
 
-async function storeOfferHtml(slug, html, leadData) {
-  if (!AIRTABLE_PAT || !slug || !html) return false;
-  if (html.length > 99000) {
-    console.warn(`[OFFER-SERVE] HTML too large for Airtable (${html.length} chars) - skipping store, slug=${slug}`);
-    return false;
+// ─── OFFER HTML: cache + durable GitHub mirror ───────────────────────────────
+// Airtable is the primary store, but it is a single point of failure: when the
+// free-plan API quota runs out (429), EVERY offer link 404s (real incident:
+// July 2026, all sent links dead). Three layers now:
+//   1. in-memory cache (fast path, survives while the process lives)
+//   2. Airtable Proposals (primary, tracking lives there)
+//   3. GitHub repo mirror (durable + free, needs GITHUB_TOKEN env; branch "offers")
+const OFFER_HTML_CACHE = new Map(); // slug -> html
+const OFFER_CACHE_MAX = 400;
+function cacheOfferHtml(slug, html) {
+  if (!slug || !html) return;
+  if (OFFER_HTML_CACHE.has(slug)) OFFER_HTML_CACHE.delete(slug);
+  else if (OFFER_HTML_CACHE.size >= OFFER_CACHE_MAX) {
+    OFFER_HTML_CACHE.delete(OFFER_HTML_CACHE.keys().next().value);
   }
+  OFFER_HTML_CACHE.set(slug, html);
+}
+
+const OFFERS_GH_REPO = process.env.OFFERS_GH_REPO || 'aiera-ai/b2booster-reply-bot';
+const OFFERS_GH_BRANCH = process.env.OFFERS_GH_BRANCH || 'offers';
+let _offersBranchEnsured = false;
+
+async function _ghApi(method, path, body) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return null;
+  const res = await fetch(`https://api.github.com${path}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'b2booster-reply-bot',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res;
+}
+
+async function ensureOffersBranch() {
+  if (_offersBranchEnsured || !process.env.GITHUB_TOKEN) return _offersBranchEnsured;
   try {
-    const fields = { HTML: html };
-    const leadName = `${leadData?.firstName || ''} ${leadData?.lastName || ''}`.trim();
-    if (leadName) fields['Lead Name'] = leadName;
-    if (leadData?.company) fields['Company'] = leadData.company;
-    await airtableProposalUpsert(slug, fields);
-    return true;
+    const check = await _ghApi('GET', `/repos/${OFFERS_GH_REPO}/git/ref/heads/${OFFERS_GH_BRANCH}`);
+    if (check && check.ok) { _offersBranchEnsured = true; return true; }
+    const master = await _ghApi('GET', `/repos/${OFFERS_GH_REPO}/git/ref/heads/master`);
+    if (!master || !master.ok) return false;
+    const { object } = await master.json();
+    const created = await _ghApi('POST', `/repos/${OFFERS_GH_REPO}/git/refs`, {
+      ref: `refs/heads/${OFFERS_GH_BRANCH}`, sha: object.sha,
+    });
+    _offersBranchEnsured = !!(created && (created.ok || created.status === 422)); // 422 = already exists (race)
+    return _offersBranchEnsured;
   } catch (e) {
-    console.error('[OFFER-SERVE] store error:', e.message);
+    console.warn('[OFFER-GH] ensure branch failed:', e.message);
     return false;
   }
+}
+
+async function storeOfferHtmlGithub(slug, html) {
+  if (!process.env.GITHUB_TOKEN || !slug || !html) return false;
+  try {
+    if (!(await ensureOffersBranch())) return false;
+    const path = `/repos/${OFFERS_GH_REPO}/contents/offers/${encodeURIComponent(slug)}.html`;
+    let sha;
+    const existing = await _ghApi('GET', `${path}?ref=${OFFERS_GH_BRANCH}`);
+    if (existing && existing.ok) sha = (await existing.json()).sha;
+    const put = await _ghApi('PUT', path, {
+      message: `offer: ${slug}`,
+      content: Buffer.from(html, 'utf8').toString('base64'),
+      branch: OFFERS_GH_BRANCH,
+      ...(sha ? { sha } : {}),
+    });
+    if (put && put.ok) { console.log(`[OFFER-GH] Mirrored ${slug} to ${OFFERS_GH_REPO}@${OFFERS_GH_BRANCH}`); return true; }
+    console.warn(`[OFFER-GH] mirror failed (${put ? put.status : 'no token'}) for ${slug}`);
+    return false;
+  } catch (e) {
+    console.warn('[OFFER-GH] mirror error:', e.message);
+    return false;
+  }
+}
+
+async function fetchOfferHtmlGithub(slug) {
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${OFFERS_GH_REPO}/${OFFERS_GH_BRANCH}/offers/${encodeURIComponent(slug)}.html`);
+    if (!res.ok) return null;
+    const html = await res.text();
+    return html && html.length > 100 ? html : null;
+  } catch { return null; }
+}
+
+// Unified read: cache → Airtable → GitHub mirror. Never throws.
+async function getOfferHtml(slug) {
+  if (OFFER_HTML_CACHE.has(slug)) return OFFER_HTML_CACHE.get(slug);
+  try {
+    const rec = await airtableProposalGet(slug);
+    const html = rec?.fields?.HTML;
+    if (html) { cacheOfferHtml(slug, html); return html; }
+  } catch (e) {
+    console.warn(`[OFFER-SERVE] Airtable read failed for ${slug} (${e.message}) - trying GitHub mirror`);
+  }
+  const gh = await fetchOfferHtmlGithub(slug);
+  if (gh) { cacheOfferHtml(slug, gh); return gh; }
+  return null;
+}
+
+async function storeOfferHtml(slug, html, leadData) {
+  if (!slug || !html) return false;
+  cacheOfferHtml(slug, html);
+  // Durable GitHub mirror first - free, no quota, survives Airtable 429 months.
+  const ghOk = await storeOfferHtmlGithub(slug, html);
+  let atOk = false;
+  if (AIRTABLE_PAT && html.length <= 99000) {
+    try {
+      const fields = { HTML: html };
+      const leadName = `${leadData?.firstName || ''} ${leadData?.lastName || ''}`.trim();
+      if (leadName) fields['Lead Name'] = leadName;
+      if (leadData?.company) fields['Company'] = leadData.company;
+      await airtableProposalUpsert(slug, fields);
+      atOk = true;
+    } catch (e) {
+      console.error('[OFFER-SERVE] Airtable store error:', e.message);
+    }
+  } else if (html.length > 99000) {
+    console.warn(`[OFFER-SERVE] HTML too large for Airtable (${html.length} chars), slug=${slug} - GitHub/cache only`);
+  }
+  // A link may go out if at least one durable layer holds the page. Cache-only
+  // links die on restart, so require Airtable OR GitHub.
+  if (!atOk && !ghOk) {
+    console.error(`[OFFER-SERVE] No durable store for ${slug} (Airtable failed, no GITHUB_TOKEN?) - not returning URL`);
+    return false;
+  }
+  return true;
 }
 
 // Build a single-page offer, store it, and return the Render-served URL.
@@ -1604,7 +1749,7 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-The lead asked to be CALLED (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly confirms you will call them and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
+The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly says YES to their exact ask (call stays a call, meeting stays a meeting - mirror their word) and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
   } else if (hasRealMessage) {
     // Structure rotation (anti-template): the old fixed example ("Pripravil sem vam
     // kratek pregled...") leaked verbatim into ~60% of drafts. Pick one of 4 reply
@@ -1907,6 +2052,17 @@ function isUnsubscribeMessage(text) {
   return UNSUB_RE.test(t);
 }
 
+// Deterministic out-of-office / auto-responder guard. Runs BEFORE the LLM so an
+// absence auto-reply is never classified as unsubscribe (real case: "Dr. Mole je
+// do 20.7. odsoten" got the lead marked Do Not Contact) and never gets a draft.
+// Matched against diacritic-stripped lowercase text (same as UNSUB_RE).
+const AUTO_REPLY_RE = /(out\s+of\s+(the\s+)?office|automatic\s+reply|auto[\s-]?repl|autorespond|abwesenheitsnotiz|bin\s+.{0,30}abwesend|wahrend\s+meiner\s+abwesenheit|(sem|je|bom)\s+(trenutno\s+)?odsot(en|na)|do\s+\d{1,2}\.\s?\d{1,2}\.?\s?(\d{2,4})?\s+odsot|v\s+casu\s+(moje\s+|nase\s+)?odsotnosti|na\s+(letnem\s+)?dopustu|na\s+porodnisk|kolektivnem\s+dopustu|vrnem\s+se\s+\d|vracam\s+se\s+\d|nisem\s+dosegljiv|trenutno\s+ne(dosegljiv|dostopen)|annual\s+leave|parental\s+leave|maternity\s+leave|paternity\s+leave|sick\s+leave|on\s+(vacation|holiday)\b|currently\s+(away|out\s+of)|i\s+am\s+(currently\s+)?away|will\s+(be\s+back|return)\s+(on|by)\b|limited\s+access\s+to\s+(my\s+)?e?-?mail)/i;
+function isAutoReplyMessage(text) {
+  if (!text) return false;
+  const t = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return AUTO_REPLY_RE.test(t);
+}
+
 // Language-aware negative closeout templates. The old hardcoded Slovenian string
 // went out even when the lead wrote in English/German - the #1 "weird reply" fail.
 const CLOSEOUT_BY_LANG = {
@@ -1933,6 +2089,7 @@ function isBareAck(text) {
 // English messages and let the Slovenian-heavy style guide take over the reply).
 async function classifyMessage(message) {
   if (!message || message.trim().length < 3) return { intent: 'neutral', language: null };
+  if (isAutoReplyMessage(message)) return { intent: 'auto_reply', language: detectLanguage(message) };
   if (isUnsubscribeMessage(message)) return { intent: 'unsubscribe', language: detectLanguage(message) };
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const response = await anthropic.messages.create({
@@ -1943,6 +2100,7 @@ async function classifyMessage(message) {
       content: `Classify this B2B outreach reply. Return ONLY: intent|language (one line, lowercase).
 
 INTENT (one of):
+auto_reply = an AUTOMATED absence/auto-responder message, not written as a reply to us: out-of-office, "sem odsoten do", "na dopustu", "vrnem se", maternity/sick leave, "limited access to email", generic "thank you for your email, we will get back to you" auto-acks. KEY TEST: the message announces absence or is an automatic acknowledgement. This OVERRIDES every other intent.
 unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
 soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
@@ -1959,7 +2117,7 @@ Return format example: positive|en`
   });
   const raw = response.content[0].text.trim().toLowerCase();
   const [intentRaw, langRaw] = raw.split('|').map(s => (s || '').trim().replace(/[^a-z_]/g, ''));
-  const validIntents = ['unsubscribe', 'negative', 'soft_negative', 'vendor_pitch', 'positive', 'neutral'];
+  const validIntents = ['auto_reply', 'unsubscribe', 'negative', 'soft_negative', 'vendor_pitch', 'positive', 'neutral'];
   const validLangs = ['sl', 'en', 'de', 'cs'];
   const intent = validIntents.includes(intentRaw) ? intentRaw : 'neutral';
   const language = validLangs.includes(langRaw) ? langRaw : (detectLanguage(message) || null);
@@ -2243,14 +2401,18 @@ async function sendViaInstantly(replyToUuid, emailBody, subject) {
 // Returns { wantsCall, phone } where phone is the number found in their message (if any).
 function detectCallRequest(text) {
   if (!text) return { wantsCall: false, phone: '' };
+  // Phone-call ask OR an explicit meeting/call proposal ("bi imel čas za krajši
+  // sestanek", "can we hop on a call"). Both need the same reply behavior:
+  // confirm + propose a concrete time window, never deflect to an offer link.
   const callIntent = /(pokli[čc]|na\s+(mojo\s+)?(tel|[šs]tevilk)|moja\s+(tel|[šs]tevilk)|call me|give me a call|reach me at|ring me|tel[:.]?\s*\+?\d)/i.test(text);
+  const meetingIntent = /(sestanek|sestanemo|se\s+dobimo|se\s+vidimo\s+na|kratek\s+klic|kraj[šs]i\s+(klic|sestanek)|imel\s+[čc]as\s+za|bi\s+se\s+sli[šs]al|term[íi]n\s+za\s+(klic|sestanek)|short\s+call|quick\s+call|brief\s+call|hop\s+on\s+a\s+call|schedule\s+a\s+(call|meeting)|set\s+up\s+a\s+(call|meeting)|zoom|google\s+meet|microsoft\s+teams)/i.test(text);
   let phone = '';
   const candidates = text.match(/\+?\d[\d\s\/().\-]{6,}\d/g) || [];
   for (const cand of candidates) {
     const digits = cand.replace(/[^\d]/g, '');
     if (digits.length >= 8 && digits.length <= 15) { phone = cand.trim().replace(/\s+/g, ' '); break; }
   }
-  return { wantsCall: callIntent || !!phone, phone };
+  return { wantsCall: callIntent || meetingIntent || !!phone, phone };
 }
 
 // ─── SEND APPROVAL EMAIL VIA RESEND ───────────────────────────────────────────
@@ -2479,6 +2641,11 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px 18px;margin-bottom:24px">
         <p style="margin:0 0 6px;font-weight:700;color:#15803d;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">Offer page generirana</p>
         <a href="${offerUrl}" style="color:#16a34a;font-size:14px;word-break:break-all;font-weight:600">${offerUrl}</a>
+      </div>
+      ` : (leadData.intent === 'positive' || leadData.intent === 'question') ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 18px;margin-bottom:24px">
+        <p style="margin:0;font-weight:700;color:#92400e;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">Brez offer strani - podjetje neznano</p>
+        <p style="margin:6px 0 0;color:#92400e;font-size:13px">Enrichment ni na&scaron;el podjetja, zato ponudba ni bila generirana (generi&ccaron;na stran &scaron;kodi pozicioniranju). &Ccaron;e podjetje pozna&scaron;, uporabi UREDI in dodaj link ro&ccaron;no.</p>
       </div>
       ` : ''}
       ${actionButtons}
@@ -4048,6 +4215,13 @@ app.post('/webhook/instantly', async (req, res) => {
       return;
     }
 
+    if (intent === 'auto_reply') {
+      // Out-of-office / auto-responder: no draft, no status change, no notif.
+      airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, null, 'inbound', 'auto_reply', leadData.theirMessage, null, false).catch(() => {});
+      console.log(`[EMAIL] Auto-reply/OOO - skip: ${leadData.email}`);
+      return;
+    }
+
     if (intent === 'vendor_pitch') {
       // They are selling to US - no draft, no offer page, just log.
       airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, null, 'inbound', 'vendor_pitch', leadData.theirMessage, null, false).catch(() => {});
@@ -4226,6 +4400,13 @@ app.post('/webhook/linkedin', async (req, res) => {
         return;
       }
 
+      if (intent === 'auto_reply') {
+        // Out-of-office / auto-responder: no draft, no status change, no notif.
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'auto_reply', parsed.message, null, false).catch(() => {});
+        console.log(`[LINKEDIN] Auto-reply/OOO - skip: ${leadData.firstName} ${leadData.lastName}`);
+        return;
+      }
+
       if (intent === 'vendor_pitch') {
         // They are selling to US - no draft, no offer page, just log.
         airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'vendor_pitch', parsed.message, null, false).catch(() => {});
@@ -4383,6 +4564,12 @@ app.post('/webhook/vesna', async (req, res) => {
         airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'unsubscribe', parsed.message, null, false).catch(() => {});
         await sendUnsubscribeNotif(leadData, parsed.message, 'vesna');
         console.log(`[VESNA] UNSUBSCRIBE - Do Not Contact, no reply: ${leadData.firstName}`);
+        return;
+      }
+
+      if (intent === 'auto_reply') {
+        airtableLogMessage(`${leadData.firstName} ${leadData.lastName}`, leadData.linkedinUrl, 'inbound', 'auto_reply', parsed.message, null, false).catch(() => {});
+        console.log(`[VESNA] Auto-reply/OOO - skip: ${leadData.firstName}`);
         return;
       }
 
@@ -4698,8 +4885,7 @@ app.get('/ping', (req, res) => res.send('pong'));
 app.get('/o/:slug', async (req, res) => {
   const slug = (req.params.slug || '').trim();
   try {
-    const rec = await airtableProposalGet(slug);
-    const html = rec?.fields?.HTML;
+    const html = await getOfferHtml(slug);
     if (!html) {
       return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
     }
@@ -6139,6 +6325,11 @@ async function pollLinkedInInbox() {
         console.log(`[POLL] UNSUBSCRIBE - Do Not Contact, no reply: ${firstName} ${lastName}`);
         continue;
       }
+      if (intent === 'auto_reply') {
+        airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'auto_reply', body, null, false).catch(() => {});
+        console.log(`[POLL] Auto-reply/OOO - skip: ${firstName} ${lastName}`);
+        continue;
+      }
       if (intent === 'vendor_pitch') {
         airtableLogMessage(`${firstName} ${lastName}`, linkedinUrl, 'inbound', 'vendor_pitch', body, null, false).catch(() => {});
         console.log(`[POLL] Vendor pitch - no reply: ${firstName} ${lastName}`);
@@ -6487,6 +6678,13 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
+    if (intent === 'auto_reply') {
+      // Out-of-office / auto-responder: no draft, no status change, no enrichment.
+      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'auto_reply', messageText, null, false).catch(() => {});
+      console.log(`[${senderLabel}] Auto-reply/OOO - skip: ${leadFullName}`);
+      return;
+    }
+
     if (intent === 'vendor_pitch') {
       // They are selling to US - no draft, no offer page, no enrichment. Just log.
       airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'vendor_pitch', messageText, null, false).catch(() => {});
@@ -6786,6 +6984,12 @@ app.post('/webhook/email-reply', async (req, res) => {
       airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'unsubscribe', body, null, false).catch(() => {});
       await sendUnsubscribeNotif(leadData, body, 'email');
       console.log(`[EMAIL-REPLY] UNSUBSCRIBE - Do Not Contact, no reply: ${from}`);
+      return;
+    }
+
+    if (intent === 'auto_reply') {
+      airtableLogMessage(leadName, leadData.linkedinUrl, 'inbound', 'auto_reply', body, null, false).catch(() => {});
+      console.log(`[EMAIL-REPLY] Auto-reply/OOO - skip: ${from}`);
       return;
     }
 
@@ -7259,8 +7463,7 @@ app.get('/:slug', async (req, res) => {
     return res.status(404).send(page('Ni najdeno', '<p>Ta stran ne obstaja.</p>'));
   }
   try {
-    const rec = await airtableProposalGet(slug);
-    const html = rec?.fields?.HTML;
+    const html = await getOfferHtml(slug);
     if (!html) {
       return res.status(404).send(page('Ni najdeno', '<p>Ta ponudba ne obstaja ali ni več na voljo.</p>'));
     }
