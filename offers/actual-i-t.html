@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>AIERA x ACTUAL I.T. - personalizirana ponudba</title>
+<meta name="description" content="Predlog AI rešitev za ACTUAL I.T.. Pripravil Žan Bagarič, AIERA.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --navy:#0b1526; --ink:#1e293b; --body:#475569; --muted:#94a3b8; --brand:#2563eb; --brand-dark:#1d4ed8; --soft:#eff6ff; --bg-alt:#f8fafc; --line:#e2e8f0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Inter',-apple-system,sans-serif; color:var(--ink); background:#fff; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1040px; margin:0 auto; padding:0 24px; }
+  .eyebrow { display:inline-block; font-size:12px; font-weight:700; letter-spacing:0.12em; color:var(--brand); text-transform:uppercase; margin-bottom:14px; }
+  h2 { font-size:30px; font-weight:800; letter-spacing:-0.02em; color:var(--navy); line-height:1.15; margin-bottom:14px; max-width:760px; }
+  .intro { font-size:16px; color:var(--brand-dark); font-weight:600; max-width:720px; margin-bottom:10px; }
+  .body { font-size:16px; color:var(--body); max-width:720px; }
+  header { position:sticky; top:0; background:rgba(255,255,255,0.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); z-index:10; }
+  .nav { display:flex; align-items:center; justify-content:space-between; height:60px; }
+  .lockup { font-weight:800; font-size:15px; color:var(--navy); letter-spacing:0.02em; }
+  .lockup .x { color:var(--muted); font-weight:500; margin:0 7px; }
+  .btn { display:inline-block; background:var(--brand); color:#fff; font-weight:600; font-size:15px; padding:12px 26px; border-radius:8px; text-decoration:none; }
+  .btn:hover { background:var(--brand-dark); }
+  .btn-ghost { background:transparent; color:var(--brand); border:1px solid var(--brand); }
+  .btn-sm { padding:8px 18px; font-size:13px; }
+  .hero { padding:76px 0 56px; background:linear-gradient(180deg,#fff 0%,var(--soft) 100%); }
+  .hero .kicker { font-size:12px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-bottom:18px; }
+  .hero h1 { font-size:52px; font-weight:800; letter-spacing:-0.03em; color:var(--navy); line-height:1.06; max-width:860px; margin-bottom:20px; }
+  .hero .sub { font-size:18px; color:var(--body); max-width:700px; margin-bottom:14px; }
+  .hero .byline { font-size:13px; color:var(--muted); margin-bottom:28px; }
+  .cta-row { display:flex; gap:14px; flex-wrap:wrap; }
+  .stack { padding:26px 0; border-bottom:1px solid var(--line); }
+  .stack .wrap { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .stack .label { font-size:11px; font-weight:700; letter-spacing:0.12em; color:var(--muted); margin-right:6px; }
+  .badge { font-size:12px; font-weight:600; color:var(--ink); background:var(--bg-alt); border:1px solid var(--line); border-radius:999px; padding:5px 13px; }
+  section.block { padding:64px 0; }
+  section.alt, section.block.alt { background:var(--bg-alt); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin-top:28px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px 22px; }
+  section.alt .card { background:#fff; }
+  .card h4 { font-size:15px; font-weight:700; color:var(--navy); margin-bottom:6px; }
+  .card p { font-size:14px; color:var(--body); }
+  .refs { padding:34px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .refs .wrap { display:flex; align-items:center; gap:22px; flex-wrap:wrap; }
+  .refs .label { font-size:11px; font-weight:700; letter-spacing:0.12em; color:var(--muted); }
+  .refs .name { font-size:14px; font-weight:700; color:var(--ink); opacity:0.75; }
+  .refs .more { font-size:13px; color:var(--muted); }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
+  .chip { font-size:12px; font-weight:600; color:var(--brand-dark); background:var(--soft); border-radius:999px; padding:5px 13px; }
+  section.solution { padding:64px 0; }
+  .pricing { margin-top:30px; background:var(--navy); border-radius:14px; padding:28px 30px; color:#fff; max-width:720px; }
+  .pricing-label { font-size:11px; font-weight:700; letter-spacing:0.14em; color:#93c5fd; margin-bottom:10px; }
+  .pricing-lines { display:flex; gap:26px; flex-wrap:wrap; font-size:22px; font-weight:800; margin-bottom:10px; }
+  .pricing-note { font-size:13px; color:#cbd5e1; }
+  .list { margin-top:22px; display:grid; gap:10px; max-width:720px; }
+  .list .item { display:flex; gap:10px; font-size:15px; color:var(--ink); }
+  .list .dot { color:var(--brand); font-weight:800; }
+  .final { padding:80px 0; background:var(--navy); color:#fff; text-align:center; }
+  .final h2 { color:#fff; margin:0 auto 14px; }
+  .final p { color:#cbd5e1; max-width:640px; margin:0 auto 30px; font-size:16px; }
+  footer { padding:36px 0; }
+  footer .wrap { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+  footer .who { font-size:14px; color:var(--body); }
+  footer .who strong { color:var(--navy); }
+  footer .for { font-size:12px; color:var(--muted); }
+  @media (max-width:720px) { .hero h1 { font-size:34px; } h2 { font-size:24px; } .hero { padding:52px 0 40px; } }
+</style>
+</head>
+<body>
+<img src="https://b2booster-reply-bot.onrender.com/pixel/actual-i-t?e=page_view" width="1" height="1" style="position:absolute;opacity:0" alt="">
+<header>
+  <div class="wrap nav">
+    <span class="lockup">AIERA<span class="x">×</span>ACTUAL I.T.</span>
+    <a class="btn btn-sm" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <p class="kicker">PRIPRAVLJENO ZA IGOR HOSTNIK, GROUP CEO - ACTUAL I.T.</p>
+    <h1>AI za rast ACTUAL I.T. - avtomatizacija in nova poslovna področja</h1>
+    <p class="sub">ACTUAL I.T. že poslužuje stotine strank. AI vam odpira nove kanale za pridobivanje klientov, avtomatizira ponudbe in interno obdelavo naročil, ter omogoča nove storitve, ki jih konkurenca še nima. Praktični sistemi, ki se vpletejo v Vašo infrastrukturo.</p>
+    <p class="byline">Pripravil: Žan Bagarič, AIERA · 30. julij 2026</p>
+    <div class="cta-row">
+      <a class="btn" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
+      <a class="btn btn-ghost" href="#resitve">Predlagane AI rešitve</a>
+    </div>
+  </div>
+</section>
+
+<div class="stack">
+  <div class="wrap">
+    <span class="label">AIERA AI STACK</span>
+    <span class="badge">Claude</span><span class="badge">OpenAI</span><span class="badge">Gemini</span><span class="badge">n8n</span><span class="badge">Lovable</span><span class="badge">Cursor</span><span class="badge">Clay</span>
+  </div>
+</div>
+
+<section class="block">
+  <div class="wrap">
+    <span class="eyebrow">ZAKAJ ZDAJ</span>
+    <h2>ACTUAL I.T. ima IT strokovno moč. AI doda hitrost prodaje in nove višine produktivnosti.</h2>
+    <p class="body">V IT servisih je hitrost ključna - kvote, ponudbe, kvalifikacija strank. AI avtomati obdelajo inbound povpraševanja, kreirajo prilagojene ponudbe v minutah, in vas osvobodijo ročnega dela. Hkrati lahko zgradite tudi nove AI-pogonske storitve, ki jih tržite kot lastno dodano vrednost.</p>
+    <div class="cards">
+      <div class="card">
+        <h4>B2B outreach avtomatika</h4>
+        <p>Sistematično generiranje novih IT strank preko email in LinkedIn - brez dodatnih ljudi.</p>
+      </div>
+      <div class="card">
+        <h4>Ponudbe v treh minutah</h4>
+        <p>AI generator prilagodi vašo ponudbo glede na prejeto povpraševanje in jo nemudoma pošlje.</p>
+      </div>
+      <div class="card">
+        <h4>Notranja avtomatizacija</h4>
+        <p>Od inbound maila do osnutka odgovora - AI proces zmanjša ročni dela najmanj 30 %.</p>
+      </div></div>
+  </div>
+</section>
+
+<div class="refs">
+  <div class="wrap">
+    <span class="label">REFERENCE</span>
+    <span class="name">MUNCHIES</span><span class="name">Megasplet</span><span class="name">Valtheron</span><span class="name">B2Booster</span><span class="name">NordLogistics</span><span class="name">RedEyeMonkey</span>
+    <span class="more">+ 30 podjetij v SI in EU</span>
+  </div>
+</div>
+
+<section class="block alt" id="resitve">
+  <div class="wrap">
+    <span class="eyebrow">PREDLAGANE AI REŠITVE</span>
+    <h2>Izbrano za ACTUAL I.T. - 5 rešitev, en izvajalec.</h2>
+    <div class="chips"><span class="chip">1 · pridobivanje novih b2b strank</span><span class="chip">2 · ai generator personaliziranih ponudb</span><span class="chip">3 · ai customer service za maile in sporočila</span><span class="chip">4 · vzpostavitev ai agentov</span><span class="chip">5 · ai chatbot na spletni strani</span></div>
+  </div>
+</section>
+
+
+  <section class="solution">
+    <div class="wrap">
+      <span class="eyebrow">REŠITEV 1: PRIDOBIVANJE NOVIH B2B STRANK</span>
+      <h2>B2Booster - sistematičen kanal novih poslovnih povpraševanj.</h2>
+      <p class="intro">Za IT agencije kot ACTUAL I.T. je sistematična B2B lead-generacija osnova rasti. Naš sistem avtomatizira iskanje, kvalifikacijo in prvi kontakt z novimi potencialnimi strankami - medtem ko Vaš tim vodi prodajne pogovore.</p>
+      <p class="body">Vzpostavimo voden outbound proces, ki sistematično odpira pogovore z odločevalci v podjetjih, ki ustrezajo vašemu idealnemu profilu stranke. Pristop je preverjen na 30+ podjetjih in se v celoti prilagodi vaši ponudbi. Kvalificirano povpraševanje predamo vaši prodajni ekipi, AIERA prevzame celoten operativni del.</p>
+      <div class="cards">
+      <div class="card">
+        <h4>Natančno definiran ICP</h4>
+        <p>Skupaj določimo panoge, velikosti podjetij in trge, kjer je vaša ponudba najmočnejša. Brez razpršenosti.</p>
+      </div>
+      <div class="card">
+        <h4>Nagovor pravih odločevalcev</h4>
+        <p>Osebe, ki dejansko sprožijo nakup in upravljajo budget. Ne info naslovi, ne asistenti brez besede.</p>
+      </div>
+      <div class="card">
+        <h4>Personalizacija s kontekstom</h4>
+        <p>Vsako sporočilo je vezano na konkreten povod pri prejemniku. Brez generičnih šablon.</p>
+      </div>
+      <div class="card">
+        <h4>Predaja vaši ekipi</h4>
+        <p>Vaša prodaja dobi ogret pogovor in termin. AIERA vodi vse do tja - sporočila, followupe, koledar.</p>
+      </div></div>
+      
+    <div class="pricing">
+      <p class="pricing-label">CENA B2B LEAD-GEN SISTEMA</p>
+      <div class="pricing-lines"><span>490 EUR setup</span><span>1.200 EUR / mesec / trg</span></div>
+      <p class="pricing-note">Vključeno: ICP raziskava, baza odločevalcev, sporočila, izvedba outbounda, tedensko poročanje in iteracija. Brez dolgoročnih zavez, 30-dnevna odpoved. Brez DDV.</p>
+    </div>
+    </div>
+  </section>
+
+  <section class="solution alt">
+    <div class="wrap">
+      <span class="eyebrow">REŠITEV 2: AI GENERATOR PERSONALIZIRANIH PONUDB</span>
+      <h2>Iz povpraševanja do polno oblikovane ponudbe v minutah.</h2>
+      <p class="intro">IT ponudbe so kompleksne in časovno intenzivne. AI generator vašo standardno ponudbo prilagodi vsakemu povpraševanju in jo samodzajno oddela - hitreje kot ročna ureja.</p>
+      <p class="body">Prodajna ekipa danes porabi ure za sestavljanje ponudbe, ujemanje z identiteto stranke in oblikovanje dokumenta. AI generator iz kratkega internega brifa pripravi popolnoma personalizirano, profesionalno ponudbo - z vsebino, cenami in pogoji. Ekipi ostane samo potrditev in izboljšava.</p>
+      <div class="cards">
+      <div class="card">
+        <h4>Personalizacija na stranko</h4>
+        <p>Vsaka ponudba vsebuje ime stranke, njeno identiteto in predloge, prilagojene njeni panogi in budgetu.</p>
+      </div>
+      <div class="card">
+        <h4>Konsistentna kvaliteta</h4>
+        <p>Vsaka ponudba na nivoju vaše najboljše. Brez razlik med prodajniki in brez tipkarskih napak ob 22h.</p>
+      </div>
+      <div class="card">
+        <h4>Hitrost kot prednost</h4>
+        <p>Ponudba pri stranki v minutah, ne dnevih. Prvi ponudnik z odgovorom je najpogosteje tudi izbrani.</p>
+      </div></div>
+      
+    </div>
+  </section>
+
+  <section class="solution">
+    <div class="wrap">
+      <span class="eyebrow">REŠITEV 3: AI CUSTOMER SERVICE ZA MAILE IN SPOROČILA</span>
+      <h2>AI pripravi vse odgovore, vaši zaposleni jih le potrjujejo.</h2>
+      <p class="intro">Inbound maili od strank prehitro nalagajo Vaš tim. AI osnutek odgovore, vaš specialist pregleda in odobri - rezultat je boljša odzivnost brez dodatne kadra.</p>
+      <p class="body">AI prebere vsak vhodni mail in sporočilo, razume kontekst v okviru zgodovine stranke in pripravi predlog odgovora. Zaposleni ga z enim klikom potrdi ali popravi. Ko sistem dokazano deluje, za standardne tipe sporočil postopno aktivirate avtopilota.</p>
+      <div class="cards">
+      <div class="card">
+        <h4>1. Predlogi, človek potrjuje</h4>
+        <p>AI pripravi predlog za vsak mail. Vse gre skozi človeka, brez tveganja.</p>
+      </div>
+      <div class="card">
+        <h4>2. Avtopilot za znane primere</h4>
+        <p>Statusi, FAQ in standardne potrditve gredo avtomatsko. Ostalo še vedno potrjuje človek.</p>
+      </div>
+      <div class="card">
+        <h4>3. Razširjen avtopilot z varovalkami</h4>
+        <p>Nabor avtomatskih tipov postopno širimo. Občutljivo in nestandardno vedno eskalira na ekipo.</p>
+      </div></div>
+      
+    </div>
+  </section>
+
+  <section class="solution alt">
+    <div class="wrap">
+      <span class="eyebrow">REŠITEV 4: VZPOSTAVITEV AI AGENTOV</span>
+      <h2>AI agenti, ki za ponovljive procese prevzamejo celoten cikel.</h2>
+      <p class="intro">Ponovljivi IT procesi (naročilo SW licence, vzpostavitev testnega okolja) se spremenijo v avtomatske agente, ki delajo 24/7 in zmanjšajo ročni napor.</p>
+      <p class="body">Za enostavnejša, ponovljiva naročila ali procese vzpostavimo AI agenta, ki celoten tok vodi sam: komunicira s stranko, pripravi ponudbo, sprejme potrditev in podatke strukturirano preda v vaše sisteme. Vaša ekipa se vključi samo pri kompleksnejših primerih ali izjemah.</p>
+      <div class="cards">
+      <div class="card">
+        <h4>Pogovor in ponudba</h4>
+        <p>Agent prevzame povpraševanje, razjasni podrobnosti in samodejno pripravi ponudbo.</p>
+      </div>
+      <div class="card">
+        <h4>Potrditev in predaja</h4>
+        <p>Sprejme potrditev, uredi dokumentacijo in naročilo vnese v vaš ERP ali CRM.</p>
+      </div>
+      <div class="card">
+        <h4>Pametne varovalke</h4>
+        <p>Vsak dvom ali odstopanje eskalira na vašo ekipo. Skupaj definiramo, kaj agent sme prevzeti v celoti.</p>
+      </div></div>
+      
+    </div>
+  </section>
+
+  <section class="solution">
+    <div class="wrap">
+      <span class="eyebrow">REŠITEV 5: AI CHATBOT NA SPLETNI STRANI</span>
+      <h2>Vedno dostopen prvi stik, ki obiskovalca pripelje do odgovora ali povpraševanja.</h2>
+      <p class="intro">Velik del vašega inbound vprašanj je FAQ - cene, tehnične zahteve, roki. AI chatbot 80 % samodzajno obdela in kvalificira, vaš tim pa dobi le vroče stike.</p>
+      <p class="body">AI chatbot v sekundah odgovori na pogosta vprašanja - roki, pogoji, cene, statusi - in obiskovalca, ki je pripravljen na nakup, brez prekinitve preusmeri v povpraševanje ali na pravo osebo v vaši prodaji. Deluje 24/7, v slovenščini in tujih jezikih.</p>
+      <div class="cards">
+      <div class="card">
+        <h4>Takojšnji odgovori</h4>
+        <p>Pogosta vprašanja rešena takoj in dosledno, kadarkoli.</p>
+      </div>
+      <div class="card">
+        <h4>Vodi do ponudbe</h4>
+        <p>Razume potrebo in predlaga konkretne izdelke, povezave in naslednje korake.</p>
+      </div>
+      <div class="card">
+        <h4>Predaja ob pravem trenutku</h4>
+        <p>Ob resnem interesu odpre povpraševanje ali poveže z živim prodajalcem, s celotnim kontekstom.</p>
+      </div></div>
+      
+    </div>
+  </section>
+
+<section class="block alt">
+  <div class="wrap">
+    <span class="eyebrow">PREDLAGAN ZAČETEK</span>
+    <h2>Discovery, izbira prvih dveh modulov, pilot v živi praksi.</h2>
+    <p class="body">Začnite z outbound sistemom za nove stranke in generatorjem ponudb za hitrejšo prodajo - to vam prineša rezultate že v prvih tednih.</p>
+    <div class="list">
+      <div class="item"><span class="dot">✓</span>Discovery delavnica z vašo ekipo</div>
+      <div class="item"><span class="dot">✓</span>Izbira prvih 1-2 modulov z največjim učinkom</div>
+      <div class="item"><span class="dot">✓</span>60-90-dnevni pilot v živi praksi</div>
+      <div class="item"><span class="dot">✓</span>Tedensko poročanje in iteracija</div>
+      <div class="item"><span class="dot">✓</span>Načrt širitve na ostale module</div>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="wrap">
+    <span class="eyebrow">PRIČAKOVANI REZULTATI</span>
+    <h2>Konkretno, merljivo, kumulativno.</h2>
+    <p class="body">Ne obljubljamo čudežev. Gradimo orodja in proces, ki podjetju ACTUAL I.T. odprejo nove kanale prodaje in razbremenijo ekipo ponavljajočega se dela.</p>
+    <div class="list">
+      <div class="item"><span class="dot">✓</span>Sistematičen, ponovljiv vir B2B povpraševanj</div><div class="item"><span class="dot">✓</span>Krajši čas od povpraševanja do ponudbe</div><div class="item"><span class="dot">✓</span>Avtomatizirana marketinška produkcija</div><div class="item"><span class="dot">✓</span>Višja konverzija spletne strani</div><div class="item"><span class="dot">✓</span>Manj ročnega dela, več strateškega fokusa</div>
+    </div>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <h2>Pogovorimo se, kje bi AI podjetju ACTUAL I.T. prinesel največ vrednosti.</h2>
+    <p>Bi Vas rad povabil na kratko pogovor, kjer skupaj presodimo, kateri AI sistem se najbolje ujema z Vašimi trenutnimi prioritetami. Potrebno je le 20 minut - in že vidite konkretne možnosti za rast ACTUAL I.T.</p>
+    <a class="btn" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span class="who"><strong>Žan Bagarič</strong> · AIERA</span>
+    <span class="for">Za Igor Hostnik, Group CEO - ACTUAL I.T. · 30. julij 2026</span>
+  </div>
+</footer>
+</body>
+</html>
