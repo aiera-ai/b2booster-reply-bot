@@ -2136,7 +2136,22 @@ const UNSUB_RE = /(odjav\w*|ne\s+posiljaj\w*\s+(mi\s+)?(vec|nic|nicesar)|preneha
 function isUnsubscribeMessage(text) {
   if (!text) return false;
   const t = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  // A real person opting out writes a SHORT message. Long texts that merely
+  // contain "unsubscribe" are newsletters/footers (real case: UptimeRobot
+  // newsletter got a lead marked Do Not Contact). Long text → let the LLM
+  // classify it (bulk guard below catches most of it first anyway).
+  if (t.length > 500) return false;
   return UNSUB_RE.test(t);
+}
+
+// Deterministic bulk/newsletter guard. Marketing broadcasts carry footer
+// boilerplate no human reply ever contains. Runs BEFORE the unsubscribe regex
+// so a newsletter footer's "unsubscribe" link can never DNC a lead.
+const BULK_MAIL_RE = /(view (this email )?in (your )?browser|you (are|'re) receiving this (e-?mail|message|newsletter)|manage (your )?(e-?mail )?preferences|update (your )?preferences|unsubscribe from (this|our) (list|newsletter|e-?mails?)|email marketing powered by|sent to you because you (signed|subscribed)|ce ne zelite vec prejemati|odjavite se od (novic|e-novic|obvestil)|to stop receiving these e-?mails)/i;
+function isBulkMailMessage(text) {
+  if (!text) return false;
+  const t = text.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return BULK_MAIL_RE.test(t);
 }
 
 // Deterministic out-of-office / auto-responder guard. Runs BEFORE the LLM so an
@@ -2176,6 +2191,7 @@ function isBareAck(text) {
 // English messages and let the Slovenian-heavy style guide take over the reply).
 async function classifyMessage(message) {
   if (!message || message.trim().length < 3) return { intent: 'neutral', language: null };
+  if (isBulkMailMessage(message)) return { intent: 'vendor_pitch', language: detectLanguage(message) };
   if (isAutoReplyMessage(message)) return { intent: 'auto_reply', language: detectLanguage(message) };
   if (isUnsubscribeMessage(message)) return { intent: 'unsubscribe', language: detectLanguage(message) };
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -2191,7 +2207,7 @@ auto_reply = an AUTOMATED absence/auto-responder message, not written as a reply
 unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
 negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
 soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
-vendor_pitch = THEY are selling or promoting something TO US instead of responding to our offer: a pitch for their own product/service/agency, an event/webinar/conference invitation, a newsletter or promo blast, a course/program promotion, recruiting spam. Examples: "join us for our event", "we help companies like yours grow", "check out our platform", "vam pomagam izboljšati prodajne strategije", "are you ready to take your startup global". KEY TEST: if the message would read the same even if we had never written to them, it is vendor_pitch. This OVERRIDES positive: a friendly sales pitch to us is vendor_pitch, NOT positive.
+vendor_pitch = THEY are selling or promoting something TO US instead of responding to our offer: a pitch for their own product/service/agency, an event/webinar/conference invitation, a newsletter, product-update digest or promo blast, a course/program promotion, recruiting spam, or a SCAM claiming WE contacted THEM first ("thanks for reaching out over our web chat", "following up on your inquiry") when they are a stranger. Examples: "join us for our event", "we help companies like yours grow", "check out our platform", "vam pomagam izboljšati prodajne strategije", "are you ready to take your startup global". KEY TEST: if the message would read the same even if we had never written to them, it is vendor_pitch. This OVERRIDES positive: a friendly sales pitch to us is vendor_pitch, NOT positive.
 positive = interested IN OUR OFFER, asking a question about it, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
 neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
@@ -7048,6 +7064,18 @@ app.post('/webhook/email-reply', async (req, res) => {
     // Try to look up the lead (gives us context: name, company, LinkedIn url, offer type)
     const leadRec = await airtableFindLeadByEmailReply(from);
     const f = leadRec?.fields || {};
+
+    // LEAD GATE: the email channel processes KNOWN leads and actual replies only.
+    // A stranger's newsletter got a lead DNC-ed ("Ele from UptimeRobot") and a
+    // cold "thanks for reaching out over our web chat" scam got a POSITIVE draft.
+    // Rule: sender must be a known lead OR the mail must be a reply (Re:/Odg:/AW:)
+    // to a thread we started. Everything else is inbox noise - Žan sees it in
+    // Gmail anyway; the bot must not draft, classify, or flip statuses on it.
+    const isReplySubject = /^(re|odg|aw|sv|antw|fwd?)\s*:/i.test((subject || '').trim());
+    if (!leadRec && !isReplySubject) {
+      console.log(`[EMAIL-REPLY] Non-lead sender, not a reply ("${(subject || '').slice(0, 60)}") - skip: ${from}`);
+      return;
+    }
 
     // Hard suppression: lead opted out earlier - never process.
     if (f['Status'] === 'Do Not Contact') {
