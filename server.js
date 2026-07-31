@@ -4269,8 +4269,18 @@ app.get('/trigger-li-followups', async (req, res) => {
 
 // ─── WEBHOOK: INSTANTLY ───────────────────────────────────────────────────────
 
+// ─── EMAIL CHANNEL MASTER SWITCH ─────────────────────────────────────────────
+// 2026-07-31: bot je LINKEDIN-ONLY. Email kanal (Instantly webhook, Instantly
+// poll, Gmail /webhook/email-reply) je izklopljen - preveč šuma, premalo
+// signala. Ponovni vklop: EMAIL_CHANNEL_ENABLED=true na Renderju.
+const EMAIL_CHANNEL_ENABLED = (process.env.EMAIL_CHANNEL_ENABLED || 'false').toLowerCase() === 'true';
+
 app.post('/webhook/instantly', async (req, res) => {
   res.sendStatus(200);
+  if (!EMAIL_CHANNEL_ENABLED) {
+    console.log('[EMAIL] Channel disabled (LinkedIn-only mode) - Instantly webhook ignored');
+    return;
+  }
   try {
     const { first_name, last_name, company_name, email_reply_text, email_uuid, email_subject, lead_email } = req.body;
     const leadData = {
@@ -6173,6 +6183,7 @@ function belongsToPausedCampaign(item) {
 }
 
 async function pollInstantlyReplies() {
+  if (!EMAIL_CHANNEL_ENABLED) return; // LinkedIn-only mode
   try {
     const since = getLastPollTime();
     const now = new Date().toISOString();
@@ -7033,6 +7044,10 @@ async function airtableFindLeadByEmailReply(email) {
 
 app.post('/webhook/email-reply', async (req, res) => {
   res.json({ ok: true }); // ack immediately
+  if (!EMAIL_CHANNEL_ENABLED) {
+    console.log('[EMAIL-REPLY] Channel disabled (LinkedIn-only mode) - ignored');
+    return;
+  }
 
   try {
     const { from, fromName, subject, body, inReplyTo, threadId } = req.body || {};
