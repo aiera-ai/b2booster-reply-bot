@@ -7065,15 +7065,14 @@ app.post('/webhook/email-reply', async (req, res) => {
     const leadRec = await airtableFindLeadByEmailReply(from);
     const f = leadRec?.fields || {};
 
-    // LEAD GATE: the email channel processes KNOWN leads and actual replies only.
-    // A stranger's newsletter got a lead DNC-ed ("Ele from UptimeRobot") and a
-    // cold "thanks for reaching out over our web chat" scam got a POSITIVE draft.
-    // Rule: sender must be a known lead OR the mail must be a reply (Re:/Odg:/AW:)
-    // to a thread we started. Everything else is inbox noise - Žan sees it in
-    // Gmail anyway; the bot must not draft, classify, or flip statuses on it.
-    const isReplySubject = /^(re|odg|aw|sv|antw|fwd?)\s*:/i.test((subject || '').trim());
-    if (!leadRec && !isReplySubject) {
-      console.log(`[EMAIL-REPLY] Non-lead sender, not a reply ("${(subject || '').slice(0, 60)}") - skip: ${from}`);
+    // STRICT LEAD GATE: the email channel is for COLD OUTREACH REPLIES only.
+    // The sender must be a known lead in Airtable (Email field match). No
+    // exceptions: a "Re:" fallback let Žan's daily correspondence through (a
+    // personal contact replying to Žan's own mail got a bot draft), newsletters
+    // DNC-ed fake leads, and a cold scam got a POSITIVE draft. Žan's regular
+    // inbox is none of the bot's business - he reads it himself.
+    if (!leadRec) {
+      console.log(`[EMAIL-REPLY] Sender not a known lead - skip (bot = cold outreach only): ${from} | "${(subject || '').slice(0, 60)}"`);
       return;
     }
 
