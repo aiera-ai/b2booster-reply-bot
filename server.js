@@ -1702,11 +1702,19 @@ async function createAndServeOffer(leadData) {
     if (offerType === 'b2booster') {
       ({ html, slug } = await buildB2BoosterHTML(leadData));
     } else if (style === 'solutions') {
-      // Solution-module page; falls back to spirit for non-SI leads or on error.
+      // Solution-module page. Two distinct failure modes:
+      //   - null / infra error -> style does not apply, fall back to spirit.
+      //   - err.qualityFail    -> the copy did not pass the quality gate. Do NOT
+      //     fall back: spirit would write the same unchecked prose. No offer page
+      //     at all, the reply goes out without a link.
       try {
         const built = await buildSolutionsHTML(leadData);
         if (built) ({ html, slug } = built);
       } catch (e) {
+        if (e && e.qualityFail) {
+          console.warn(`[SOLUTIONS] QUALITY GATE blocked offer page - no link for this lead: ${e.message}`);
+          return null;
+        }
         console.warn('[SOLUTIONS] build failed, falling back to spirit:', e.message);
       }
       if (!html) ({ html, slug } = await buildProposalHTML(leadData));

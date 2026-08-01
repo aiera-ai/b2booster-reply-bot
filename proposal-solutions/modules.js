@@ -45,7 +45,7 @@ const SOLUTION_MODULES = {
   marketing_content: {
     title: 'AI MARKETING - USTVARJANJE VSEBIN',
     headline: 'Avtomatizirana produkcija slik, videov, blogov in SEO vsebin.',
-    body: 'Vizualna in pisna produkcija je danes ozko grlo in največji strošek marketinga. AI orodja produkcijo pospešijo za 5-10x in znižajo strošek na enoto vsebine. Vaša ekipa ohrani strateški nadzor, AI prevzame ročno produkcijo.',
+    body: 'Vizualna in pisna produkcija je danes ozko grlo in največji strošek marketinga. AI orodja produkcijo bistveno pospešijo in znižajo strošek na enoto vsebine. Vaša ekipa ohrani strateški nadzor, AI prevzame ročno produkcijo.',
     bullets: [
       { t: 'Vizualne predstavitve', d: 'Produktne slike in mockupi v sekundah, brez fotografa.' },
       { t: 'Video za social', d: 'Kratki video posnetki za LinkedIn, Instagram in TikTok - serijska produkcija.' },
