@@ -34,6 +34,22 @@ const stem = s => {
   return base.replace(/[aeiou]$/, '').slice(0, 5);
 };
 
+// Slovenian also declines with consonant suffixes ("z Žanom", "pri Bitencu"),
+// which a fixed-length stem cannot absorb. Accept a token when its normalised
+// form and an allowlisted stem are a prefix of one another. Three characters
+// minimum, so short stems cannot wave everything through.
+function allowedToken(tok, allowedStems) {
+  const s = stem(tok);
+  if (allowedStems.has(s)) return true;
+  const full = strip(tok).replace(/[^a-z0-9]/g, '');
+  if (full.length < 3) return false;
+  for (const a of allowedStems) {
+    if (a.length < 3) continue;
+    if (full.startsWith(a) || a.startsWith(full)) return true;
+  }
+  return false;
+}
+
 // Proper nouns that are legitimately allowed to appear in offer copy.
 const ALLOWED_PROPER = [
   // ours
@@ -70,6 +86,42 @@ const NUMERIC_CLAIM_PATTERNS = [
   { re: /\b(prihran\w*|hitreje|vec|manj|dvig\w*|povecan\w*)\s+(za\s+)?\d+/i, why: 'quantified benefit' },
   { re: /\b\d+\s*(ur|urah|dni|dneh|tednov|tednih)\b/i, why: 'time quantity' },
 ];
+
+// Slovenian written without carons ("vec kot 50 trgov", "stiri prevzeme") reads
+// as a machine wrote it. Two signals: known stripped word forms, and a long
+// stretch of Slovenian containing not a single č/š/ž.
+// Every stem listed here MUST carry a caron in correct Slovenian, so the bare
+// ASCII form is proof of stripping. Words that legitimately have none
+// (prevzem, izziv, storitev, tedensko) must never be added - they would reject
+// perfectly good copy.
+const STRIPPED_WORDS = new RegExp('\\b(' + [
+  'vec', 'vecji', 'vecina', 'najvecji', 'stiri', 'stirih', 'sest', 'sestih',
+  'siritev', 'siritve', 'sirjenje', 'sirimo', 'razsirit\\w*',
+  'pospesen\\w*', 'stratesk\\w*', 'resitev', 'resitve', 'resitvam', 'resujemo',
+  // not bare "nas" - that is also the legitimate accusative of "mi"
+  'nasa', 'nase', 'nasi', 'nasih', 'nasem', 'nasega',
+  'vasa', 'vase', 'vasi', 'vasih', 'vasem', 'vasega',
+  'zeli', 'zelim', 'zelite', 'zelja', 'zelje', 'zdruzit\\w*', 'zdruzen\\w*',
+  'povprasevanj\\w*', 'narocil\\w*', 'obcutljiv\\w*', 'dolocit\\w*', 'dolocimo',
+  'krajsi', 'krajsa', 'hitrejsi', 'hitrejsa', 'kljucn\\w*', 'drzav\\w*', 'tezav\\w*',
+  'ucinek', 'ucink\\w*', 'mesecn\\w*', 'priloznost\\w*', 'moznost\\w*',
+  'zacetek', 'zacetk\\w*', 'zacnemo', 'casu', 'casa', 'stevil\\w*', 'druzb\\w*',
+  'uspesn\\w*', 'ceprav',
+].join('|') + ')\\b', 'i');
+
+function diacriticsIssue(text) {
+  const t = String(text || '');
+  if (t.length < 25) return null;
+  const hit = t.match(STRIPPED_WORDS);
+  if (hit) return `Slovenian word written without carons ("${hit[0]}")`;
+  // Weak backstop only. Correct Slovenian sentences with no caron at all do exist
+  // ("S prevzemom New Era Genetics je okrepil prisotnost v Srednji Evropi"), so
+  // this threshold is deliberately high.
+  if (t.length > 140 && !/[čšžćđČŠŽĆĐ]/.test(t)) {
+    return 'long Slovenian passage with no č/š/ž at all - almost certainly diacritics-stripped';
+  }
+  return null;
+}
 
 const PLACEHOLDER_PATTERNS = [
   { re: /\{[A-Za-z_]+\}/, why: 'unfilled template placeholder' },
@@ -171,6 +223,8 @@ function deterministicCheck(slots, ctx) {
       if (re.test(text)) issues.push(`${path}: ${why} ("${text.slice(0, 90)}")`);
     }
     if (/[–—]/.test(text)) issues.push(`${path}: contains a dash character, hyphens only`);
+    const dia = diacriticsIssue(text);
+    if (dia) issues.push(`${path}: ${dia} ("${text.slice(0, 90)}")`);
 
     if (STRICT_NAMES) {
       // Capitalised tokens that are not sentence-initial and not allowlisted are
@@ -182,7 +236,7 @@ function deterministicCheck(slots, ctx) {
         const firstWord = (sentence.match(/^\s*(\p{Lu}\p{Ll}{2,})/u) || [])[1];
         for (const tok of tokens) {
           if (tok === firstWord) continue;
-          if (allowed.has(stem(tok))) continue;
+          if (allowedToken(tok, allowed)) continue;
           issues.push(`${path}: unverified proper noun "${tok}" - never name a person, place or brand that was not in the input`);
         }
       }
@@ -297,4 +351,4 @@ async function validateSlots(rawSlots, ctx) {
   return { ok: true, slots, issues: [] };
 }
 
-module.exports = { validateSlots, autoFix, deterministicCheck, SENSITIVE_BLOCKED_MODULES };
+module.exports = { validateSlots, autoFix, deterministicCheck, diacriticsIssue, SENSITIVE_BLOCKED_MODULES };

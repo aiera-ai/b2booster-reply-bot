@@ -20,20 +20,39 @@ function todaySi() {
 const SHOW_STACK = process.env.OFFER_SHOW_STACK === '1';
 const AI_STACK = ['Claude', 'OpenAI', 'Gemini', 'n8n', 'Lovable', 'Cursor', 'Clay'];
 
-// B2Booster is our own service, not a client reference - claiming it weakens
-// the whole row.
-const REFERENCES = ['MUNCHIES', 'Megasplet', 'Valtheron', 'NordLogistics', 'RedEyeMonkey'];
+// Only names Zan has explicitly confirmed he may use publicly. B2Booster is our
+// own service, not a client. Megasplet and NordLogistics were on the old row but
+// were never confirmed, so they are out until they are. Override with
+// OFFER_REFERENCES="Munchies,Valtheron,..."; OFFER_REFERENCES="" hides the row.
+const REFERENCES = (process.env.OFFER_REFERENCES !== undefined
+  ? process.env.OFFER_REFERENCES
+  : 'MUNCHIES,Valtheron,RedEyeMonkey')
+  .split(',').map(s => s.trim()).filter(Boolean);
+// Same rule for the headline count - only shown when the reference row is.
+const REFERENCES_MORE = process.env.OFFER_REFERENCES_MORE || '+ 30 podjetij v SI in EU';
 
-const RESULTS_FIXED = [
-  'Sistematičen, ponovljiv vir B2B povpraševanj',
-  'Krajši čas od povpraševanja do ponudbe',
-  'Avtomatizirana marketinška produkcija',
-  'Manj ročnega dela, več strateškega fokusa',
-];
+// Closing line that is true whichever modules were picked. The per-module result
+// lines come from modules.js, so the section can never advertise an outcome from
+// a solution that is not on the page.
+const RESULT_CLOSER = 'Manj ročnega dela, več strateškega fokusa';
 
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
 }
+
+// Cut at a word boundary - "avtomatizirana marketinš" in a LinkedIn preview looks
+// broken and is the first thing a prospect sees.
+function clip(text, max) {
+  const t = String(text || '').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const at = Math.max(cut.lastIndexOf(' '), cut.lastIndexOf(','), cut.lastIndexOf('.'));
+  return (at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,.;:-]+$/, '') + '...';
+}
+
+// Static branded card so the LinkedIn preview is not a bare text stub. Served
+// from the public repo mirror; override with OFFER_OG_IMAGE.
+const OG_IMAGE_DEFAULT = 'https://raw.githubusercontent.com/aiera-ai/b2booster-reply-bot/offers/assets/og-default.png';
 
 function renderModuleSection(mod, intro, idx) {
   const bullets = (mod.bullets || []).map(b => `
@@ -75,9 +94,16 @@ function renderPage({ leadData, slots, meta }) {
   const date = todaySi();
   const cal = esc(meta.calendlyUrl);
   const pageUrl = meta.pageUrl ? esc(meta.pageUrl) : '';
-  const ogImage = process.env.OFFER_OG_IMAGE || '';
+  const ogImage = process.env.OFFER_OG_IMAGE || OG_IMAGE_DEFAULT;
   const ogTitle = `AIERA x ${company} - predlog AI rešitev`;
-  const ogDesc = String(slots.hero_sub || '').slice(0, 180);
+  const ogDesc = clip(slots.hero_sub, 180);
+  // The page must be signed by whoever is actually in the LinkedIn thread. Marko
+  // replied to Vesna; a page signed by Žan asking "reply to me on LinkedIn" sends
+  // the prospect to the wrong inbox.
+  const sender = leadData.accountName || leadData.senderName || 'Žan Bagarič';
+  const senderPhone = sender === 'Žan Bagarič' ? ' · 040 708 327' : '';
+  // Slovenian first names ending in -a are female; "Pripravil" vs "Pripravila".
+  const preparedBy = /a$/i.test(sender.split(' ')[0] || '') ? 'Pripravila' : 'Pripravil';
 
   const quickWins = (slots.quick_wins || []).map(q => `
       <div class="card">
@@ -88,6 +114,13 @@ function renderPage({ leadData, slots, meta }) {
   const solutions = slots.modules
     .map((m, i) => renderModuleSection(SOLUTION_MODULES[m.id], m.intro, i))
     .join('\n');
+
+  // Results follow the selection: no promising "avtomatizirana marketinška
+  // produkcija" on a page where the marketing module was not proposed.
+  const resultLines = [
+    ...slots.modules.map(m => SOLUTION_MODULES[m.id].result).filter(Boolean),
+    RESULT_CLOSER,
+  ];
 
   const solutionIndex = slots.modules.map((m, i) =>
     `<span class="chip">${i + 1} · ${esc(SOLUTION_MODULES[m.id].title.toLowerCase())}</span>`).join('');
@@ -111,6 +144,15 @@ function renderPage({ leadData, slots, meta }) {
   <div class="wrap">
     <span class="label">AIERA AI STACK</span>
     ${AI_STACK.map(s => `<span class="badge">${esc(s)}</span>`).join('')}
+  </div>
+</div>` : '';
+
+  const refsBlock = REFERENCES.length ? `
+<div class="refs">
+  <div class="wrap">
+    <span class="label">REFERENCE</span>
+    ${REFERENCES.map(r => `<span class="name">${esc(r)}</span>`).join('')}
+    ${REFERENCES_MORE ? `<span class="more">${esc(REFERENCES_MORE)}</span>` : ''}
   </div>
 </div>` : '';
 
@@ -226,7 +268,7 @@ ${pixel}
     <h1>${esc(slots.hero_h1)}</h1>
     <p class="sub">${esc(slots.hero_sub)}</p>
     <div class="assume">${esc(slots.assumption)}</div>
-    <p class="byline">Pripravil: Žan Bagarič, AIERA · ${esc(date)}</p>
+    <p class="byline">${esc(preparedBy)}: ${esc(sender)}, AIERA · ${esc(date)}</p>
     <div class="cta-row">
       <a class="btn" href="#resitve">Poglejte predlagane možnosti</a>
       <a class="btn btn-ghost" href="${cal}" target="_blank" rel="noopener">Rezervirajte klic</a>
@@ -243,13 +285,7 @@ ${stack}
   </div>
 </section>
 
-<div class="refs">
-  <div class="wrap">
-    <span class="label">REFERENCE</span>
-    ${REFERENCES.map(r => `<span class="name">${esc(r)}</span>`).join('')}
-    <span class="more">+ 30 podjetij v SI in EU</span>
-  </div>
-</div>
+${refsBlock}
 
 <section class="block alt" id="resitve">
   <div class="wrap">
@@ -278,7 +314,7 @@ ${solutions}
     <h2>Konkretno, merljivo, kumulativno.</h2>
     <p class="body">Ne obljubljamo čudežev. Gradimo orodja in proces, ki podjetju ${esc(company)} odprejo nove kanale prodaje in razbremenijo ekipo ponavljajočega se dela.</p>
     <div class="list">
-      ${RESULTS_FIXED.map(r => `<div class="item"><span class="dot">✓</span>${esc(r)}</div>`).join('')}
+      ${resultLines.map(r => `<div class="item"><span class="dot">✓</span>${esc(r)}</div>`).join('')}
     </div>
   </div>
 </section>
@@ -294,7 +330,7 @@ ${sources}
 
 <footer>
   <div class="wrap">
-    <span class="who"><strong>Žan Bagarič</strong> · AIERA · 040 708 327</span>
+    <span class="who"><strong>${esc(sender)}</strong> · AIERA${esc(senderPhone)}</span>
     <span class="for">Prejemnik: ${esc(recipient)} · ${esc(date)}</span>
   </div>
 </footer>

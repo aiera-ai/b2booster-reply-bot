@@ -4,14 +4,15 @@
 
 const SOLUTION_MODULES = {
   outbound: {
+    result: 'Sistematičen, ponovljiv vir B2B povpraševanj',
     title: 'PRIDOBIVANJE NOVIH B2B STRANK',
     headline: 'B2Booster - sistematičen kanal novih poslovnih povpraševanj.',
     body: 'Vzpostavimo voden outbound proces, ki sistematično odpira pogovore z odločevalci v podjetjih, ki ustrezajo vašemu idealnemu profilu stranke. Pristop je preverjen na 30+ podjetjih in se v celoti prilagodi vaši ponudbi. Kvalificirano povpraševanje predamo vaši prodajni ekipi, AIERA prevzame celoten operativni del.',
     bullets: [
       { t: 'Natančno definiran ICP', d: 'Skupaj določimo panoge, velikosti podjetij in trge, kjer je vaša ponudba najmočnejša. Brez razpršenosti.' },
-      { t: 'Nagovor pravih odločevalcev', d: 'Osebe, ki dejansko sprožijo nakup in upravljajo budget. Ne info naslovi, ne asistenti brez besede.' },
+      { t: 'Nagovor pravih odločevalcev', d: 'Osebe, ki dejansko sprožijo nakup in odločajo o proračunu, ne splošni info naslovi.' },
       { t: 'Personalizacija s kontekstom', d: 'Vsako sporočilo je vezano na konkreten povod pri prejemniku. Brez generičnih šablon.' },
-      { t: 'Predaja vaši ekipi', d: 'Vaša prodaja dobi ogret pogovor in termin. AIERA vodi vse do tja - sporočila, followupe, koledar.' },
+      { t: 'Predaja vaši ekipi', d: 'Vaša prodaja dobi pripravljen pogovor in termin. AIERA vodi vse do tja - sporočila, followupe, koledar.' },
     ],
     pricing: {
       label: 'CENA B2B LEAD-GEN SISTEMA',
@@ -21,17 +22,19 @@ const SOLUTION_MODULES = {
   },
 
   generator_ponudb: {
+    result: 'Krajši čas od povpraševanja do ponudbe',
     title: 'AI GENERATOR PERSONALIZIRANIH PONUDB',
     headline: 'Iz povpraševanja do polno oblikovane ponudbe v minutah.',
     body: 'Prodajna ekipa danes porabi ure za sestavljanje ponudbe, ujemanje z identiteto stranke in oblikovanje dokumenta. AI generator iz kratkega internega brifa pripravi popolnoma personalizirano, profesionalno ponudbo - z vsebino, cenami in pogoji. Ekipi ostane samo potrditev in izboljšava.',
     bullets: [
       { t: 'Personalizacija na stranko', d: 'Vsaka ponudba vsebuje ime stranke, njeno identiteto in predloge, prilagojene njeni panogi in budgetu.' },
-      { t: 'Konsistentna kvaliteta', d: 'Vsaka ponudba na nivoju vaše najboljše. Brez razlik med prodajniki in brez tipkarskih napak ob 22h.' },
-      { t: 'Hitrost kot prednost', d: 'Ponudba pri stranki v minutah, ne dnevih. Prvi ponudnik z odgovorom je najpogosteje tudi izbrani.' },
+      { t: 'Enaka raven vseh ponudb', d: 'Ista struktura, isti podatki in isti standard, ne glede na to, kdo ponudbo pripravi in kdaj.' },
+      { t: 'Hitrost kot prednost', d: 'Ponudba pri stranki v minutah, ne dnevih. Hitrost odziva je v odločanju pogosto pomembna.' },
     ],
   },
 
   landing_gen: {
+    result: 'Hitrejši vstop na nov trg brez čakanja na agencijo',
     title: 'AI GENERATOR LANDING STRANI',
     headline: 'Lokalizirana spletna prisotnost za vsak trg in vsako kampanjo.',
     body: 'Za resen preboj na nov trg ali novo kampanjo potrebujete namenske vstopne strani - za sezono, za panogo, za vsako državo posebej. AI generator pripravi profesionalne, konverzijsko optimizirane landing strani v izbranem jeziku v urah, ne tednih. Brez čakanja na agencijo.',
@@ -43,6 +46,7 @@ const SOLUTION_MODULES = {
   },
 
   marketing_content: {
+    result: 'Avtomatizirana marketinška produkcija',
     title: 'AI MARKETING - USTVARJANJE VSEBIN',
     headline: 'Avtomatizirana produkcija slik, videov, blogov in SEO vsebin.',
     body: 'Vizualna in pisna produkcija je danes ozko grlo in največji strošek marketinga. AI orodja produkcijo bistveno pospešijo in znižajo strošek na enoto vsebine. Vaša ekipa ohrani strateški nadzor, AI prevzame ročno produkcijo.',
@@ -54,6 +58,7 @@ const SOLUTION_MODULES = {
   },
 
   svetovalec: {
+    result: 'Več kvalificiranih povpraševanj s spletne strani',
     title: 'AI SVETOVALEC NA SPLETNI STRANI',
     headline: 'Manj ročnega svetovanja, več kvalificiranih povpraševanj.',
     body: 'Namesto da obiskovalec brska po obsežni ponudbi, AI svetovalec v pogovornem oknu razume potrebo, predlaga najprimernejše izdelke ali storitve in pripravi strukturirano povpraševanje za vašo prodajno ekipo. Orodje, ki neposredno zvišuje konverzijo spletne strani.',
@@ -65,6 +70,7 @@ const SOLUTION_MODULES = {
   },
 
   chatbot: {
+    result: 'Manj ponavljajočih se vprašanj na ekipi',
     title: 'AI CHATBOT NA SPLETNI STRANI',
     headline: 'Vedno dostopen prvi stik, ki obiskovalca pripelje do odgovora ali povpraševanja.',
     body: 'AI chatbot v sekundah odgovori na pogosta vprašanja - roki, pogoji, cene, statusi - in obiskovalca, ki je pripravljen na nakup, brez prekinitve preusmeri v povpraševanje ali na pravo osebo v vaši prodaji. Deluje 24/7, v slovenščini in tujih jezikih.',
@@ -76,6 +82,7 @@ const SOLUTION_MODULES = {
   },
 
   customer_service: {
+    result: 'Krajši odzivni čas na vhodna sporočila',
     title: 'AI CUSTOMER SERVICE ZA MAILE IN SPOROČILA',
     headline: 'AI pripravi vse odgovore, vaši zaposleni jih le potrjujejo.',
     body: 'AI prebere vsak vhodni mail in sporočilo, razume kontekst v okviru zgodovine stranke in pripravi predlog odgovora. Zaposleni ga z enim klikom potrdi ali popravi. Ko sistem dokazano deluje, za standardne tipe sporočil postopno aktivirate avtopilota.',
@@ -87,6 +94,7 @@ const SOLUTION_MODULES = {
   },
 
   agenti: {
+    result: 'Manj ročnega dela v ponovljivih procesih',
     title: 'VZPOSTAVITEV AI AGENTOV',
     headline: 'AI agenti, ki za ponovljive procese prevzamejo celoten cikel.',
     body: 'Za enostavnejša, ponovljiva naročila ali procese vzpostavimo AI agenta, ki celoten tok vodi sam: komunicira s stranko, pripravi ponudbo, sprejme potrditev in podatke strukturirano preda v vaše sisteme. Vaša ekipa se vključi samo pri kompleksnejših primerih ali izjemah.',

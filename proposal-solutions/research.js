@@ -9,6 +9,8 @@
 // One web-search-enabled Claude call per lead. Raw fetch (the pinned SDK 0.39
 // predates the web_search tool). Fails open: returns null, never throws.
 
+const { diacriticsIssue } = require('./validate');
+
 const RESEARCH_ENABLED = process.env.OFFER_RESEARCH_ENABLED !== '0';
 const RESEARCH_MODEL = process.env.OFFER_RESEARCH_MODEL || 'claude-sonnet-4-6';
 const RESEARCH_TIMEOUT_MS = Number(process.env.OFFER_RESEARCH_TIMEOUT_MS || 75000);
@@ -36,9 +38,9 @@ Search the web for the company you are given. Then return ONE JSON object, no ma
 {
   "found": true|false,
   "brand_name": "<the company's own official spelling and casing, exactly as it writes itself (e.g. 'GenePlanet', not 'Gene Planet'). If you cannot confirm it from a source, repeat the input spelling unchanged.>",
-  "what_they_do": "<one factual sentence, plain and neutral. Empty string if unconfirmed.>",
+  "what_they_do": "<one factual sentence in SLOVENIAN, plain and neutral. Empty string if unconfirmed.>",
   "facts": [
-    {"claim": "<one short, checkable, non-promotional fact about the company - recent news, funding, expansion, markets, product line, scale>", "url": "<the source URL you actually opened>", "recency": "<YYYY-MM or 'undated'>"}
+    {"claim": "<one short, checkable, non-promotional fact about the company - recent news, funding, expansion, markets, product line, scale>", "url": "<the source URL you actually opened>", "recency": "<YYYY-MM or 'undated'>", "official": true|false}
   ],
   "sensitive_data": true|false,
   "sensitive_reason": "<if true: which regulated data category they handle (health, genetic, patient, financial, legal, minors). Empty if false.>",
@@ -47,9 +49,11 @@ Search the web for the company you are given. Then return ONE JSON object, no ma
 }
 
 HARD RULES:
+- "claim" and "what_they_do" MUST be written in SLOVENIAN with correct diacritics (č, š, ž). Never ASCII-stripped: "več", not "vec"; "štiri", not "stiri"; "strateški", not "strateski"; "razširitev", not "razsiritev". A claim without proper diacritics is unusable and will be discarded.
 - Every entry in "facts" MUST have a real URL you retrieved. No URL, no fact. Never fabricate a URL.
-- Maximum 5 facts. Prefer the last 12 months. Prefer the company's own site, press releases and reputable press.
-- No adjectives of praise, no "leading", no "innovative". Facts only.
+- Maximum 4 facts, each on a DIFFERENT topic, and never the same URL twice. If one article covers three things, pick the single most relevant and move on.
+- Set "official": true only when the URL is on the company's own domain (their site, hub, press room). When the same fact is available from both the company and the press, cite the company.
+- Prefer the last 12 months. No adjectives of praise, no "leading", no "innovative". Facts only.
 - If search returns nothing usable, set found=false and facts=[]. That is a correct and acceptable answer.
 - Never guess numbers. If a figure is not in a source, leave it out.`;
 
@@ -104,9 +108,20 @@ async function researchCompany(leadData) {
     }
 
     const parsed = JSON.parse(match[0]);
+    // Discard anything the page should not show: no URL, ASCII-stripped Slovenian,
+    // or a URL already cited. Official sources first, so the company's own press
+    // release outranks a write-up of it.
+    const seenUrls = new Set();
     const facts = (Array.isArray(parsed.facts) ? parsed.facts : [])
       .filter(f => f && typeof f.claim === 'string' && /^https?:\/\//i.test(f.url || ''))
-      .slice(0, 5);
+      .filter(f => {
+        const bad = diacriticsIssue(f.claim);
+        if (bad) console.warn(`[OFFER-RESEARCH] dropped fact (${bad}): ${f.claim.slice(0, 60)}`);
+        return !bad;
+      })
+      .filter(f => (seenUrls.has(f.url) ? false : seenUrls.add(f.url)))
+      .sort((a, b) => (b.official === true) - (a.official === true))
+      .slice(0, 4);
 
     const out = {
       found: parsed.found === true && facts.length > 0,
