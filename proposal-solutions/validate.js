@@ -26,7 +26,13 @@ const SENSITIVE_BLOCKED_MODULES = ['customer_service', 'agenti', 'svetovalec'];
 
 const strip = s => String(s || '').toLowerCase()
   .normalize('NFD').replace(/\p{Diacritic}/gu, '');
-const stem = s => strip(s).replace(/[^a-z0-9]/g, '').slice(0, 4);
+// Slovenian declines names, so "Maša" in the input and "Mašo" in the copy must
+// match. Strip diacritics, drop one trailing vowel, keep the first 5 characters:
+// Masa/Maso -> mas, Martin/Martina -> marti, Bitenc/Bitenca -> biten.
+const stem = s => {
+  const base = strip(s).replace(/[^a-z0-9]/g, '');
+  return base.replace(/[aeiou]$/, '').slice(0, 5);
+};
 
 // Proper nouns that are legitimately allowed to appear in offer copy.
 const ALLOWED_PROPER = [
@@ -152,6 +158,10 @@ function deterministicCheck(slots, ctx) {
   // Proper nouns that appear inside a CITED fact are allowed - they came with a
   // URL, so they are not inventions. This is the whole point of the research step.
   (ctx.facts || []).forEach(f => addTokens(f && f.claim));
+  // Names the lead volunteered in their own reply are legitimate and often the
+  // most valuable personalisation there is ("kontaktiraj Maso Razinger ali
+  // Martina Mikelna"). Blocking them would throw away a warm referral.
+  addTokens(ctx.theirMessage);
 
   for (const { path, text } of strings) {
     for (const { re, why } of NUMERIC_CLAIM_PATTERNS) {

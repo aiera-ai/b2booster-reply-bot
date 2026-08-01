@@ -77,6 +77,17 @@ console.log(`Hard fails: ${cleanIssues.length}`);
 cleanIssues.forEach(i => console.log('  ✕ ' + i));
 if (cleanIssues.length) { console.error('FAIL: gate rejected clean copy (false positive)'); process.exit(1); }
 
+// ── 2b. Names the lead volunteered must survive Slovenian declension ─────────
+// Marko's real reply named two colleagues; blocking those would throw away a
+// warm referral. Same copy must fail when the lead never mentioned them.
+console.log('\n═══ 2b. REFERRAL NAMES ═══');
+const referral = { ...clean, cta_paragraph: 'Predlog je pripravljen tako, da ga Maša in Martin lahko pregledata brez dodatnega konteksta.' };
+const withMsg = { ...ctx, theirMessage: 'kontaktiraj prosim Maso Razinger ali Martina Mikelna, pa se dobite na sestanku' };
+const okRef = deterministicCheck(autoFix(referral, ctx.canonicalBrand), withMsg).length;
+const noRef = deterministicCheck(autoFix(referral, ctx.canonicalBrand), ctx).length;
+console.log(`with lead's message: ${okRef} issues (want 0) | without: ${noRef} issues (want 2)`);
+if (okRef !== 0 || noRef < 2) { console.error('FAIL: referral-name handling wrong'); process.exit(1); }
+
 // ── 3. Render ────────────────────────────────────────────────────────────────
 const html = renderPage({
   leadData: { company: 'GenePlanet', firstName: 'Marko', lastName: 'Bitenc', title: 'Founder and CEO', gender: 'male' },

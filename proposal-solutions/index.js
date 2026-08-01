@@ -67,6 +67,7 @@ async function buildSolutionsHTML(leadData) {
     industry: leadData.industry || leadData.industryContext,
     sensitive,
     facts: (research && research.facts) || [],
+    theirMessage: leadData.theirMessage || leadData.theirReply || '',
   };
 
   // 2. Generate + gate. One retry, with the gate's own complaints fed back.
