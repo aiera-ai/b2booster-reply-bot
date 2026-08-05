@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>OIM Orthopaedic Engineering - AI Proposal · AIERA</title>
+  <meta name="description" content="A tailored AI proposal for OIM Orthopaedic Engineering. Concrete automation opportunities across regulatory documentation, production workflows, and market responsiveness.">
+  <meta property="og:title" content="OIM Orthopaedic Engineering - AI Proposal · AIERA">
+  <meta property="og:description" content="A tailored AI proposal for OIM Orthopaedic Engineering. Concrete automation opportunities across regulatory documentation, production workflows, and market responsiveness.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+:root {
+  --brand: #334155;
+  --brand-soft: #F8FAFC;
+  --brand-dark: #0F172A;
+  --brand-rgba: rgba(51, 65, 85, 0.12);
+  --accent-line: #475569;
+  --ink: #0B1428;
+  --ink-soft: #1E293B;
+  --body: #475569;
+  --muted: #64748B;
+  --paper: #FFFFFF;
+  --paper-soft: #FAFAFB;
+  --paper-bg: #F4F4F6;
+  --border: #E5E7EB;
+  --border-strong: #D1D5DB;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  background: var(--paper-bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'ss01' on, 'cv11' on;
+  line-height: 1.55;
+}
+h1, h2, h3, h4 {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+p { margin: 0; }
+a { color: inherit; text-decoration: none; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+.wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 28px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--brand-dark); background: var(--brand-soft);
+  padding: 7px 14px; border-radius: 999px;
+  font-family: 'DM Sans', sans-serif;
+}
+.eyebrow-dot::before {
+  content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brand);
+  display: inline-block;
+}
+.section { padding: 96px 0; border-top: 1px solid var(--border); }
+.section--first { padding-top: 0; border-top: 0; }
+.section h2 { font-size: 40px; font-weight: 700; line-height: 1.1; max-width: 860px; margin: 16px auto 0; text-align: center; }
+.section-lead { color: var(--body); font-size: 17px; max-width: 760px; margin: 20px auto 0; text-align: center; }
+.center { text-align: center; }
+
+/* TOP PERSONALIZED BANNER */
+.banner {
+  background: var(--ink);
+  color: rgba(255,255,255,0.92);
+  font-size: 13px;
+  padding: 10px 28px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.banner-icon { opacity: 0.6; margin-right: 8px; }
+
+/* STICKY HEADER */
+.header {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 1180px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 28px;
+}
+.brand-lockup { display: flex; align-items: center; gap: 14px; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 17px; color: var(--ink); letter-spacing: 0.02em; }
+.brand-lockup .aiera { color: var(--brand); }
+.brand-lockup .sep { color: var(--muted); font-weight: 500; }
+.brand-lockup .target { color: var(--ink); }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 22px; font-size: 14px; font-weight: 600;
+  border-radius: 999px; border: 1px solid transparent;
+  font-family: 'DM Sans', sans-serif;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  cursor: pointer;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary:hover { background: var(--brand-dark); box-shadow: 0 8px 24px var(--brand-rgba); }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--border-strong); }
+.btn-ghost:hover { background: var(--paper-soft); }
+.btn-arrow::after { content: '→'; font-size: 16px; line-height: 1; }
+
+/* HERO */
+.hero { padding: 88px 0 64px; background: var(--paper-bg); position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; inset: 0;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 28px 28px; opacity: 0.35; mask-image: linear-gradient(180deg, #000 0%, transparent 75%);
+  pointer-events: none;
+}
+.hero-grid { position: relative; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 64px; align-items: center; }
+@media (max-width: 960px) { .hero-grid { grid-template-columns: 1fr; gap: 40px; } }
+.hero h1 { font-size: 64px; font-weight: 700; line-height: 1.02; letter-spacing: -0.025em; margin-top: 24px; }
+.hero h1 .brand-line { color: var(--brand); }
+@media (max-width: 720px) { .hero h1 { font-size: 44px; } }
+.hero-lead { color: var(--body); font-size: 18px; line-height: 1.55; max-width: 540px; margin-top: 22px; }
+.hero-cta-row { display: flex; align-items: center; gap: 18px; margin-top: 32px; flex-wrap: wrap; }
+.hero-trust { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 36px; font-size: 13px; color: var(--muted); }
+.hero-trust .item { display: inline-flex; align-items: center; gap: 8px; }
+.hero-trust .dot { width: 14px; height: 14px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+
+/* HERO MOCK WIDGET */
+.widget {
+  background: var(--paper); border: 1px solid var(--border-strong);
+  border-radius: 18px; padding: 0; box-shadow: 0 24px 48px -24px rgba(15, 23, 42, 0.18), 0 12px 24px -12px rgba(15, 23, 42, 0.08);
+  position: relative; overflow: hidden;
+}
+.widget-bar { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--paper-soft); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.widget-bar .dots { display: flex; gap: 6px; }
+.widget-bar .dots span { width: 10px; height: 10px; border-radius: 999px; }
+.widget-bar .dots span:nth-child(1) { background: #FCA5A5; }
+.widget-bar .dots span:nth-child(2) { background: #FCD34D; }
+.widget-bar .dots span:nth-child(3) { background: #86EFAC; }
+.widget-bar .url { background: var(--paper-bg); padding: 4px 10px; border-radius: 6px; color: var(--body); }
+.widget-bar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: #16A34A; font-weight: 600; }
+.widget-bar .live::before { content: ''; width: 7px; height: 7px; border-radius: 999px; background: #22C55E; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18); }
+.widget-body { padding: 22px 22px 24px; }
+.widget-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.widget-title { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 15px; color: var(--ink); }
+.widget-tag { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+.widget-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
+.stat-card { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px; }
+.stat-label { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.stat-num { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px; color: var(--ink); margin-top: 6px; display: flex; align-items: baseline; gap: 6px; }
+.stat-delta { font-size: 12px; color: var(--brand); font-weight: 600; }
+.activity { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px 8px; }
+.activity-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.activity-spark { width: 100%; height: 38px; margin-top: 6px; }
+.chat { background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-top: 14px; }
+.chat-head { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
+.chat-head .typing { margin-left: auto; color: var(--brand); }
+.chat-bubble { background: var(--paper); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--ink-soft); margin-bottom: 8px; }
+.chat-bubble--ai { background: var(--brand-soft); border-color: transparent; color: var(--ink); }
+.chat-bubble strong { color: var(--brand-dark); font-weight: 600; }
+.chat-sources { font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-sources .tag { background: var(--paper-bg); padding: 3px 9px; border-radius: 6px; color: var(--body); }
+
+.widget-pill {
+  position: absolute; left: -16px; top: 80px;
+  background: var(--paper); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 8px 14px 8px 10px;
+  display: inline-flex; align-items: center; gap: 8px;
+  box-shadow: 0 12px 24px -12px rgba(15,23,42,0.18);
+  font-size: 12px; color: var(--ink-soft);
+}
+.widget-pill .ic { width: 24px; height: 24px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.widget-pill .lab { display: block; font-size: 9px; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+.widget-pill .val { display: block; font-weight: 600; }
+.widget-pill--bottom { top: auto; bottom: 36px; left: auto; right: -18px; }
+
+/* REFERENCES STRIP */
+.refs { background: var(--paper); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 36px 0; }
+.refs-inner { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; justify-content: center; }
+.refs-label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.refs-list { display: flex; gap: 28px; flex-wrap: wrap; align-items: center; }
+.ref-name { font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: var(--ink-soft); font-size: 15px; letter-spacing: -0.01em; }
+.refs-more { color: var(--muted); font-size: 13px; }
+
+/* KONTEKST + CARDS */
+.cards-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 56px; }
+@media (max-width: 880px) { .cards-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .cards-grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 14px;
+  padding: 24px 22px; transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: 0 16px 32px -20px rgba(15,23,42,0.12); }
+.card-ic { width: 36px; height: 36px; border-radius: 10px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 18px; }
+.card h3 { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; color: var(--ink); margin-bottom: 6px; line-height: 1.3; }
+.card p { color: var(--body); font-size: 14px; line-height: 1.55; }
+
+/* AI STACK */
+.stack-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 40px; }
+.stack-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--paper); border: 1px solid var(--border);
+  border-radius: 999px; padding: 9px 18px;
+  font-size: 13px; color: var(--ink-soft); font-weight: 500;
+}
+.stack-chip::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brand); }
+
+/* RESITVE - 6 numbered cards */
+.modules-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 56px; }
+@media (max-width: 880px) { .modules-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .modules-grid { grid-template-columns: 1fr; } }
+.module {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 16px;
+  padding: 26px 24px; position: relative;
+}
+.module-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.module-ic { width: 38px; height: 38px; border-radius: 10px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.module-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); letter-spacing: 0.06em; }
+.module h3 { font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 600; line-height: 1.3; color: var(--ink); margin-bottom: 10px; }
+.module p { color: var(--body); font-size: 14px; line-height: 1.6; }
+.module-example { margin-top: 18px; padding: 14px 16px; background: var(--paper-soft); border-radius: 10px; border-left: 3px solid var(--brand); }
+.module-example .lab { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); margin-bottom: 6px; }
+.module-example .quote { font-size: 13px; color: var(--ink-soft); font-style: italic; line-height: 1.5; }
+
+/* ARHITEKTURA - blocks */
+.arch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 56px; align-items: start; }
+@media (max-width: 880px) { .arch-grid { grid-template-columns: 1fr; } }
+.arch-text { color: var(--body); font-size: 16px; line-height: 1.65; }
+.arch-text p + p { margin-top: 16px; }
+.arch-stack { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px; }
+.arch-layer { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.arch-row {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--paper-soft); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px;
+}
+.arch-row.brand { background: var(--brand-soft); border-color: transparent; }
+.arch-row .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--paper); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--ink); font-weight: 600; font-size: 12px; flex-shrink: 0; }
+.arch-row.brand .ic { background: var(--paper); color: var(--brand); border: 0; }
+.arch-row .lab { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.arch-row .val { font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); }
+
+/* PILOT - two-column grid (cilj + faze) */
+.pilot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 56px; }
+@media (max-width: 880px) { .pilot-grid { grid-template-columns: 1fr; } }
+.pilot-block { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px 28px 22px; }
+.pilot-block .lab { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); margin-bottom: 18px; }
+.pilot-list { display: grid; gap: 12px; }
+.pilot-item { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.pilot-item .num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--brand); font-weight: 700; padding-top: 2px; }
+.pilot-item .check { width: 18px; height: 18px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px; }
+
+/* PERSONA SPOTLIGHT - asymmetric block */
+.spotlight {
+  background: var(--paper); border: 1px solid var(--border); border-radius: 18px;
+  padding: 44px 48px; margin-top: 56px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 48px;
+}
+@media (max-width: 880px) { .spotlight { grid-template-columns: 1fr; padding: 32px 28px; } }
+.spotlight-left .eyebrow { margin-bottom: 18px; }
+.spotlight-left h3 { font-family: 'Space Grotesk', sans-serif; font-size: 30px; font-weight: 700; line-height: 1.15; color: var(--ink); margin-bottom: 18px; }
+.spotlight-left p { color: var(--body); font-size: 16px; line-height: 1.6; }
+.spotlight-right { display: grid; gap: 14px; align-content: start; }
+.bullet {
+  display: grid; grid-template-columns: 22px 1fr; gap: 14px; align-items: start;
+  font-size: 15px; color: var(--ink-soft); line-height: 1.5;
+}
+.bullet .ic {
+  width: 22px; height: 22px; border-radius: 999px; background: var(--brand-soft); color: var(--brand);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px;
+}
+
+/* BENEFITS - 2 column table */
+.benefits-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 56px; }
+@media (max-width: 880px) { .benefits-grid { grid-template-columns: 1fr; } }
+.benefit-col { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 28px 30px; }
+.benefit-col .lab { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; margin-bottom: 22px; }
+.benefit-col h4 { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 600; line-height: 1.25; color: var(--ink); margin-bottom: 16px; }
+.benefit-list { display: grid; gap: 10px; }
+.benefit-list .item { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.benefit-list .item .ic { width: 18px; height: 18px; border-radius: 999px; background: var(--brand); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; margin-top: 3px; }
+
+/* VARNOST KRATKO - safety checklist */
+.safety-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 32px; margin-top: 48px; max-width: 880px; margin-left: auto; margin-right: auto; padding: 28px 32px; background: var(--paper); border: 1px solid var(--border); border-radius: 16px; }
+@media (max-width: 720px) { .safety-grid { grid-template-columns: 1fr; padding: 24px 22px; } }
+.safety-grid .item { display: grid; grid-template-columns: 22px 1fr; gap: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.safety-grid .item .ic { width: 20px; height: 20px; border-radius: 6px; background: var(--brand-soft); color: var(--brand); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; margin-top: 2px; }
+
+/* VARNOST PODATKI - full text block */
+.text-block { max-width: 800px; margin: 40px auto 0; color: var(--body); font-size: 17px; line-height: 1.65; text-align: left; }
+.text-block p + p { margin-top: 18px; }
+
+/* PRISTOP - approach block */
+.approach { background: var(--paper); border: 1px solid var(--border); border-radius: 18px; padding: 44px 48px; margin-top: 56px; }
+@media (max-width: 720px) { .approach { padding: 32px 28px; } }
+.approach .lab { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brand-dark); font-weight: 700; margin-bottom: 14px; }
+.approach h3 { font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--ink); margin-bottom: 18px; }
+.approach p { color: var(--body); font-size: 16px; line-height: 1.65; margin-bottom: 14px; }
+.approach-row { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
+.approach-fact { flex: 1 1 200px; }
+.approach-fact .v { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: var(--brand); }
+.approach-fact .k { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 4px; font-weight: 600; }
+
+/* FAQ */
+.faq-list { max-width: 820px; margin: 48px auto 0; }
+.faq-item { border-bottom: 1px solid var(--border); }
+.faq-item summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 22px 4px;
+  font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 600; color: var(--ink);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::after { content: '+'; font-size: 22px; font-weight: 400; color: var(--brand); width: 24px; text-align: center; transition: transform 0.2s ease; }
+.faq-item[open] summary::after { content: '−'; }
+.faq-item .answer { padding: 4px 4px 22px; color: var(--body); font-size: 15px; line-height: 1.65; max-width: 720px; }
+
+/* FINAL CTA */
+.cta-final { padding: 96px 0 112px; background: linear-gradient(180deg, var(--paper-bg) 0%, var(--paper) 100%); border-top: 1px solid var(--border); position: relative; overflow: hidden; }
+.cta-final::before {
+  content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 800px; height: 800px; border-radius: 999px;
+  background: radial-gradient(circle at center, var(--brand-rgba) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cta-final-inner { position: relative; max-width: 720px; margin: 0 auto; text-align: center; padding: 0 28px; }
+.cta-final h2 { font-size: 44px; font-weight: 700; line-height: 1.1; }
+@media (max-width: 720px) { .cta-final h2 { font-size: 32px; } }
+.cta-final p { color: var(--body); font-size: 18px; line-height: 1.6; margin-top: 20px; max-width: 540px; margin-left: auto; margin-right: auto; }
+.cta-final .btn { margin-top: 32px; font-size: 15px; padding: 14px 28px; }
+.cta-final-contact { margin-top: 32px; font-size: 13px; color: var(--muted); display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+.cta-final-contact a { color: var(--brand-dark); font-weight: 500; }
+
+/* FOOTER */
+.footer { padding: 36px 0; border-top: 1px solid var(--border); background: var(--paper); }
+.footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; max-width: 1180px; margin: 0 auto; padding: 0 28px; font-size: 13px; color: var(--muted); }
+.footer-inner a { color: var(--muted); }
+.footer-inner a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="banner">
+  <span class="banner-icon">✉</span> Pripravljeno za: g.Dejan Tašner, CEO - OIM ortopedski inženiring                                    (OIM Orthopaedic Engineering )
+</div>
+<header class="header">
+  <div class="header-inner">
+    <div class="brand-lockup">
+      <span class="aiera">AIERA</span>
+      <span class="sep">×</span>
+      <span class="target">OIM ORTOPEDSKI INŽENIRING                                    (OIM ORTHOPAEDIC ENGINEERING )</span>
+    </div>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary">Rezerviraj 15-min sestanek</a>
+  </div>
+</header>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow eyebrow-dot">Personaliziran predlog — 5. AVGUST 2026</span>
+      <h1>AI layer across regulated<br><span class="brand-line">device workflows</span></h1>
+      <p class="hero-lead">Medical device companies carry a documentation burden that grows with every new market and every regulatory revision. At OIM, that means engineering specs, conformity files, and clinical evidence - all needing precision and traceability. An AI layer can cut the manual overhead without touching compliance integrity.</p>
+      <div class="hero-cta-row">
+        <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+        <a href="#resitve" class="btn btn-ghost">Primeri uporabe</a>
+      </div>
+      <div class="hero-trust">
+        <span class="item"><span class="dot">✓</span>Pilot in 3 weeks</span><span class="item"><span class="dot">✓</span>Team based in Slovenia</span><span class="item"><span class="dot">✓</span>NDA available upfront</span>
+      </div>
+    </div>
+    <div style="position: relative;">
+      <div class="widget">
+    <div class="widget-bar">
+      <div class="dots"><span></span><span></span><span></span></div>
+      <div class="url">oim-ortopedski-inzeniring-oim-orthopaedi.ai-portal / preview</div>
+      <div class="live">live</div>
+    </div>
+    <div class="widget-body">
+      <div class="widget-row">
+        <div class="widget-title">OIM compliance overview</div>
+        <div class="widget-tag">danes</div>
+      </div>
+      <div class="widget-stats">
+        <div class="stat-card">
+          <div class="stat-label">OPEN DHFs</div>
+          <div class="stat-num">7 <span class="stat-delta">+2</span></div>
+        </div><div class="stat-card">
+          <div class="stat-label">PENDING CAPAs</div>
+          <div class="stat-num">4 <span class="stat-delta">-1</span></div>
+        </div><div class="stat-card">
+          <div class="stat-label">DOCS DUE</div>
+          <div class="stat-num">11 <span class="stat-delta">+5</span></div>
+        </div>
+      </div>
+      <div class="activity">
+        <div class="activity-head"><span>ACTIVITY (30D)</span><span style="color: var(--brand); font-weight: 700;">▲ 31%</span></div>
+        <svg class="activity-spark" viewBox="0 0 200 38" preserveAspectRatio="none">
+          <polyline fill="none" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            points="0,30 18,28 35,29 52,25 70,26 88,22 105,20 122,17 140,14 158,10 175,12 200,5"/>
+        </svg>
+      </div>
+      <div class="chat">
+        <div class="chat-head">
+          <span>AI asistent</span>
+          <span class="typing">● piše</span>
+        </div>
+        <div class="chat-bubble">Which design history files are missing risk analysis sign-off?</div>
+        <div class="chat-bubble chat-bubble--ai"><strong>3 DHFs</strong> are missing signed risk analysis: knee revision shell (v2.3), tibial baseplate (v1.1), and custom pelvic implant (v0.9). Earliest deadline is <strong>12 days out</strong>.</div>
+        <div class="chat-sources">
+          <span style="color: var(--muted); font-weight: 600;">Viri:</span>
+          <span class="tag">QMS records</span><span class="tag">DHF repository</span><span class="tag">CAPA log</span><span class="tag">ERP</span>
+        </div>
+      </div>
+    </div>
+    <div class="widget-pill">
+      <span class="ic">✓</span>
+      <span><span class="lab">GAP DETECTED</span><span class="val">MDR Annex II template outdated for 2 active files</span></span>
+    </div>
+    <div class="widget-pill widget-pill--bottom">
+      <span class="ic">⊙</span>
+      <span><span class="lab">AUDIT LOG</span><span class="val">+18 actions logged today</span></span>
+    </div>
+  </div>
+    </div>
+  </div>
+</section>
+<section class="refs">
+  <div class="wrap refs-inner">
+    <div class="refs-label">Reference — izbrane stranke AIERA</div>
+    <div class="refs-list">
+      <span class="ref-name">Munchies</span><span class="ref-name">Valtheron</span><span class="ref-name">B2Booster</span><span class="ref-name">NordLogistics</span><span class="ref-name">RedEyeMonkey</span>
+      <span class="refs-more">+ 30 podjetij v SI in EU</span>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Context</span></div>
+    <h2>In orthopaedic device manufacturing, the bottleneck is rarely the engineering - it is the documentation, traceability, and regulatory overhead that surrounds every product iteration</h2>
+    <p class="section-lead">OIM designs and manufactures custom orthopaedic implants and instruments. Every new variant triggers a cascade of technical documentation - design history files, risk analyses, biocompatibility rationale, labelling updates. The engineering team spends significant hours on paperwork that follows strict but repetitive patterns. That is time taken directly from development and market entry.</p>
+    <div class="cards-grid">
+      <div class="card">
+        <div class="card-ic">◎</div>
+        <h3>Regulatory file assembly</h3>
+        <p>Each product change requires updating multiple linked documents manually.</p>
+      </div><div class="card">
+        <div class="card-ic">⊙</div>
+        <h3>Cross-referencing standards</h3>
+        <p>Engineers check ISO 13485, MDR annexes, and harmonised standards by hand.</p>
+      </div><div class="card">
+        <div class="card-ic">✦</div>
+        <h3>Supplier qualification tracking</h3>
+        <p>Approved supplier lists and audit schedules live in scattered spreadsheets.</p>
+      </div><div class="card">
+        <div class="card-ic">⌬</div>
+        <h3>Post-market surveillance</h3>
+        <p>Complaint data and vigilance reports need periodic aggregation and trend analysis.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section" id="resitve">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Possible solutions</span></div>
+    <h2>What we could build for OIM Orthopaedic Engineering</h2>
+    <p class="section-lead">Six modules mapped to the processes your team runs daily - not generic AI features.</p>
+    <div class="modules-grid">
+      <div class="module">
+        <div class="module-head">
+          <span class="module-ic">✦</span>
+          <span class="module-num">01</span>
+        </div>
+        <h3>AI for technical file assembly</h3>
+        <p>Pulls relevant sections from existing DHFs, risk analyses, and test reports to draft new technical documentation shells. Reduces copy-paste cycles and flags missing sections before review.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Draft technical file for tibial component v2.4 is ready - 3 sections need your input, 14 were pre-filled from v2.3.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">◎</span>
+          <span class="module-num">02</span>
+        </div>
+        <h3>Regulatory cross-reference engine</h3>
+        <p>Maps your product claims against applicable standards - ISO 13485, ISO 14971, MDR Annex II/III - and highlights gaps. Updates when standards change so you know before an audit does.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;ISO 14971:2019 clause 10.2 is referenced in 4 of your risk files but the referenced version is 2012. Review recommended.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">⊙</span>
+          <span class="module-num">03</span>
+        </div>
+        <h3>AI-assisted CAPA management</h3>
+        <p>Ingests complaint data, production nonconformities, and field feedback. Groups related events, suggests root cause categories, and drafts initial CAPA descriptions for quality review.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;3 complaints in Q1 relate to surface finish on femoral component lot 2024-F09. Suggested CAPA category: manufacturing process control.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">⌬</span>
+          <span class="module-num">04</span>
+        </div>
+        <h3>Internal knowledge assistant for QMS</h3>
+        <p>Your quality management system holds hundreds of SOPs, work instructions, and forms. The assistant answers natural-language questions from any team member and returns the exact document section.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Sterilisation validation protocol for Class III devices is in SOP-QA-042, section 5.3. Last revision: March 2024.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">⎈</span>
+          <span class="module-num">05</span>
+        </div>
+        <h3>Supplier audit and qualification tracker</h3>
+        <p>Consolidates approved supplier lists, audit schedules, and certificate expiry dates into a single dashboard. Sends alerts before a qualification lapses so procurement acts in time.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Titanium rod supplier audit certificate expires in 22 days. Last audit score: 87/100. Re-audit scheduling suggested.&quot;</div>
+        </div>
+      </div><div class="module">
+        <div class="module-head">
+          <span class="module-ic">▣</span>
+          <span class="module-num">06</span>
+        </div>
+        <h3>Post-market surveillance reporting</h3>
+        <p>Aggregates complaint trends, vigilance data, and literature monitoring into periodic PMS reports. Pre-fills PSUR and trend analysis sections so the RA team reviews rather than writes from scratch.</p>
+        <div class="module-example">
+          <div class="lab">Primer uporabe</div>
+          <div class="quote">&quot;Q1 PSUR draft for hip stem product family is ready. 2 trend signals flagged for clinical review.&quot;</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Arhitektura</span></div>
+    <h2>This is not a single tool. It is a secure AI layer that sits on top of your existing systems and processes.</h2>
+    <p class="section-lead">OIM keeps working with its current QMS, ERP, and file storage. The AI layer connects to them - it does not replace them.</p>
+    <div class="arch-grid">
+      <div class="arch-text">
+        <p>Every module reads from your existing data sources - QMS documents, ERP records, shared drives, email inboxes. No migration required. The layer indexes what is already there and makes it queryable, cross-referenceable, and actionable.</p><p>Access control mirrors your current permission structure. An engineer sees engineering data. A quality manager sees CAPA records. Nothing leaks sideways. Every AI action is logged with a timestamp and user ID.</p><p>The system is modular. Start with one use case - say, technical file assembly. Add CAPA management later if it proves useful. Remove what does not work. No vendor lock-in, no multi-year contracts.</p>
+      </div>
+      <div class="arch-stack">
+        <div class="arch-layer">
+          <div class="arch-row">
+            <span class="ic">1</span>
+            <div><span class="lab">SOURCES</span><div class="val">QMS · ERP · shared drives · email</div></div>
+          </div><div class="arch-row">
+            <span class="ic">2</span>
+            <div><span class="lab">INTEGRATION</span><div class="val">API connectors · secure data indexing</div></div>
+          </div><div class="arch-row brand">
+            <span class="ic">3</span>
+            <div><span class="lab">AI LAYER</span><div class="val">AIERA processing · domain logic · audit trail</div></div>
+          </div><div class="arch-row">
+            <span class="ic">4</span>
+            <div><span class="lab">INTERFACE</span><div class="val">Dashboard · chat · alerts · reports</div></div>
+          </div><div class="arch-row">
+            <span class="ic">5</span>
+            <div><span class="lab">GOVERNANCE</span><div class="val">Role-based access · logging · human approval</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Pilotni projekt</span></div>
+    <h2>Proposed first pilot: AI-assisted technical file drafting for one product family</h2>
+    <p class="section-lead">We take one active product family - say, a knee implant line - and build an AI module that pre-fills technical documentation from existing files. The goal is to measure real time savings and identify where AI adds value versus where it does not.</p>
+    <div class="pilot-grid">
+      <div class="pilot-block">
+        <div class="lab">Cilj pilota</div>
+        <div class="pilot-list">
+          <div class="pilot-item"><span class="check">✓</span><span>Measure hours saved per technical file iteration</span></div><div class="pilot-item"><span class="check">✓</span><span>Validate accuracy of AI-drafted sections against manual work</span></div><div class="pilot-item"><span class="check">✓</span><span>Test integration with your current document storage</span></div><div class="pilot-item"><span class="check">✓</span><span>Identify which document types benefit most from automation</span></div><div class="pilot-item"><span class="check">✓</span><span>Confirm the workflow fits your team without disruption</span></div>
+        </div>
+      </div>
+      <div class="pilot-block">
+        <div class="lab">Faze projekta</div>
+        <div class="pilot-list">
+          <div class="pilot-item"><span class="num">01</span><span>Phase 1: Audit of current DHF structure and document templates (3 days)</span></div><div class="pilot-item"><span class="num">02</span><span>Phase 2: Data connection and indexing of selected product family files (4 days)</span></div><div class="pilot-item"><span class="num">03</span><span>Phase 3: AI module build - draft generation and gap detection (5 days)</span></div><div class="pilot-item"><span class="num">04</span><span>Phase 4: Internal testing with your quality/engineering team (3 days)</span></div><div class="pilot-item"><span class="num">05</span><span>Phase 5: Results review and go/no-go decision (1 day)</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="spotlight">
+      <div class="spotlight-left">
+        <span class="eyebrow">ZA VODSTVO</span>
+        <h3>What this means for you as CEO</h3>
+        <p>You see the full picture - regulatory timelines slipping, engineers buried in paperwork instead of designing, new market entries delayed by documentation backlogs. The question is not whether AI fits your industry. It is where it removes the drag that slows your company down right now.</p>
+      </div>
+      <div class="spotlight-right">
+        <div class="bullet"><span class="ic">✓</span><span>Faster time-to-market for new implant variants and line extensions</span></div><div class="bullet"><span class="ic">✓</span><span>Engineering hours redirected from documentation to actual development</span></div><div class="bullet"><span class="ic">✓</span><span>Reduced risk of regulatory gaps discovered during audits</span></div><div class="bullet"><span class="ic">✓</span><span>Clear visibility into documentation status across all product families</span></div><div class="bullet"><span class="ic">✓</span><span>Competitive edge through speed without compromising compliance</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Vpliv</span></div>
+    <h2>Less searching, less formatting, more engineering and more oversight</h2>
+    <div class="benefits-grid">
+      <div class="benefit-col">
+        <div class="lab">FOR THE TEAM</div>
+        <h4>Engineers and RA staff get hours back</h4>
+        <div class="benefit-list">
+          <div class="item"><span class="ic">✓</span><span>Technical files pre-filled from previous versions</span></div><div class="item"><span class="ic">✓</span><span>Standards cross-references checked automatically</span></div><div class="item"><span class="ic">✓</span><span>CAPA drafts generated from raw complaint data</span></div><div class="item"><span class="ic">✓</span><span>SOPs and work instructions searchable in seconds</span></div><div class="item"><span class="ic">✓</span><span>Supplier certificate alerts before expiry</span></div>
+        </div>
+      </div>
+      <div class="benefit-col">
+        <div class="lab">FOR LEADERSHIP</div>
+        <h4>Real-time status without chasing updates</h4>
+        <div class="benefit-list">
+          <div class="item"><span class="ic">✓</span><span>Dashboard showing open DHFs, CAPAs, and deadlines</span></div><div class="item"><span class="ic">✓</span><span>Audit readiness score per product family</span></div><div class="item"><span class="ic">✓</span><span>Trend data for post-market surveillance at a glance</span></div><div class="item"><span class="ic">✓</span><span>Time-to-file metrics across product lines</span></div><div class="item"><span class="ic">✓</span><span>Clear log of every AI-assisted action for accountability</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">Varnost in omejitve</span></div>
+    <h2>AI should assist decisions, not make them for your team</h2>
+    <p class="section-lead">In medical devices, every decision carries regulatory weight. The AI layer drafts, flags, and suggests - but a qualified person always signs off. All processing stays within EU infrastructure, and every action is traceable.</p>
+    <div class="safety-grid">
+      <div class="item"><span class="ic">⊙</span><span>All data processed within EU boundaries</span></div><div class="item"><span class="ic">⊙</span><span>Human approval required before any document is finalised</span></div><div class="item"><span class="ic">⊙</span><span>Full audit trail with timestamps and user IDs</span></div><div class="item"><span class="ic">⊙</span><span>Role-based access mirroring your existing permissions</span></div><div class="item"><span class="ic">⊙</span><span>No training on your proprietary data by third-party models</span></div><div class="item"><span class="ic">⊙</span><span>NDA and data processing agreement before any work begins</span></div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="approach">
+      <div class="lab">AIERA APPROACH</div>
+      <h3>We build one working module, prove it delivers, then decide together what comes next</h3>
+      <p>The first step is a 15-minute call where we map your current pain points to concrete AI use cases. No slides, no pitches - just a focused conversation about where your team loses the most time today.</p><p>If there is a fit, we scope a 3-week pilot around one specific workflow. You see working results on your own data before committing to anything broader. If the pilot does not deliver measurable value, you walk away.</p><p>Every module we build belongs to you. No proprietary lock-in, no dependencies on our platform to keep running. We use open, well-documented tools - Claude, OpenAI, n8n, Airtable, Make - so your technical team can maintain and extend what we deliver.</p>
+      <div class="approach-row">
+        <div class="approach-fact"><div class="v">3 weeks</div><div class="k">PILOT DURATION</div></div><div class="approach-fact"><div class="v">0 lock-in</div><div class="k">VENDOR DEPENDENCY</div></div><div class="approach-fact"><div class="v">100% in EU</div><div class="k">DATA PROCESSING</div></div><div class="approach-fact"><div class="v">30+ companies</div><div class="k">DELIVERED PROJECTS</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="center"><span class="eyebrow">FAQ</span></div>
+    <h2>Common questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>What is the realistic ROI timeline for a company our size?</summary>
+        <div class="answer">The pilot is designed to show measurable time savings within 3 weeks. Typical results for documentation-heavy companies: 40-60% reduction in time spent assembling technical files. You will have concrete numbers from your own data before any broader commitment.</div>
+      </details><details class="faq-item">
+        <summary>How much of my team&#39;s time does the pilot require?</summary>
+        <div class="answer">Roughly 3-4 hours total across the pilot period - mostly in the first days for access setup and document structure walkthrough. We do the build work. Your team tests the output and gives feedback.</div>
+      </details><details class="faq-item">
+        <summary>Will this disrupt our current QMS or validated processes?</summary>
+        <div class="answer">No. The AI layer reads from your systems but does not write back to them unless explicitly configured. Your validated processes stay untouched. Think of it as a smart assistant sitting beside your team, not inside your QMS.</div>
+      </details><details class="faq-item">
+        <summary>How do you handle confidential product data and IP?</summary>
+        <div class="answer">We sign an NDA and DPA before seeing any data. All processing runs on EU-hosted infrastructure. Your data is never used to train third-party models. Access is restricted to named project members only.</div>
+      </details><details class="faq-item">
+        <summary>What happens if the pilot does not deliver what we expect?</summary>
+        <div class="answer">You stop. There is no ongoing contract tied to the pilot. If the results are not useful for your team, we document what we learned and part ways. The deliverables from the pilot remain yours regardless.</div>
+      </details><details class="faq-item">
+        <summary>Can this scale to cover multiple product families and markets?</summary>
+        <div class="answer">Yes, but deliberately. After the pilot proves value on one product family, we extend to others one at a time. Each extension is scoped separately. You control the pace and the budget.</div>
+      </details>
+    </div>
+  </div>
+</section>
+<section class="cta-final">
+  <div class="cta-final-inner">
+    <span class="eyebrow">Za g. Dejan Tašner</span>
+    <h2 style="margin-top: 20px;">Proposal: 15-minute review of AI opportunities for OIM Orthopaedic Engineering</h2>
+    <p>Fifteen minutes to walk through 2-3 concrete use cases mapped to your current workflows. No slides, no generic demo - just a focused look at where AI removes the most drag from your documentation and regulatory processes. If there is a fit, we scope a pilot. If not, you have lost a quarter of an hour.</p>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+    <div class="cta-final-contact">
+      <span>Žan Bagarič · CEO AIERA</span>
+      <a href="mailto:zan@aiera.si">zan@aiera.si</a>
+      <a href="tel:+38640708327">+386 40 708 327</a>
+    </div>
+  </div>
+</section>
+<footer class="footer">
+  <div class="footer-inner">
+    <span>© 2026 AIERA d.o.o. · Ta predlog je pripravljen ročno za naslovnika.</span>
+    <span><a href="https://aiera.si" target="_blank" rel="noopener">aiera.si</a></span>
+  </div>
+</footer>
+<script>
+(function(){
+  var endpoint = "https://b2booster-reply-bot.onrender.com/pixel/oim-ortopedski-inzeniring-oim-orthopaedi";
+  var slug = "oim-ortopedski-inzeniring-oim-orthopaedi";
+  var started = Date.now();
+  var lastBeat = started;
+  var maxScroll = 0;
+  var scrollFired = {};
+  var visible = !document.hidden;
+  var totalActive = 0;
+  function send(event, value){
+    try {
+      var payload = JSON.stringify({ event: event, value: value, slug: slug, ts: Date.now() });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(endpoint, new Blob([payload], { type: 'application/json' }));
+      } else {
+        fetch(endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: payload, keepalive: true }).catch(function(){});
+      }
+    } catch(e){}
+  }
+  function pct(){
+    var h = document.documentElement;
+    var b = document.body;
+    var st = h.scrollTop || b.scrollTop || 0;
+    var sh = h.scrollHeight || b.scrollHeight || 1;
+    var ch = h.clientHeight || 1;
+    if (sh <= ch) return 100;
+    return Math.min(100, Math.round((st + ch) / sh * 100));
+  }
+  send('page_view', null);
+  document.addEventListener('scroll', function(){
+    var p = pct();
+    if (p > maxScroll) maxScroll = p;
+    [25,50,75,100].forEach(function(t){
+      if (p >= t && !scrollFired[t]) {
+        scrollFired[t] = true;
+        send('scroll_' + t, t);
+      }
+    });
+  }, { passive: true });
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest && e.target.closest('a');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (/calendly\.com/i.test(href)) {
+      send('calendly_click', href);
+      send('cta_click', href);
+    } else if (a.className && (a.className.indexOf('btn-primary') > -1 || a.className.indexOf('btn-arrow') > -1)) {
+      send('cta_click', href);
+    }
+  }, true);
+  function heartbeat(){
+    if (visible) {
+      var now = Date.now();
+      totalActive += (now - lastBeat);
+      lastBeat = now;
+      send('heartbeat', { secs: Math.round(totalActive / 1000), maxScroll: maxScroll });
+    } else {
+      lastBeat = Date.now();
+    }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      if (visible) { totalActive += (Date.now() - lastBeat); }
+      visible = false;
+    } else {
+      visible = true;
+      lastBeat = Date.now();
+    }
+  });
+  setInterval(heartbeat, 30000);
+  window.addEventListener('beforeunload', function(){
+    if (visible) totalActive += (Date.now() - lastBeat);
+    send('unload', { secs: Math.round(totalActive / 1000), maxScroll: maxScroll });
+  });
+
+  // Exit-intent: mouse leaves viewport via top edge. One-shot.
+  var exitFired = false;
+  document.addEventListener('mouseleave', function(e){
+    if (exitFired || e.clientY > 5) return;
+    exitFired = true;
+    send('exit_intent', { maxScroll: maxScroll, secs: Math.round(totalActive / 1000) });
+  });
+
+  // Pricing section dwell tracking (any element with .pricing, .price, [data-pricing])
+  var pricingEl = document.querySelector('[data-pricing], .pricing, .price-block, .pricing-section');
+  if (pricingEl && 'IntersectionObserver' in window) {
+    var pEnter = null, pTotal = 0, pShortFired = false, pLongFired = false;
+    var pio = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.intersectionRatio > 0.5) {
+          if (!pEnter) pEnter = Date.now();
+        } else if (pEnter) {
+          pTotal += Date.now() - pEnter;
+          pEnter = null;
+        }
+        var live = pTotal + (pEnter ? (Date.now() - pEnter) : 0);
+        if (!pShortFired && live > 15000) { pShortFired = true; send('pricing_dwell', { ms: live, bucket: 'short_15s' }); }
+        if (!pLongFired && live > 45000) { pLongFired = true; send('pricing_dwell', { ms: live, bucket: 'long_45s' }); }
+      });
+    }, { threshold: [0, 0.5, 1] });
+    pio.observe(pricingEl);
+  }
+})();
+</script>
+</body>
+</html>
