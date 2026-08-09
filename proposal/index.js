@@ -110,15 +110,18 @@ async function buildProposalHTML(leadData) {
     persona: leadData.title || leadData.role,
   });
 
+  // Display company: NEVER fall back to the person's name (hero used to show
+  // "MARJANA SKUBIC" as if it were a company). Neutral fallback instead.
   const company = leadData.company && leadData.company !== 'LinkedIn'
     ? leadData.company
-    : `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+    : '';
   const fullName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
   const titleRoleStr = leadData.title || leadData.role || '';
-  const titlePrefix = leadData.gender === 'female' ? 'ga.' : 'g.';
+  // Only prefix g./ga. when gender is actually known ("g. Marjana" was embarrassing).
+  const titlePrefix = leadData.gender === 'female' ? 'ga.' : (leadData.gender === 'male' ? 'g.' : '');
 
   const recipientFull = [
-    titlePrefix,
+    titlePrefix ? `${titlePrefix} ` : '',
     fullName,
     titleRoleStr ? `, ${titleRoleStr}` : '',
     company ? ` - ${company}` : '',
@@ -136,7 +139,7 @@ async function buildProposalHTML(leadData) {
 
   const meta = {
     company,
-    companyDisplay: (company || fullName).toUpperCase(),
+    companyDisplay: (company || 'VAŠE PODJETJE').toUpperCase(),
     recipientFull,
     recipientShort,
     slug,

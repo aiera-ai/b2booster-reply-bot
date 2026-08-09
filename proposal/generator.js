@@ -41,6 +41,11 @@ JEZIK - PRAVILA, KI JIH NIKOLI NE KRŠIŠ:
 11. Brez velikih obljub. Nikoli "transformiramo, revolucioniramo, optimaliziramo na maksimum".
 12. Smiselne tehnične izraze pusti v angleščini, če jih slovenska scena tako uporablja: pipeline, dashboard, audit log, workflow, CRM, lead, KPI, brief, demo, scope, integracija, API. NE poslovenjaj nasilno.
 
+RESNIČNOST - PRAVILA, KI JIH NIKOLI NE KRŠIŠ:
+13. NIKOLI ne navajaš konkretnih ROI številk, prihrankov ur ali odstotkov izboljšav ("prihranite 5-8 ur", "60-80 % hitreje"), razen če so eksplicitno navedene v raziskavi ali kontekstu. Namesto tega: "konkretne številke določimo po pilotu na vaših podatkih".
+14. V mock widgetu in primerih NIKOLI ne izmišljaš realno zvenečih imen podjetij, dobaviteljev ali oseb ("Agro-Sud d.o.o."). Uporabi generične oznake: "Dobavitelj A", "Stranka B", "linija 3".
+15. NIKOLI ne navajaš referenc, strank ali števila strank, ki niso v seznamu REFERENCE spodaj. Brez "30+ podjetij" in podobnih izmišljenih količin - tudi ne v pristopFacts.
+
 STILSKI VZOR (kar je DOBRA slovenščina za ta dokument):
 - "V SPIRIT Slovenija vsak dan iščete med 12 aktivnimi programi. AI naredi to v 3 sekundah in vrne le tisto, kar je vredno odpreti."
 - "Ne nadomeščamo obstoječih sistemov. Nad njih postavimo sloj, ki jih poveže in spravi informacije do ljudi, ki jih potrebujejo."
@@ -79,7 +84,8 @@ function buildSchemaInstructions(persona) {
 
   parts.push(`{
   "metaTitle": "string (60-70 znakov, format: '{Podjetje} - AI predlog · AIERA')",
-  "metaDescription": "string (150-160 znakov, OG description)",`);
+  "metaDescription": "string (150-160 znakov, OG description)",
+  "recipientBanner": "string - vrstica za top banner, format: '[g./ga. če je spol jasen iz imena] Ime Priimek, naziv v slovenščini - Podjetje'. Ime in priimek zapiši s PRAVILNIMI šumniki, če v izvirniku očitno manjkajo (npr. 'Bostjan Jeroncic' → 'Boštjan Jerončič'). Angleški naziv prevedi (Chief Executive Officer → direktor, Head of Sales → vodja prodaje).",`);
 
   // HERO
   parts.push(`
@@ -136,8 +142,8 @@ function buildSchemaInstructions(persona) {
   "resitveTitle": "string (npr. 'Kaj bi lahko razvili za {Podjetje}')",
   "resitveLead": "string OPCIJSKO (1 stavek, lahko prazen)",
   "resitveModules": [
-    {"icon": "1 unicode simbol", "title": "3-6 besed - ime modula/rešitve", "body": "2-3 stavki, 25-45 besed, opis kaj modul počne v praksi", "example": "1 stavek v narekovajih kot citat sistema/uporabnika, 12-22 besed"},
-    "... ponovi 6x z DRUGAČNIMI rešitvami, primernimi za persona+industry"
+    {"icon": "1 unicode simbol", "title": "3-6 besed - ime modula/rešitve", "body": "2-3 stavki, 25-45 besed, opis kaj modul počne v praksi", "example": "1 stavek v narekovajih kot citat sistema/uporabnika, 12-22 besed, generične oznake namesto izmišljenih imen"},
+    "... ponovi 4x (NE več) z DRUGAČNIMI rešitvami, primernimi za persona+industry. Prvi modul = tisti, ki neposredno naslavlja temo pogovora."
   ],`);
   }
 
@@ -221,8 +227,8 @@ function buildSchemaInstructions(persona) {
     parts.push(`
   "faqTitle": "string (default 'Pogosta vprašanja')",
   "faqItems": [
-    {"q": "konkretno vprašanje, ki bi ga ta persona vprašala (8-15 besed)", "a": "konkreten odgovor, 2-3 stavki, 30-50 besed"},
-    "... 5-6 vprašanj, ki naslovijo PRAVE ugovore te persone"
+    {"q": "konkretno vprašanje, ki bi ga ta persona vprašala (8-15 besed)", "a": "konkreten odgovor, 2-3 stavki, 30-50 besed, brez izmišljenih ROI številk"},
+    "... 4-5 vprašanj, ki naslovijo PRAVE ugovore te persone"
   ],`);
   }
 
@@ -240,7 +246,11 @@ function buildSchemaInstructions(persona) {
 // ─── PROMPT BUILDER ──────────────────────────────────────────────────────────
 
 function buildUserPrompt({ leadData, persona, themeName }) {
-  const company = leadData.company || `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
+  // NEVER pass the person's name as "company" - the LLM then writes page copy as
+  // if the person were a firm. Unknown company → explicit instruction instead.
+  const company = (leadData.company && leadData.company !== 'LinkedIn')
+    ? leadData.company
+    : 'NI ZNANO - imena osebe NIKOLI ne uporabi kot ime podjetja; kjer bi sicer pisal ime podjetja, piši "vaše podjetje"';
   const fullName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim();
   const title = leadData.title || leadData.role || 'decision maker';
   const industry = leadData.industry || leadData.industryContext || '';
@@ -285,6 +295,9 @@ Personaliziran predlog sodelovanja, ki ${fullName.split(' ')[0] || 'naslovnik'} 
 NAJPOMEMBNEJŠE PRAVILO (to loči stran, ki proda, od strani, ki jo zaprejo):
 Stran NI predstavitev AIERE in njenih storitev. Stran je odgovor na vprašanje "kje vse bi AI konkretno pomagal poslovanju podjetja ${company}". Vsaka sekcija govori o NJIHOVIH oddelkih, procesih in dnevnem delu, AIERA je samo izvajalec. Če kontekst ali raziskava omenja konkreten oddelek ali use-case (npr. nabava, logistika, prodajne ponudbe, customer service), postavi CELOTEN fokus strani tja - tako kot bi svetovalec pripravil izhodišča za ta konkreten oddelek.
 
+PRAVILO UJEMANJA S POGOVOROM (drugo najpomembnejše):
+Lead je to stran dobil kot link v LinkedIn/email pogovoru. Stran MORA najprej odgovoriti na točno tisto temo, o kateri je pogovor tekel - kar je lead vprašal ali kar mu je bilo v sporočilu obljubljeno. Če je pogovor tekel o pridobivanju strank, outreachu ali prodaji, mora biti hero + prvi modul + pilot o TEM, ne o splošni avtomatizaciji procesov. Šele ostali moduli lahko širijo na druge procese. Stran, ki govori mimo pogovora, lead takoj zapre.
+
 ZAHTEVE ZA KOPIJO:
 1. Vsak tekst MORA biti specifičen za ${company} in role "${title}".
 2. Ko omeniš podjetje, uporabi natanko: "${company}".
@@ -306,8 +319,8 @@ PRODUCT KNOWLEDGE - AIERA reference moduli (ti so resnični, jih lahko vključi�
 - Data extraction iz nestrukturiranih virov
 - Smart workflow avtomatizacije
 
-REFERENCE (uporabi pri references sekciji):
-Munchies, Valtheron, B2Booster, NordLogistics, RedEyeMonkey, + 30 podjetij v SI in EU
+REFERENCE (edine resnične stranke - NIKOLI ne dodajaj drugih imen ali količin):
+Munchies, Valtheron, B2Booster, RedEyeMonkey
 
 TEHNIČNI STACK (uporabi pri aiStackTools):
 Claude, OpenAI, Gemini, n8n, Lovable, Open Claw, Anthropic API, Make, Airtable
@@ -344,6 +357,15 @@ const SUSPICIOUS_PATTERNS = [
   /\b(tjedan|jučer|sutra|sat\b)/i,        // Croatian time words
 ];
 
+// Fabricated-claim patterns: invented ROI ranges and client-count claims.
+// These are validated (retry once), not silently stripped.
+const FABRICATION_PATTERNS = [
+  { re: /prihrani\w*\s+\d+\s*-\s*\d+\s*ur/i, label: 'izmišljen prihranek ur' },
+  { re: /\d+\s*-\s*\d+\s*%\s*(hitreje|manj|več|krajš)/i, label: 'izmišljen odstotek izboljšave' },
+  { re: /\b\d{2,}\+?\s*podjetij/i, label: 'izmišljeno število strank' },
+  { re: /NordLogistics/i, label: 'nepotrjena referenca NordLogistics' },
+];
+
 function validateContent(content) {
   const issues = [];
   const allText = JSON.stringify(content);
@@ -358,6 +380,11 @@ function validateContent(content) {
   for (const re of SUSPICIOUS_PATTERNS) {
     const m = allText.match(re);
     if (m) issues.push(`Sumljiv vzorec (hrvatizem/napaka): "${m[0]}"`);
+  }
+
+  for (const { re, label } of FABRICATION_PATTERNS) {
+    const m = allText.match(re);
+    if (m) issues.push(`Izmišljena trditev (${label}): "${m[0]}" - odstrani ali zamenjaj s "konkretne številke določimo po pilotu"`);
   }
 
   // Check for required fields

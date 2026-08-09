@@ -82,9 +82,10 @@ function buildPilotBulletsHtml(bullets) {
 function renderTemplate(leadData, slots, opts = {}) {
   const template = loadTemplate();
 
+  // NEVER the person's name as company (hero used to show 'Ime Priimek' as a firm).
   const company = leadData.company && leadData.company !== 'LinkedIn'
     ? leadData.company
-    : `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim() || 'vaše podjetje';
+    : 'vaše podjetje';
 
   const fullName = `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim() || '';
   const recipientNameCompany = fullName ? `${fullName}, ${company}` : company;

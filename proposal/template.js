@@ -155,8 +155,7 @@ a { color: inherit; text-decoration: none; }
 .widget-bar .dots span:nth-child(2) { background: #FCD34D; }
 .widget-bar .dots span:nth-child(3) { background: #86EFAC; }
 .widget-bar .url { background: var(--paper-bg); padding: 4px 10px; border-radius: 6px; color: var(--body); }
-.widget-bar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: #16A34A; font-weight: 600; }
-.widget-bar .live::before { content: ''; width: 7px; height: 7px; border-radius: 999px; background: #22C55E; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18); }
+.widget-bar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 .widget-body { padding: 22px 22px 24px; }
 .widget-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .widget-title { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 15px; color: var(--ink); }
@@ -358,9 +357,12 @@ a { color: inherit; text-decoration: none; }
 
 // ─── SECTION RENDERERS ────────────────────────────────────────────────────────
 
-function renderBanner(meta) {
+function renderBanner(meta, content) {
+  // Prefer the LLM-corrected banner line (proper diacritics + Slovene role title);
+  // fall back to the mechanically built one.
+  const line = (content && content.recipientBanner) || meta.recipientFull;
   return `<div class="banner">
-  <span class="banner-icon">✉</span> Pripravljeno za: ${esc(meta.recipientFull)}
+  <span class="banner-icon">✉</span> Pripravljeno za: ${esc(line)}
 </div>`;
 }
 
@@ -372,7 +374,7 @@ function renderHeader(meta) {
       <span class="sep">×</span>
       <span class="target">${esc(meta.companyDisplay)}</span>
     </div>
-    <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary">Rezerviraj 15-min sestanek</a>
+    <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary">Rezervirajte 15-min sestanek</a>
   </div>
 </header>`;
 }
@@ -386,7 +388,7 @@ function renderHero(content, meta) {
       <h1>${esc(content.heroTitleTop)}<br><span class="brand-line">${esc(content.heroTitleBottom)}</span></h1>
       <p class="hero-lead">${esc(content.heroLead)}</p>
       <div class="hero-cta-row">
-        <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+        <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezervirajte 15-min sestanek</a>
         <a href="#resitve" class="btn btn-ghost">Primeri uporabe</a>
       </div>
       <div class="hero-trust">
@@ -416,7 +418,7 @@ function renderHeroWidget(content, meta) {
     <div class="widget-bar">
       <div class="dots"><span></span><span></span><span></span></div>
       <div class="url">${esc(meta.slug)}.ai-portal / ${esc(widgetTag)}</div>
-      <div class="live">live</div>
+      <div class="live">ilustrativen prikaz</div>
     </div>
     <div class="widget-body">
       <div class="widget-row">
@@ -461,14 +463,20 @@ function renderHeroWidget(content, meta) {
 }
 
 function renderReferences(content) {
-  const refs = content.references || ['Munchies', 'Valtheron', 'B2Booster', 'NordLogistics', 'RedEyeMonkey'];
-  const moreLabel = content.referencesMore || '+ 30 podjetij v SI in EU';
+  // Only CONFIRMED clients here. Env OFFER_REFERENCES (comma-separated) overrides;
+  // an explicitly empty env value hides the whole strip. Never invent names.
+  let refs;
+  if (process.env.OFFER_REFERENCES !== undefined) {
+    refs = process.env.OFFER_REFERENCES.split(',').map(s => s.trim()).filter(Boolean);
+  } else {
+    refs = ['Munchies', 'Valtheron', 'B2Booster', 'RedEyeMonkey'];
+  }
+  if (!refs.length) return '';
   return `<section class="refs">
   <div class="wrap refs-inner">
     <div class="refs-label">Reference — izbrane stranke AIERA</div>
     <div class="refs-list">
       ${refs.map(r => `<span class="ref-name">${esc(r)}</span>`).join('')}
-      <span class="refs-more">${esc(moreLabel)}</span>
     </div>
   </div>
 </section>`;
@@ -692,7 +700,7 @@ function renderCtaFinal(content, meta, persona) {
     <span class="eyebrow">Za ${esc(meta.recipientShort)}</span>
     <h2 style="margin-top: 20px;">${esc(content.ctaFinalTitle || personaCta)}</h2>
     <p>${esc(content.ctaFinalBody)}</p>
-    <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezerviraj 15-min sestanek</a>
+    <a href="${esc(meta.calendlyUrl)}" target="_blank" rel="noopener" class="btn btn-primary btn-arrow">Rezervirajte 15-min sestanek</a>
     <div class="cta-final-contact">
       <span>Žan Bagarič · CEO AIERA</span>
       <a href="mailto:zan@aiera.si">zan@aiera.si</a>
@@ -705,7 +713,7 @@ function renderCtaFinal(content, meta, persona) {
 function renderFooter() {
   return `<footer class="footer">
   <div class="footer-inner">
-    <span>© ${new Date().getFullYear()} AIERA d.o.o. · Ta predlog je pripravljen ročno za naslovnika.</span>
+    <span>© ${new Date().getFullYear()} AIERA d.o.o. · Ta predlog je pripravljen posebej za naslovnika.</span>
     <span><a href="https://aiera.si" target="_blank" rel="noopener">aiera.si</a></span>
   </div>
 </footer>`;
@@ -882,7 +890,7 @@ function renderPage({ persona, theme: themeName, content, meta }) {
   <style>${baseStyles(theme)}</style>
 </head>
 <body>
-${renderBanner(meta)}
+${renderBanner(meta, content)}
 ${renderHeader(meta)}
 ${sectionsHtml}
 ${renderFooter()}

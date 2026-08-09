@@ -1517,6 +1517,11 @@ async function createAndDeployOffer(leadData) {
   if (OFFER_HOST === 'render' && !(leadData && leadData.offerType === 'generator')) {
     const url = await createAndServeOffer(leadData);
     if (url) return url;
+    if (leadData && leadData.__qualityBlocked) {
+      // Quality gate said no page - honor it. No Netlify fallback, reply goes
+      // out without a link.
+      return null;
+    }
     console.log('[OFFER-SERVE] render serve failed - falling back to Netlify path');
   }
   // Generator ponudb (AIERA brand SaaS demo). Served from Render (/g/{slug}/) by default,
@@ -1713,6 +1718,10 @@ async function createAndServeOffer(leadData) {
       } catch (e) {
         if (e && e.qualityFail) {
           console.warn(`[SOLUTIONS] QUALITY GATE blocked offer page - no link for this lead: ${e.message}`);
+          // Flag so createAndDeployOffer does NOT fall back to the ungated Netlify
+          // spirit path - that fallback used to ship exactly the unchecked prose
+          // the gate rejected.
+          leadData.__qualityBlocked = true;
           return null;
         }
         console.warn('[SOLUTIONS] build failed, falling back to spirit:', e.message);
@@ -3314,6 +3323,7 @@ async function maybeHandleEmailHandoff(channel, leadData, theirMessage) {
     // 2-4 sentences built around that one link (not a Calendly pitch).
     if (!leadData.offerUrl && !leadData.wantsCall) {
       try {
+        if (!leadData.theirMessage) leadData.theirMessage = theirMessage;
         const ou = await createAndDeployOffer(leadData);
         if (ou) {
           leadData.offerUrl = ou;
@@ -4602,6 +4612,9 @@ app.post('/webhook/linkedin', async (req, res) => {
     // the freshly built offer link only ever shows up in the approval email.
     let offerUrl = null;
     try {
+      // The proposal generator aligns page content with the conversation - it
+      // needs the lead's actual message, not just industry metadata.
+      if (!leadData.theirMessage && hasRealMessage) leadData.theirMessage = messageForAI;
       offerUrl = await createAndDeployOffer(leadData);
       if (offerUrl) leadData.offerUrl = offerUrl;
     } catch (e) { console.error('[LINKEDIN] Offer deploy failed:', e.message); }
@@ -4761,6 +4774,7 @@ app.post('/webhook/vesna', async (req, res) => {
     // (was deployed after, so the link only ever showed in the approval email).
     let offerUrl = null;
     try {
+      if (!leadData.theirMessage && hasRealMessage) leadData.theirMessage = messageForAI;
       offerUrl = await createAndDeployOffer(leadData);
       if (offerUrl) leadData.offerUrl = offerUrl;
     } catch (e) { console.error('[VESNA] Offer deploy failed:', e.message); }
@@ -6510,6 +6524,7 @@ async function pollLinkedInInbox() {
 
       let offerUrl = null;
       try {
+        if (!leadData.theirMessage) leadData.theirMessage = body;
         offerUrl = await createAndDeployOffer(leadData);
         if (offerUrl) leadData.offerUrl = offerUrl;
       } catch (e) { console.error('[POLL] Offer deploy failed:', e.message); }
@@ -6929,6 +6944,7 @@ app.post('/webhook/outflo', async (req, res) => {
         console.log(`[${senderLabel}] Call request - skipping offer deploy (reply will arrange a call, no link)`);
       } else {
         try {
+          if (!leadData.theirMessage) leadData.theirMessage = messageText;
           offerUrl = await createAndDeployOffer(leadData);
           if (offerUrl) {
             leadData.offerUrl = offerUrl;

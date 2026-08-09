@@ -151,9 +151,10 @@ async function generateGeneratorSlots(leadData) {
 
   const anthropic = new Anthropic({ apiKey });
 
+  // NEVER the person's name as company - generic fallback instead.
   const company = leadData.company && leadData.company !== 'LinkedIn'
     ? leadData.company
-    : `${leadData.firstName || ''} ${leadData.lastName || ''}`.trim() || 'vaše podjetje';
+    : 'vaše podjetje';
 
   const userBlock = `Lead: ${leadData.firstName || ''} ${leadData.lastName || ''}
 Title/role: ${leadData.title || leadData.role || 'unknown'}

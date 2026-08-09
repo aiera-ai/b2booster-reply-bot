@@ -65,9 +65,10 @@ function renderLanding(leadData, slots, options = {}) {
   const validUntil = formatSlovenianDate(addDays(now, 21));
   const preparedDate = formatSlovenianDate(now);
 
+  // NEVER the person's name as company.
   const leadCompany = leadData.company && leadData.company !== 'LinkedIn'
     ? leadData.company
-    : (leadData.firstName ? `${leadData.firstName} ${leadData.lastName || ''}`.trim() : 'vaše podjetje');
+    : 'vaše podjetje';
 
   const trackBase = options.trackBase || process.env.PUBLIC_BASE_URL || 'https://b2booster-reply-bot.onrender.com';
   const slug = options.slug || '';
@@ -244,9 +245,10 @@ function renderOffer(leadData, slots, theme, options = {}) {
   const dateTo = formatSlovenianDate(validUntilDate);
   const expired = isOfferExpired(validUntilDate, now); // currently false on fresh deploys
 
+  // NEVER the person's name as company.
   const leadCompany = leadData.company && leadData.company !== 'LinkedIn'
     ? leadData.company
-    : (leadData.firstName ? `${leadData.firstName} ${leadData.lastName || ''}`.trim() : 'vaše podjetje');
+    : 'vaše podjetje';
 
   const trackBase = options.trackBase || process.env.PUBLIC_BASE_URL || 'https://b2booster-reply-bot.onrender.com';
   const slug = options.slug || '';
