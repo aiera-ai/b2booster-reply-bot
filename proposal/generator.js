@@ -40,16 +40,18 @@ JEZIK - PRAVILA, KI JIH NIKOLI NE KRŠIŠ:
 10. Konkretni primeri, ne abstrakcije. Namesto "veliko" piši "12 razpisov mesečno".
 11. Brez velikih obljub. Nikoli "transformiramo, revolucioniramo, optimaliziramo na maksimum".
 12. Smiselne tehnične izraze pusti v angleščini, če jih slovenska scena tako uporablja: pipeline, dashboard, audit log, workflow, CRM, lead, KPI, brief, demo, scope, integracija, API. NE poslovenjaj nasilno.
+13. NAGOVOR: naslovnika VEDNO vikaš (2. oseba množine: "poveste", "odločite", "vaša ekipa"). Za skupna dejanja uporabi množino: "skupaj določimo", "skupaj pregledamo". NIKOLI dvojine: "določiva", "pogledava", "se slišiva", "pregledava" so PREPOVEDANE oblike.
 
 RESNIČNOST - PRAVILA, KI JIH NIKOLI NE KRŠIŠ:
-13. NIKOLI ne navajaš konkretnih ROI številk, prihrankov ur ali odstotkov izboljšav ("prihranite 5-8 ur", "60-80 % hitreje"), razen če so eksplicitno navedene v raziskavi ali kontekstu. Namesto tega: "konkretne številke določimo po pilotu na vaših podatkih".
-14. V mock widgetu in primerih NIKOLI ne izmišljaš realno zvenečih imen podjetij, dobaviteljev ali oseb ("Agro-Sud d.o.o."). Uporabi generične oznake: "Dobavitelj A", "Stranka B", "linija 3".
-15. NIKOLI ne navajaš referenc, strank ali števila strank, ki niso v seznamu REFERENCE spodaj. Brez "30+ podjetij" in podobnih izmišljenih količin - tudi ne v pristopFacts.
+14. NIKOLI ne navajaš konkretnih ROI številk, prihrankov ur ali odstotkov izboljšav ("prihranite 5-8 ur", "60-80 % hitreje"), razen če so eksplicitno navedene v raziskavi ali kontekstu. Namesto tega: "konkretne številke pogledamo skupaj na vaših podatkih".
+15. V mock widgetu in primerih NIKOLI ne izmišljaš realno zvenečih imen podjetij, dobaviteljev ali oseb ("Agro-Sud d.o.o."). Uporabi generične oznake: "Dobavitelj A", "Stranka B", "linija 3".
+16. NIKOLI ne navajaš referenc, strank ali števila strank, ki niso v seznamu REFERENCE spodaj. Brez "30+ podjetij" in podobnih izmišljenih količin.
+17. NIKOLI ne predpisuješ pilota, faz projekta, rokov ali scope-a. Ne veš, kaj si naslovnik želi in kakšne cilje ima - stran PONUJA MOŽNOSTI, ne predpisuje poti. Prvi korak je vedno 15-minutni pogovor, kjer naslovnik pove svoje prioritete. V FAQ odgovorih o obsegu, rokih ali začetku piši "to določimo skupaj na uvodnem pogovoru, glede na vaše prioritete", ne izmišljenih faz in tednov.
 
 STILSKI VZOR (kar je DOBRA slovenščina za ta dokument):
 - "V SPIRIT Slovenija vsak dan iščete med 12 aktivnimi programi. AI naredi to v 3 sekundah in vrne le tisto, kar je vredno odpreti."
 - "Ne nadomeščamo obstoječih sistemov. Nad njih postavimo sloj, ki jih poveže in spravi informacije do ljudi, ki jih potrebujejo."
-- "Pilot v 3 tednih, brez vendor lock-in. Če rešitev ne deluje za vašo ekipo, jo izklopite."
+- "Ne nadomeščamo obstoječih sistemov in ne zaklepamo podatkov. Če rešitev ne deluje za vašo ekipo, jo izklopite."
 
 STILSKI VZOR (kar je SLABA slovenščina - tega NE počneš):
 - ✗ "V današnjem hitro spreminjajočem se svetu poslovne inteligence..."
@@ -72,12 +74,10 @@ function buildSchemaInstructions(persona) {
   const includeAiStack = sections.includes('aiStack');
   const includeResitve = sections.includes('resitve');
   const includeArhitektura = sections.includes('arhitektura');
-  const includePilot = sections.includes('pilot');
   const includeSpotlight = sections.includes('personaSpotlight');
   const includeBenefits = sections.includes('benefits');
   const includeVarnostKratko = sections.includes('varnostKratko');
   const includeVarnostPodatki = sections.includes('varnostPodatki');
-  const includePristop = sections.includes('pristop');
   const includeFaq = sections.includes('faq');
 
   const parts = [];
@@ -92,27 +92,20 @@ function buildSchemaInstructions(persona) {
   "heroTitleTop": "string (4-6 besed, prvi del naslova, npr. 'AI sloj nad procesi')",
   "heroTitleBottom": "string (1-3 besede, brand-colored del, npr. ime podjetja ali konkreten use-case)",
   "heroLead": "string (2-3 stavki, 35-55 besed, KONKRETEN opis česa konkretnega rešujemo - omeni stvari iz njihove industrije/role)",
-  "heroTrust": ["3 elementi, vsak 3-5 besed, primeri: 'Pilot v 3 tednih', 'Ekipa v SLO', 'NDA na voljo'"],`);
+  "heroTrust": ["3 elementi, vsak 3-5 besed, primeri: 'Ekipa v Sloveniji', 'NDA na voljo', 'Brez dolgoročnih zavez'"],`);
 
-  // WIDGET (mock dashboard in hero)
+  // WIDGET (ilustrativen primer v hero - preprosta izmenjava vprašanje/odgovor)
   if (includeWidget) {
     parts.push(`
-  "widgetTag": "string (1 beseda, tehnično ime, npr. 'pilot' ali 'preview')",
   "widgetTitle": "string (3-5 besed, npr. '{Podjetje} pregled' ali 'Pipeline pregled')",
   "widgetStats": [
     {"label": "string (1-2 besedi, UPPERCASE, npr. 'RAZPISI')", "value": "string (številka, npr. '12')", "delta": "string (npr. '+3')"},
     {"label": "...", "value": "...", "delta": "..."},
     {"label": "...", "value": "...", "delta": "..."}
   ],
-  "widgetActivityLabel": "string (npr. 'AKTIVNOST (30D)')",
-  "widgetActivityDelta": "string (npr. '24%')",
   "widgetChatPrompt": "string (vprašanje, ki bi ga naslovnik vprašal AI, 5-12 besed, KONKRETNO za njihovo delo)",
-  "widgetChatAnswer": "string (AI odgovor v 1-2 stavkih, lahko vsebuje **krepki** poudarki za ključne številke/imena)",
-  "widgetSources": ["3-4 viri, kratko, npr. 'CRM', 'Dokumenti', 'Razpisi'"],
-  "widgetPillTopLabel": "string (UPPERCASE, 1-2 besedi, npr. 'MATCH NAJDEN')",
-  "widgetPillTopValue": "string (5-8 besed, konkretna ugotovitev sistema)",
-  "widgetPillBottomLabel": "string (UPPERCASE, npr. 'AUDIT LOG')",
-  "widgetPillBottomValue": "string (3-6 besed, npr. '+42 dejanj danes')",`);
+  "widgetChatAnswer": "string (AI odgovor v 1-2 stavkih, lahko vsebuje **krepki** poudarki za ključne številke; generične oznake namesto izmišljenih imen)",
+  "widgetSources": ["3-4 viri, kratko, npr. 'CRM', 'Dokumenti', 'Razpisi'"],`);
   }
 
   // KONTEKST
@@ -162,14 +155,7 @@ function buildSchemaInstructions(persona) {
   ],`);
   }
 
-  // PILOT
-  if (includePilot) {
-    parts.push(`
-  "pilotTitle": "string (npr. 'Predlagan prvi pilot: ...')",
-  "pilotLead": "string (2-3 stavki, opisuje scope pilota)",
-  "pilotCilj": ["5 točk, kaj bo pilot dokazal, vsaka 5-10 besed"],
-  "pilotFaze": ["5 faz, vsaka po obrazcu: 'Faza N: opis (X dni)' ali samo 'opis - rezultat'"],`);
-  }
+  // PILOT section removed 2026-08: the page must not prescribe scope/phases.
 
   // PERSONA SPOTLIGHT
   if (includeSpotlight) {
@@ -210,17 +196,7 @@ function buildSchemaInstructions(persona) {
   "varnostPodatkiParagraphs": ["3-4 odstavki, vsak 2-3 stavki, o data residency, integracijah, vzdrževanju"],`);
   }
 
-  // PRISTOP
-  if (includePristop) {
-    parts.push(`
-  "pristopLabel": "string (UPPERCASE, default 'AIERA pristop')",
-  "pristopTitle": "string (1 stavek, opisuje pristop)",
-  "pristopParagraphs": ["2-3 odstavki, vsak 2-3 stavki"],
-  "pristopFacts": [
-    {"value": "1-3 besede (npr. '3 tedne', '0 vendor lock-in', '100% v EU')", "label": "UPPERCASE, 1-3 besede"},
-    "... 3-4 facts skupaj"
-  ],`);
-  }
+  // PRISTOP section removed 2026-08: agency self-talk, lead does not care.
 
   // FAQ
   if (includeFaq) {
@@ -296,7 +272,7 @@ NAJPOMEMBNEJŠE PRAVILO (to loči stran, ki proda, od strani, ki jo zaprejo):
 Stran NI predstavitev AIERE in njenih storitev. Stran je odgovor na vprašanje "kje vse bi AI konkretno pomagal poslovanju podjetja ${company}". Vsaka sekcija govori o NJIHOVIH oddelkih, procesih in dnevnem delu, AIERA je samo izvajalec. Če kontekst ali raziskava omenja konkreten oddelek ali use-case (npr. nabava, logistika, prodajne ponudbe, customer service), postavi CELOTEN fokus strani tja - tako kot bi svetovalec pripravil izhodišča za ta konkreten oddelek.
 
 PRAVILO UJEMANJA S POGOVOROM (drugo najpomembnejše):
-Lead je to stran dobil kot link v LinkedIn/email pogovoru. Stran MORA najprej odgovoriti na točno tisto temo, o kateri je pogovor tekel - kar je lead vprašal ali kar mu je bilo v sporočilu obljubljeno. Če je pogovor tekel o pridobivanju strank, outreachu ali prodaji, mora biti hero + prvi modul + pilot o TEM, ne o splošni avtomatizaciji procesov. Šele ostali moduli lahko širijo na druge procese. Stran, ki govori mimo pogovora, lead takoj zapre.
+Lead je to stran dobil kot link v LinkedIn/email pogovoru. Stran MORA najprej odgovoriti na točno tisto temo, o kateri je pogovor tekel - kar je lead vprašal ali kar mu je bilo v sporočilu obljubljeno. Če je pogovor tekel o pridobivanju strank, outreachu ali prodaji, mora biti hero + prvi modul o TEM, ne o splošni avtomatizaciji procesov. Šele ostali moduli lahko širijo na druge procese. Stran, ki govori mimo pogovora, lead takoj zapre.
 
 ZAHTEVE ZA KOPIJO:
 1. Vsak tekst MORA biti specifičen za ${company} in role "${title}".
@@ -355,6 +331,7 @@ const EM_DASH = /—/;
 const SUSPICIOUS_PATTERNS = [
   /\b(zato sto|kao)\b/i,                  // Croatian
   /\b(tjedan|jučer|sutra|sat\b)/i,        // Croatian time words
+  /\b(določiva|pogledava|pregledava|slišiva|vidiva)\b/i,  // dvojina - page must use vikanje/plural
 ];
 
 // Fabricated-claim patterns: invented ROI ranges and client-count claims.
@@ -384,7 +361,7 @@ function validateContent(content) {
 
   for (const { re, label } of FABRICATION_PATTERNS) {
     const m = allText.match(re);
-    if (m) issues.push(`Izmišljena trditev (${label}): "${m[0]}" - odstrani ali zamenjaj s "konkretne številke določimo po pilotu"`);
+    if (m) issues.push(`Izmišljena trditev (${label}): "${m[0]}" - odstrani ali zamenjaj s "konkretne številke pogledamo skupaj na pogovoru"`);
   }
 
   // Check for required fields

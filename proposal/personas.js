@@ -3,8 +3,10 @@
 //
 // Available section IDs (must match keys in template.js):
 //   hero, references, kontekst, aiStack, resitve, arhitektura,
-//   pilot, personaSpotlight, benefits, varnostKratko, varnostPodatki,
-//   pristop, faq, ctaFinal, footer
+//   personaSpotlight, benefits, varnostKratko, varnostPodatki,
+//   faq, ctaFinal, footer
+// NOTE: 'pilot' and 'pristop' removed 2026-08 - the page must not prescribe a
+// pilot or pitch "our approach"; priorities are the lead's to define on the call.
 //
 // Each section is also responsible for which content slots Claude must generate.
 // See generator.js SLOT_SCHEMA for exact slot keys.
@@ -21,12 +23,10 @@ const PERSONAS = {
       'aiStack',
       'resitve',
       'arhitektura',
-      'pilot',
       'personaSpotlight',  // ZA IT ODDELEK
       'benefits',
       'varnostKratko',
       'varnostPodatki',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -50,11 +50,9 @@ const PERSONAS = {
       'kontekst',
       'resitve',
       'arhitektura',
-      'pilot',
       'personaSpotlight',  // ZA VODSTVO
       'benefits',
       'varnostKratko',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -65,7 +63,7 @@ const PERSONAS = {
       themes: ['strategic_advantage', 'speed_to_market', 'leverage', 'visibility', 'competitive_edge'],
     },
     faqFocus: ['roi', 'timeline', 'team_change_management', 'risk', 'next_step'],
-    cta: 'Predlog: 15-minutni pregovor o smeri za {company}',
+    cta: 'Predlog: 15-minutni pogovor o smeri za {company}',
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -78,11 +76,9 @@ const PERSONAS = {
       'kontekst',
       'resitve',
       'arhitektura',
-      'pilot',
       'personaSpotlight',  // ZA FINANCE
       'benefits',
       'varnostKratko',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -105,10 +101,8 @@ const PERSONAS = {
       'references',
       'kontekst',
       'resitve',
-      'pilot',
       'personaSpotlight',  // ZA PRODAJO
       'benefits',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -133,11 +127,9 @@ const PERSONAS = {
       'aiStack',
       'resitve',
       'arhitektura',
-      'pilot',
       'personaSpotlight',  // ZA OPERACIJE
       'benefits',
       'varnostKratko',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -160,10 +152,8 @@ const PERSONAS = {
       'references',
       'kontekst',
       'resitve',
-      'pilot',
       'personaSpotlight',  // ZA MARKETING
       'benefits',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -187,11 +177,9 @@ const PERSONAS = {
       'references',
       'kontekst',
       'resitve',
-      'pilot',
       'personaSpotlight',
       'benefits',
       'varnostKratko',
-      'pristop',
       'faq',
       'ctaFinal',
       'footer',
@@ -199,9 +187,9 @@ const PERSONAS = {
     spotlight: {
       label: 'POVZETEK',
       title: 'Zasnovano za vašo organizacijo',
-      themes: ['practical_value', 'low_risk_pilot', 'measurable_outcome', 'team_fit'],
+      themes: ['practical_value', 'clear_first_step', 'measurable_outcome', 'team_fit'],
     },
-    faqFocus: ['roi', 'timeline', 'security', 'pilot_scope', 'next_step'],
+    faqFocus: ['roi', 'timeline', 'security', 'next_step'],
     cta: 'Predlog: 15-minutni pregled za {company}',
   },
 };
