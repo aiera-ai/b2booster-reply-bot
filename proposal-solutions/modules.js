@@ -7,7 +7,7 @@ const SOLUTION_MODULES = {
     result: 'Sistematičen, ponovljiv vir B2B povpraševanj',
     title: 'PRIDOBIVANJE NOVIH B2B STRANK',
     headline: 'B2Booster - sistematičen kanal novih poslovnih povpraševanj.',
-    body: 'Vzpostavimo voden outbound proces, ki sistematično odpira pogovore z odločevalci v podjetjih, ki ustrezajo vašemu idealnemu profilu stranke. Pristop je preverjen na 30+ podjetjih in se v celoti prilagodi vaši ponudbi. Kvalificirano povpraševanje predamo vaši prodajni ekipi, AIERA prevzame celoten operativni del.',
+    body: 'Vzpostavimo voden outbound proces, ki sistematično odpira pogovore z odločevalci v podjetjih, ki ustrezajo vašemu idealnemu profilu stranke. Proces se v celoti prilagodi vaši ponudbi in vašemu trgu. Kvalificirano povpraševanje predamo vaši prodajni ekipi, AIERA prevzame celoten operativni del.',
     bullets: [
       { t: 'Natančno definiran ICP', d: 'Skupaj določimo panoge, velikosti podjetij in trge, kjer je vaša ponudba najmočnejša. Brez razpršenosti.' },
       { t: 'Nagovor pravih odločevalcev', d: 'Osebe, ki dejansko sprožijo nakup in odločajo o proračunu, ne splošni info naslovi.' },
@@ -16,8 +16,8 @@ const SOLUTION_MODULES = {
     ],
     pricing: {
       label: 'CENA B2B LEAD-GEN SISTEMA',
-      lines: ['490 EUR setup', '1.200 EUR / mesec / trg'],
-      note: 'Vključeno: ICP raziskava, baza odločevalcev, sporočila, izvedba outbounda, tedensko poročanje in iteracija. Brez dolgoročnih zavez, 30-dnevna odpoved. Brez DDV.',
+      lines: ['900 EUR / mesec', 'brez setup stroška'],
+      note: 'Vključeno: ICP raziskava, baza odločevalcev, sporočila, izvedba outbounda, tedensko poročanje in iteracija. Brez dolgoročnih zavez, 30-dnevna odpoved. Cena je brez DDV.',
     },
   },
 

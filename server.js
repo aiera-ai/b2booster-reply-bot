@@ -66,12 +66,12 @@ const AT_PROPOSALS = 'tblHS9tAl7c1XAQpi';
 // Single source of truth. Override via env where flagged.
 
 const PRICING = {
-  b2booster: { setup: 790, monthly: 890, currency: 'EUR' },
+  b2booster: { setup: 0, monthly: 900, currency: 'EUR' },
   generator: { setup: 490, monthly: 290, currency: 'EUR' },
   // Soft proof - NO promised numbers (we never guarantee a count we might not hit).
   socialProof: 'Za stranke prevzamemo celoten outreach do pravih odločevalcev v njihovih ciljnih podjetjih, tako da se ukvarjajo le z dogovorjenimi pogovori.',
   // Formatted helpers (use in prompts)
-  b2boosterText: '790 EUR setup (enkratni fee) + 890 EUR na mesec',
+  b2boosterText: '900 EUR + DDV na mesec, brez setup stroška',
   generatorText: 'pilot od 290 EUR/mesec + 490 EUR setup (custom per segment)'
 };
 
@@ -909,8 +909,25 @@ function formatSendTime(sendAt) {
 // Replaces setTimeout. Items marked 'scheduled' in pending.json are picked up
 // every 60s and on startup - survives server restarts/spin-down.
 
+// A draft is only valid for a short window. Approving a two-month-old reply sends
+// a message that answers a conversation the lead has long forgotten, references a
+// stale offer link and quotes stale pricing. Refuse instead of sending.
+const STALE_DRAFT_DAYS = parseInt(process.env.STALE_DRAFT_DAYS || '14', 10);
+function isStaleDraft(item) {
+  const created = item && item.createdAt ? Date.parse(item.createdAt) : NaN;
+  if (!Number.isFinite(created)) return false; // unknown age: do not block
+  return (Date.now() - created) > STALE_DRAFT_DAYS * 86400000;
+}
+
 async function executeSend(id, item) {
   const { channel, leadData, draft } = item;
+  if (isStaleDraft(item)) {
+    const days = Math.round((Date.now() - Date.parse(item.createdAt)) / 86400000);
+    console.warn(`[QUEUE] Refusing stale draft ${id} (${days} days old) - dropping instead of sending`);
+    try { await sendSendFailureAlert(id, item, `Draft je star ${days} dni (limit ${STALE_DRAFT_DAYS}). Ni poslan. Če je lead še aktualen, napiši novo sporočilo.`); } catch { /* non-blocking */ }
+    await deletePending(id);
+    return;
+  }
   try {
     // Delayed Vesna→Žan offer email (handoff): scheduled email send after LI confirm went out.
     if (item.kind === 'delayed_offer_email') {
@@ -1105,7 +1122,7 @@ LANGUAGE RULES (always apply, hard constraints):
 - NEVER use dashes (pomišljaji "—"). Use commas or regular hyphens "-".
 
 FACTS to use when relevant (do NOT invent others):
-- Pricing if asked: 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges.
+- Pricing if asked: 900 EUR + DDV na mesec. Brez setup stroška, brez enkratnih fee-jev. NEVER quote ranges and NEVER invent a setup fee.
 - Soft proof (use sparingly): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
 - NEVER promise specific numbers of replies, meetings, or results (e.g. "50-100 odgovorov mesečno"). We do not guarantee counts. Speak about the process and what we take off their plate, not a guaranteed outcome number.
 - TONE: confident but humble. NEVER cocky, salesy or boastful. Do NOT use punchy "Mi ne prodajamo orodja, ampak rezultat" style lines.
@@ -1116,7 +1133,7 @@ const STYLE_GUIDE = `
 You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
 
 B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Pricing (use EXACTLY these numbers if asked): 790 EUR setup (enkratni fee) + 890 EUR na mesec. NEVER quote ranges like "900-1200 EUR".
+Pricing (use EXACTLY this if asked): 900 EUR + DDV na mesec. There is NO setup fee and no one-off cost. NEVER quote ranges, NEVER invent a setup fee, NEVER mention 490/790/890/1200.
 Soft proof (use sparingly, NEVER as a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
 CRITICAL: NEVER promise a specific number of replies, meetings or results (no "50-100 odgovorov mesečno"). We do not guarantee counts and an unmet number burns trust. Talk about what we take off their plate, not a guaranteed outcome.
 Target: B2B companies that want to expand internationally or automate their sales outreach.
@@ -1153,7 +1170,8 @@ WRITING RULES:
 - Never include a phone number
 
 CLOSE / CTA RULES (hard, apply to EVERY reply):
-- Every reply MUST end with exactly ONE concrete next step: either one specific question the lead can answer in a sentence, or two proposed call times (e.g. "Vam ustreza četrtek ob 10.00 ali petek ob 13.00?"). A link alone is NOT a close.
+- Every reply MUST end with exactly ONE concrete next step: either one specific question the lead can answer in a sentence, or the two proposed call times supplied in the DATE rule of the user prompt. A link alone is NOT a close. NEVER invent weekdays, dates, months or seasons yourself.
+- PREFER a question over proposed times when the lead has not yet said they want a call. Two hard time slots pushed at a lukewarm lead read as pressure and get ignored.
 - NEVER promise a future action ("pošljemo vam ponudbo v naslednjih dneh", "javimo se v kratkem", "we'll get back to you", "kmalu vam pripravimo"). FORBIDDEN. Everything you offer must be delivered IN THIS MESSAGE (the link, the answer, the proposed times). If something cannot be delivered now, do not promise it.
 - MIRROR LENGTH: if the lead wrote one short line, reply in max 2 sentences. Never write more than roughly twice the length of their message (signature excluded).
 - Maximum ONE exclamation mark per message, preferably zero. Calm confidence, not cheerleading.
@@ -1831,6 +1849,11 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
   // Pin reply language to the lead's message language (model defaulted to Slovenian).
   const languageRule = buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null);
 
+  // Ground the model in the real date. Without it, drafts hallucinated months
+  // ("vam ustreza ta teden ali raje v januarju?" sent in August) and copied the
+  // example slot pair from the style guide verbatim into nearly every reply.
+  const dateRule = buildDateRule();
+
   // Thread context: last few messages from Airtable so the reply continues the
   // conversation instead of reacting to the last message in a vacuum.
   let threadContext = '';
@@ -1853,7 +1876,7 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly says YES to their exact ask (call stays a call, meeting stays a meeting - mirror their word) and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}`;
+The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly says YES to their exact ask (call stays a call, meeting stays a meeting - mirror their word) and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}${dateRule}`;
   } else if (hasRealMessage) {
     // Structure rotation (anti-template): the old fixed example ("Pripravil sem vam
     // kratek pregled...") leaked verbatim into ~60% of drafts. Pick one of 4 reply
@@ -1861,7 +1884,7 @@ The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote} Wri
     const structures = [
       `STRUCTURE: React to ONE concrete detail from their message in a single sentence, then give the link with a short intro in your own words, then close with one yes/no question about whether this direction makes sense for them.`,
       `STRUCTURE: Answer their point, then ask ONE short question about their current situation (how they handle outreach/quotes today), and offer the link as supporting detail mid-message, not as the closing line.`,
-      `STRUCTURE: Lead with the single most relevant thing we would take off their plate given their role/industry, back it with the link, close by proposing two concrete call times (weekday + hour, e.g. "četrtek ob 10.00 ali petek ob 13.00").`,
+      `STRUCTURE: Lead with the single most relevant thing we would take off their plate given their role/industry, back it with the link, close by proposing the two concrete call times given in the DATE rule below (never invent your own weekdays).`,
       `STRUCTURE: Short and almost casual: one sentence of substance, link in the second sentence, one-line question at the end. Total 3 sentences maximum.`
     ];
     const structIdx = Math.abs([...`${leadData.firstName}${leadData.lastName}${leadData.company || ''}`].reduce((a, c) => a + c.charCodeAt(0), 0)) % structures.length;
@@ -1877,7 +1900,7 @@ Their message: "${theirMessage}"
 
 Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}
 HARD CLOSE RULE: end with exactly ONE concrete question or two proposed call times. NEVER promise a future action ("pošljemo v naslednjih dneh", "javimo se kmalu") - deliver everything in this message.
-HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${addressingRule}${languageRule}${variant.nudge}`;
+HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${addressingRule}${languageRule}${dateRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
@@ -1955,7 +1978,7 @@ async function generateVesnaReply(leadData, theirMessage, hasRealMessage = true)
 ${enrichmentContext}${threadContext}
 ${hasRealMessage ? `Their message: "${theirMessage}"` : `Context: ${theirMessage}`}
 
-Write a short LinkedIn reply in Vesna's name. FIRST address the substance of their message: if they asked something concrete, answer it in one sentence using the company context above - NEVER reply with a generic acknowledgement that ignores their question. ${ctaInstruction} NEVER promise "v naslednjih dneh" or any vague future action. Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null)}`
+Write a short LinkedIn reply in Vesna's name. FIRST address the substance of their message: if they asked something concrete, answer it in one sentence using the company context above - NEVER reply with a generic acknowledgement that ignores their question. ${ctaInstruction} NEVER promise "v naslednjih dneh" or any vague future action. NEVER name a month or a season (you have no calendar and have proposed months already in the past). Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null)}`
     }]
   });
 
@@ -2087,6 +2110,27 @@ function buildLanguageRule(theirMessage, hasRealMessage = true, knownLang = null
   }
   // Unknown: instruct the model to mirror the lead's own language.
   return '\nLANGUAGE (hard): Reply in the EXACT same language the lead used in their message above. Mirror their language and do not switch to Slovenian unless their message is in Slovenian.';
+}
+
+// Date grounding. The model has no clock: drafts proposed months that had already
+// passed ("ta teden ali raje v januarju?" written in August) and reused the example
+// slot pair from the style guide ("torek ob 10.00 ali sreda ob 13.00") in almost
+// every reply. Inject the real date plus two concrete, freshly computed weekdays.
+const SL_WEEKDAYS = ['nedelja', 'ponedeljek', 'torek', 'sreda', 'četrtek', 'petek', 'sobota'];
+const SL_WEEKDAY_ACC = ['nedeljo', 'ponedeljek', 'torek', 'sredo', 'četrtek', 'petek', 'soboto'];
+function buildDateRule() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Ljubljana' }));
+  const human = now.toLocaleDateString('sl-SI', { day: 'numeric', month: 'long', year: 'numeric' });
+  // Next two business days, at least 1 day out, skipping weekends.
+  const days = [];
+  for (let i = 1; days.length < 2 && i <= 10; i++) {
+    const d = new Date(now.getTime() + i * 86400000);
+    const dow = d.getDay();
+    if (dow === 0 || dow === 6) continue;
+    days.push(SL_WEEKDAY_ACC[dow]);
+  }
+  const [d1, d2] = days;
+  return `\nDATE (hard): Today is ${human} (${SL_WEEKDAYS[now.getDay()]}). NEVER name a month or a season - the model has repeatedly proposed months that were already in the past. If you propose call times, use ONLY these two, exactly as written: "${d1} ob 10.00" and "${d2} ob 13.00". Do NOT invent other weekdays, do NOT copy example times from the style guide, and never write "ta teden ali naslednji mesec" style vagueness.`;
 }
 
 // Hard addressing instruction string, derived from the lead's own message.
@@ -2222,10 +2266,10 @@ async function classifyMessage(message) {
 INTENT (one of):
 auto_reply = an AUTOMATED absence/auto-responder message, not written as a reply to us: out-of-office, "sem odsoten do", "na dopustu", "vrnem se", maternity/sick leave, "limited access to email", generic "thank you for your email, we will get back to you" auto-acks. KEY TEST: the message announces absence or is an automatic acknowledgement. This OVERRIDES every other intent.
 unsubscribe = explicitly asks to stop contacting them or be removed: "odjava", "odjavi me", "ne pošiljaj več", "remove me from your list", "stop messaging me", "ne kontaktirajte me več"
-negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani"
+negative = clearly not interested: "ni aktualno", "ne zanima", "ne potrebujemo", "not interested", "no thanks", "nismo zainteresirani". HARD LIMIT: a message that asks what we actually do, says they do not understand us, doubts we know their industry, or pushes back with a question is NOT negative - it is positive (an objection is engagement). Only classify negative when there is an explicit refusal and NO question.
 soft_negative = explicitly deferring to later WITHOUT engaging now: "morda v prihodnosti", "za zdaj ne", "kdaj drugič", "maybe later", "trenutno ne". NOTE: someone who asks for more info or says they will continue IF it is relevant is NOT soft_negative.
 vendor_pitch = THEY are selling or promoting something TO US instead of responding to our offer: a pitch for their own product/service/agency, an event/webinar/conference invitation, a newsletter, product-update digest or promo blast, a course/program promotion, recruiting spam, or a SCAM claiming WE contacted THEM first ("thanks for reaching out over our web chat", "following up on your inquiry") when they are a stranger. Examples: "join us for our event", "we help companies like yours grow", "check out our platform", "vam pomagam izboljšati prodajne strategije", "are you ready to take your startup global". KEY TEST: if the message would read the same even if we had never written to them, it is vendor_pitch. This OVERRIDES positive: a friendly sales pitch to us is vendor_pitch, NOT positive.
-positive = interested IN OUR OFFER, asking a question about it, asking for more info/details, open to continuing the conversation, wants to talk. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email"
+positive = interested IN OUR OFFER, asking a question about it, asking for more info/details, open to continuing the conversation, wants to talk, OR raising an objection in question form. Examples: "kako bi to naredili?", "kaj ponujate?", "pošljite mi več informacij", "če bo aktualno, nadaljujemo", "pošljite na email", "ne razumem, kaj točno bi vi pripravili za našo dejavnost", "naša panoga je specifična, ne vem, če jo razumete"
 neutral = just acknowledging, unclear intent, short reply like "ok", "hvala", "v redu"
 
 LANGUAGE (of THEIR message, one of): sl, en, de, cs, other
@@ -2269,7 +2313,7 @@ GENERATOR (AIERA Generator ponudb - SaaS for sales teams that send B2B offers/qu
 - Industries: manufacturing, construction, IT services, distribution, electromechanical, HVAC, engineering, agencies, consulting, wholesale, technical services
 - THIS IS THE DEFAULT FOR SLOVENIAN LEADS
 
-B2BOOSTER (B2B AI outreach service, 790 EUR setup + 890 EUR/mo):
+B2BOOSTER (B2B AI outreach service, 900 EUR + VAT / month, no setup fee):
 - Done-for-you cold outreach: LinkedIn + email + AI replies + meeting booking
 - We do outreach FOR them (vs Generator which is a tool THEY use to send offers)
 - Best for B2B sellers needing pipeline/sales meetings into FOREIGN markets
@@ -3014,7 +3058,7 @@ RULES (strict):
 - Language: write in the language the lead used on LinkedIn (Slovenian default). Slovenian: vikanje unless THEIR message used tikanje; correct šumniki (š, č, ž).
 - NEVER use dashes (pomišljaji "—"); use commas or hyphens "-". No bullet points. No negative words (problem, težava, izziv).
 - NEVER use dvojina ("se slišiva", "pogledava") - use 1st plural. No banned cliches ("rezerviraj si termin", "se vidiva").
-- Pricing only if they explicitly asked: 790 EUR setup + 890 EUR na mesec, never ranges. NEVER promise reply/meeting counts.
+- Pricing only if they explicitly asked: 900 EUR + DDV na mesec, brez setup stroška. Never ranges, never invent a setup fee. NEVER promise reply/meeting counts.
 - Never include a phone number in the body.
 
 OUTPUT FORMAT (strict):

@@ -55,7 +55,7 @@ const ALLOWED_PROPER = [
   // ours
   'AIERA', 'Zan', 'Bagaric', 'B2Booster', 'Booster',
   // references
-  'Munchies', 'Megasplet', 'Valtheron', 'NordLogistics', 'RedEyeMonkey',
+  'Munchies', 'Valtheron', 'RedEyeMonkey',
   // tech
   'Claude', 'OpenAI', 'Gemini', 'Google', 'LinkedIn', 'Instagram', 'TikTok',
   'Facebook', 'YouTube', 'Calendly', 'Shopify', 'WordPress', 'Excel', 'Slack',

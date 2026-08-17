@@ -29,7 +29,9 @@ const REFERENCES = (process.env.OFFER_REFERENCES !== undefined
   : 'MUNCHIES,Valtheron,RedEyeMonkey')
   .split(',').map(s => s.trim()).filter(Boolean);
 // Same rule for the headline count - only shown when the reference row is.
-const REFERENCES_MORE = process.env.OFFER_REFERENCES_MORE || '+ 30 podjetij v SI in EU';
+// Empty by default: "+ 30 podjetij" was never true and a buyer who checks is lost.
+// Set OFFER_REFERENCES_MORE only with a number that can be defended.
+const REFERENCES_MORE = process.env.OFFER_REFERENCES_MORE || '';
 
 // Closing line that is true whichever modules were picked. The per-module result
 // lines come from modules.js, so the section can never advertise an outcome from
