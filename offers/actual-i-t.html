@@ -1,303 +1,695 @@
 <!DOCTYPE html>
 <html lang="sl">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>AIERA x ACTUAL I.T. - personalizirana ponudba</title>
-<meta name="description" content="Predlog AI rešitev za ACTUAL I.T.. Pripravil Žan Bagarič, AIERA.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-  :root { --navy:#0b1526; --ink:#1e293b; --body:#475569; --muted:#94a3b8; --brand:#2563eb; --brand-dark:#1d4ed8; --soft:#eff6ff; --bg-alt:#f8fafc; --line:#e2e8f0; }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'Inter',-apple-system,sans-serif; color:var(--ink); background:#fff; line-height:1.6; -webkit-font-smoothing:antialiased; }
-  .wrap { max-width:1040px; margin:0 auto; padding:0 24px; }
-  .eyebrow { display:inline-block; font-size:12px; font-weight:700; letter-spacing:0.12em; color:var(--brand); text-transform:uppercase; margin-bottom:14px; }
-  h2 { font-size:30px; font-weight:800; letter-spacing:-0.02em; color:var(--navy); line-height:1.15; margin-bottom:14px; max-width:760px; }
-  .intro { font-size:16px; color:var(--brand-dark); font-weight:600; max-width:720px; margin-bottom:10px; }
-  .body { font-size:16px; color:var(--body); max-width:720px; }
-  header { position:sticky; top:0; background:rgba(255,255,255,0.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); z-index:10; }
-  .nav { display:flex; align-items:center; justify-content:space-between; height:60px; }
-  .lockup { font-weight:800; font-size:15px; color:var(--navy); letter-spacing:0.02em; }
-  .lockup .x { color:var(--muted); font-weight:500; margin:0 7px; }
-  .btn { display:inline-block; background:var(--brand); color:#fff; font-weight:600; font-size:15px; padding:12px 26px; border-radius:8px; text-decoration:none; }
-  .btn:hover { background:var(--brand-dark); }
-  .btn-ghost { background:transparent; color:var(--brand); border:1px solid var(--brand); }
-  .btn-sm { padding:8px 18px; font-size:13px; }
-  .hero { padding:76px 0 56px; background:linear-gradient(180deg,#fff 0%,var(--soft) 100%); }
-  .hero .kicker { font-size:12px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-bottom:18px; }
-  .hero h1 { font-size:52px; font-weight:800; letter-spacing:-0.03em; color:var(--navy); line-height:1.06; max-width:860px; margin-bottom:20px; }
-  .hero .sub { font-size:18px; color:var(--body); max-width:700px; margin-bottom:14px; }
-  .hero .byline { font-size:13px; color:var(--muted); margin-bottom:28px; }
-  .cta-row { display:flex; gap:14px; flex-wrap:wrap; }
-  .stack { padding:26px 0; border-bottom:1px solid var(--line); }
-  .stack .wrap { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .stack .label { font-size:11px; font-weight:700; letter-spacing:0.12em; color:var(--muted); margin-right:6px; }
-  .badge { font-size:12px; font-weight:600; color:var(--ink); background:var(--bg-alt); border:1px solid var(--line); border-radius:999px; padding:5px 13px; }
-  section.block { padding:64px 0; }
-  section.alt, section.block.alt { background:var(--bg-alt); }
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin-top:28px; }
-  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px 22px; }
-  section.alt .card { background:#fff; }
-  .card h4 { font-size:15px; font-weight:700; color:var(--navy); margin-bottom:6px; }
-  .card p { font-size:14px; color:var(--body); }
-  .refs { padding:34px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
-  .refs .wrap { display:flex; align-items:center; gap:22px; flex-wrap:wrap; }
-  .refs .label { font-size:11px; font-weight:700; letter-spacing:0.12em; color:var(--muted); }
-  .refs .name { font-size:14px; font-weight:700; color:var(--ink); opacity:0.75; }
-  .refs .more { font-size:13px; color:var(--muted); }
-  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }
-  .chip { font-size:12px; font-weight:600; color:var(--brand-dark); background:var(--soft); border-radius:999px; padding:5px 13px; }
-  section.solution { padding:64px 0; }
-  .pricing { margin-top:30px; background:var(--navy); border-radius:14px; padding:28px 30px; color:#fff; max-width:720px; }
-  .pricing-label { font-size:11px; font-weight:700; letter-spacing:0.14em; color:#93c5fd; margin-bottom:10px; }
-  .pricing-lines { display:flex; gap:26px; flex-wrap:wrap; font-size:22px; font-weight:800; margin-bottom:10px; }
-  .pricing-note { font-size:13px; color:#cbd5e1; }
-  .list { margin-top:22px; display:grid; gap:10px; max-width:720px; }
-  .list .item { display:flex; gap:10px; font-size:15px; color:var(--ink); }
-  .list .dot { color:var(--brand); font-weight:800; }
-  .final { padding:80px 0; background:var(--navy); color:#fff; text-align:center; }
-  .final h2 { color:#fff; margin:0 auto 14px; }
-  .final p { color:#cbd5e1; max-width:640px; margin:0 auto 30px; font-size:16px; }
-  footer { padding:36px 0; }
-  footer .wrap { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
-  footer .who { font-size:14px; color:var(--body); }
-  footer .who strong { color:var(--navy); }
-  footer .for { font-size:12px; color:var(--muted); }
-  @media (max-width:720px) { .hero h1 { font-size:34px; } h2 { font-size:24px; } .hero { padding:52px 0 40px; } }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>ACTUAL I.T. - AI Proposal · AIERA</title>
+  <meta name="description" content="A tailored AI proposal for ACTUAL I.T. - how a custom AI layer over existing systems can accelerate proposal workflows and sharpen competitive edge.">
+  <meta property="og:title" content="ACTUAL I.T. - AI Proposal · AIERA">
+  <meta property="og:description" content="A tailored AI proposal for ACTUAL I.T. - how a custom AI layer over existing systems can accelerate proposal workflows and sharpen competitive edge.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Orbitron:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+:root {
+  --primary: #7C3BED;
+  --secondary: #EE4F84;
+  --accent-o: #FA9938;
+  --primary-soft: #F1EBFD;
+  --ink: #14121F;
+  --ink-soft: #2A2738;
+  --body-c: #55516B;
+  --muted: #767288;
+  --paper: #F6F5FA;
+  --surface: #FFFFFF;
+  --border: #E6E4EF;
+  --border-strong: #D8D5E6;
+  --grad: linear-gradient(135deg, #7C3BED, #EE4F84, #FA9938);
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+  counter-reset: section;
+}
+h1, h2, h3 {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+h4 { font-family: 'Space Grotesk', sans-serif; color: var(--ink); margin: 0; }
+p { margin: 0; }
+a { color: inherit; text-decoration: none; }
+.serif-accent { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; letter-spacing: -0.01em; }
+.grad-text {
+  background: linear-gradient(135deg, #7C3BED, #EE4F84, #FA9938, #7C3BED);
+  background-size: 300% 300%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  animation: grad-shift 6s ease-in-out infinite;
+}
+@keyframes grad-shift { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+.kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--primary);
+  display: block;
+}
+.section { padding: 104px 0 12px; }
+.section .wrap { border-top: 1px solid var(--border-strong); padding-top: 34px; }
+.section .kicker { counter-increment: section; }
+.section .kicker::before { content: counter(section, decimal-leading-zero) " — "; color: var(--muted); font-weight: 500; }
+.section h2 { font-size: 33px; line-height: 1.16; max-width: 720px; margin: 16px 0 0; }
+.section-lead { color: var(--body-c); font-size: 16.5px; line-height: 1.65; max-width: 640px; margin: 16px 0 0; }
+@media (max-width: 720px) { .section { padding: 68px 0 8px; } .section h2 { font-size: 26px; } }
+
+/* TOP PERSONALIZED BANNER */
+.banner { background: var(--ink); color: rgba(255,255,255,0.92); }
+.banner-inner {
+  max-width: 1080px; margin: 0 auto; padding: 10px 28px;
+  font-size: 12.5px; letter-spacing: 0.02em;
+}
+.banner-inner .lab {
+  color: transparent; background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  margin-right: 12px; text-transform: uppercase; letter-spacing: 0.14em; font-size: 10.5px; font-weight: 700;
+}
+
+/* HEADER */
+.header { border-bottom: 1px solid var(--border); background: rgba(246,245,250,0.9); backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 50; }
+.header-inner {
+  max-width: 1080px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 28px;
+}
+.brand-lockup {
+  font-family: 'Orbitron', 'Space Grotesk', sans-serif;
+  font-size: 15px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink);
+}
+.brand-lockup .aiera {
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.brand-lockup .sep { color: var(--muted); margin: 0 10px; font-weight: 400; font-family: 'DM Sans', sans-serif; }
+.brand-lockup .target { font-family: 'Space Grotesk', sans-serif; letter-spacing: 0.04em; font-size: 13.5px; color: var(--ink-soft); }
+
+/* BUTTONS */
+.btn {
+  display: inline-block;
+  padding: 13px 28px;
+  font-size: 14.5px; font-weight: 600; font-family: 'DM Sans', sans-serif;
+  border-radius: 999px; border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+.btn-primary {
+  background: var(--grad); background-size: 200% 200%;
+  color: #fff;
+  box-shadow: 0 8px 24px -10px rgba(124, 59, 237, 0.55);
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 28px -10px rgba(238, 79, 132, 0.55); }
+.header-link { font-size: 13.5px; font-weight: 700; color: var(--primary); }
+.header-link:hover { color: var(--secondary); }
+
+/* HERO */
+.hero { padding: 92px 0 100px; position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; top: -180px; right: -140px; width: 520px; height: 520px;
+  background: radial-gradient(circle, rgba(124,59,237,0.14), transparent 65%);
+  pointer-events: none;
+}
+.hero::after {
+  content: ''; position: absolute; bottom: -220px; left: -160px; width: 560px; height: 560px;
+  background: radial-gradient(circle, rgba(238,79,132,0.10), transparent 65%);
+  pointer-events: none;
+}
+.hero-grid { position: relative; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: start; z-index: 1; }
+@media (max-width: 920px) { .hero-grid { grid-template-columns: 1fr; gap: 44px; } }
+.hero-kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted);
+}
+.hero-kicker .accent { color: var(--primary); }
+.hero h1 { font-size: 54px; line-height: 1.06; letter-spacing: -0.025em; margin-top: 22px; }
+.hero h1 .brand-line {
+  background: linear-gradient(135deg, #7C3BED, #EE4F84, #FA9938, #7C3BED);
+  background-size: 300% 300%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  animation: grad-shift 6s ease-in-out infinite;
+}
+@media (max-width: 720px) { .hero h1 { font-size: 36px; } }
+.hero-lead { color: var(--body-c); font-size: 17.5px; line-height: 1.65; max-width: 520px; margin-top: 22px; }
+.hero-cta-row { display: flex; align-items: center; gap: 26px; margin-top: 40px; flex-wrap: wrap; }
+.hero-scroll { font-size: 14px; font-weight: 600; color: var(--ink-soft); }
+.hero-scroll:hover { color: var(--primary); }
+.hero-trust { margin-top: 38px; font-size: 13px; font-weight: 500; letter-spacing: 0.01em; color: var(--muted); }
+.hero-trust .sep { margin: 0 12px; color: var(--border-strong); }
+
+/* HERO EXAMPLE CARD (ilustrativni primer) */
+.example-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+  box-shadow: 0 24px 48px -28px rgba(20, 18, 31, 0.25);
+  overflow: hidden;
+}
+.example-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--muted);
+}
+.example-head .t { color: var(--ink-soft); }
+.example-body { padding: 22px; }
+.example-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+.example-stat { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.example-stat .lab { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
+.example-stat .num { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 24px; color: var(--ink); margin-top: 4px; }
+.example-stat .num small { font-size: 12px; color: var(--secondary); font-weight: 700; margin-left: 4px; }
+.example-q { font-size: 14px; color: var(--ink-soft); padding: 12px 16px; background: var(--paper); border: 1px solid var(--border); border-radius: 14px; }
+.example-q::before { content: 'V: '; font-weight: 700; color: var(--muted); }
+.example-a { font-size: 14px; color: var(--ink); padding: 12px 16px; margin-top: 10px; background: var(--primary-soft); border-radius: 14px; }
+.example-a::before { content: 'AI: '; font-weight: 700; color: var(--primary); }
+.example-a strong { color: var(--primary); font-weight: 700; }
+.example-src { margin-top: 14px; font-size: 11.5px; color: var(--muted); }
+
+/* REFERENCES */
+.refs { border-top: 1px solid var(--border); padding: 30px 0; background: var(--surface); }
+.refs-inner { display: flex; align-items: baseline; gap: 28px; flex-wrap: wrap; }
+.refs-label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
+.refs-list { display: flex; gap: 28px; flex-wrap: wrap; align-items: baseline; }
+.ref-name { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 15px; color: var(--ink-soft); }
+
+/* KONTEKST CARDS */
+.cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 48px; }
+@media (max-width: 720px) { .cards-grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 26px 28px 28px;
+}
+.card h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; line-height: 1.35; }
+.card p { color: var(--body-c); font-size: 14px; line-height: 1.55; }
+
+/* AI STACK */
+.stack-row { margin-top: 36px; display: flex; flex-wrap: wrap; gap: 10px; }
+.stack-chip {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+  padding: 8px 18px; font-size: 13px; font-weight: 500; color: var(--ink-soft);
+}
+
+/* REŠITVE - numbered list */
+.modules-list { margin-top: 48px; display: grid; gap: 18px; }
+.module {
+  display: grid; grid-template-columns: 72px 1fr; gap: 28px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+  padding: 34px 38px;
+}
+@media (max-width: 720px) { .module { grid-template-columns: 1fr; gap: 10px; padding: 24px; } }
+.module-num {
+  font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; line-height: 1;
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.module h3 { font-size: 20px; font-weight: 600; margin-bottom: 10px; }
+.module p { color: var(--body-c); font-size: 14.5px; line-height: 1.6; max-width: 640px; }
+.module-example { margin-top: 16px; padding: 12px 18px; border-left: 3px solid var(--primary); background: var(--primary-soft); border-radius: 0 12px 12px 0; }
+.module-example .lab { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--primary); margin-bottom: 6px; }
+.module-example .quote { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-size: 15.5px; color: var(--ink-soft); line-height: 1.5; max-width: 580px; }
+
+/* ARHITEKTURA */
+.arch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 48px; align-items: start; }
+@media (max-width: 880px) { .arch-grid { grid-template-columns: 1fr; } }
+.arch-text { color: var(--body-c); font-size: 15.5px; line-height: 1.65; }
+.arch-text p + p { margin-top: 16px; }
+.arch-stack { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
+.arch-row { display: flex; align-items: center; gap: 16px; padding: 16px 22px; border-top: 1px solid var(--border); }
+.arch-row:first-child { border-top: 0; }
+.arch-row.brand { background: var(--primary-soft); }
+.arch-row .ic { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: var(--muted); width: 22px; flex-shrink: 0; }
+.arch-row .lab { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 700; color: var(--muted); display: block; }
+.arch-row .val { font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); }
+.arch-row.brand .val { color: var(--primary); }
+
+/* PERSONA SPOTLIGHT */
+.spotlight {
+  margin-top: 48px; padding: 44px 48px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 20px;
+  position: relative; overflow: hidden;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 44px;
+}
+.spotlight::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--grad); }
+@media (max-width: 880px) { .spotlight { grid-template-columns: 1fr; padding: 28px 24px; } }
+.spotlight-left h3 { font-size: 25px; line-height: 1.2; margin: 14px 0 16px; }
+.spotlight-left h3 .serif-accent { font-size: 1.05em; }
+.spotlight-left p { color: var(--body-c); font-size: 15.5px; line-height: 1.6; }
+.spotlight-right { display: grid; gap: 13px; align-content: start; }
+.bullet { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 14.5px; color: var(--ink-soft); line-height: 1.5; }
+.bullet .ic { color: var(--secondary); font-weight: 700; }
+
+/* BENEFITS */
+.benefits-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 48px; }
+@media (max-width: 880px) { .benefits-grid { grid-template-columns: 1fr; } }
+.benefit-col { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 32px 36px; }
+.benefit-col .lab { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; color: var(--primary); margin-bottom: 16px; }
+.benefit-col h4 { font-size: 20px; font-weight: 600; line-height: 1.3; margin-bottom: 16px; }
+.benefit-list { display: grid; gap: 10px; }
+.benefit-list .item { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.benefit-list .item .ic { color: var(--secondary); font-weight: 700; }
+
+/* VARNOST checklist */
+.safety-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; margin-top: 44px; max-width: 840px; }
+@media (max-width: 720px) { .safety-grid { grid-template-columns: 1fr; } }
+.safety-grid .item {
+  display: grid; grid-template-columns: 18px 1fr; gap: 12px;
+  font-size: 14.5px; color: var(--ink-soft); line-height: 1.5;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.safety-grid .item .ic { color: var(--primary); font-weight: 700; }
+
+/* VARNOST PODATKI */
+.text-block { max-width: 680px; margin: 36px 0 0; color: var(--body-c); font-size: 16px; line-height: 1.68; }
+.text-block p + p { margin-top: 18px; }
+
+/* FAQ */
+.faq-list { max-width: 780px; margin: 44px 0 0; }
+.faq-item { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 10px; }
+.faq-item summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 18px;
+  padding: 20px 24px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 15.5px; font-weight: 600; color: var(--ink);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::after { content: '+'; font-size: 20px; font-weight: 400; color: var(--primary); width: 22px; text-align: center; flex-shrink: 0; }
+.faq-item[open] summary::after { content: '−'; }
+.faq-item .answer { padding: 0 24px 22px; color: var(--body-c); font-size: 14.5px; line-height: 1.65; max-width: 660px; }
+
+/* FINAL CTA */
+.cta-final { margin-top: 104px; background: var(--ink); color: #fff; padding: 96px 0 100px; position: relative; overflow: hidden; }
+.cta-final::before {
+  content: ''; position: absolute; top: -240px; left: 50%; transform: translateX(-50%);
+  width: 720px; height: 720px;
+  background: radial-gradient(circle, rgba(124,59,237,0.35), rgba(238,79,132,0.12) 55%, transparent 75%);
+  pointer-events: none;
+}
+.cta-final-inner { position: relative; max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+.cta-final .kicker { color: var(--accent-o); }
+.cta-final h2 { font-size: 40px; line-height: 1.12; color: #fff; max-width: 660px; margin-top: 16px; }
+@media (max-width: 720px) { .cta-final h2 { font-size: 28px; } }
+.cta-final p { color: rgba(255,255,255,0.75); font-size: 16.5px; line-height: 1.6; margin-top: 20px; max-width: 560px; }
+.cta-final .btn { margin-top: 40px; }
+.cta-final-contact {
+  margin-top: 40px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.14);
+  font-size: 13px; color: rgba(255,255,255,0.6);
+  display: flex; gap: 26px; flex-wrap: wrap;
+}
+.cta-final-contact a { color: rgba(255,255,255,0.88); }
+.cta-final-contact a:hover { color: #fff; }
+
+/* FOOTER */
+.footer { padding: 0 0 36px; background: var(--ink); }
+.footer-inner {
+  max-width: 1080px; margin: 0 auto; padding: 22px 28px 0;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+  font-size: 12px; color: rgba(255,255,255,0.45);
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.footer-inner a { color: rgba(255,255,255,0.7); }
+.footer-inner a:hover { color: #fff; }
 </style>
 </head>
 <body>
-<img src="https://b2booster-reply-bot.onrender.com/pixel/actual-i-t?e=page_view" width="1" height="1" style="position:absolute;opacity:0" alt="">
-<header>
-  <div class="wrap nav">
-    <span class="lockup">AIERA<span class="x">×</span>ACTUAL I.T.</span>
-    <a class="btn btn-sm" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
+<div class="banner">
+  <div class="banner-inner"><span class="lab">Zasebni predlog</span>Mr. Igor Hostnik, Group CEO - ACTUAL I.T.</div>
+</div>
+<header class="header">
+  <div class="header-inner">
+    <div class="brand-lockup"><span class="aiera">AIERA</span><span class="sep">×</span><span class="target">ACTUAL I.T.</span></div>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="header-link">Rezervirajte pogovor</a>
   </div>
 </header>
-
 <section class="hero">
-  <div class="wrap">
-    <p class="kicker">PRIPRAVLJENO ZA IGOR HOSTNIK, GROUP CEO - ACTUAL I.T.</p>
-    <h1>AI za rast ACTUAL I.T. - avtomatizacija in nova poslovna področja</h1>
-    <p class="sub">ACTUAL I.T. že poslužuje stotine strank. AI vam odpira nove kanale za pridobivanje klientov, avtomatizira ponudbe in interno obdelavo naročil, ter omogoča nove storitve, ki jih konkurenca še nima. Praktični sistemi, ki se vpletejo v Vašo infrastrukturo.</p>
-    <p class="byline">Pripravil: Žan Bagarič, AIERA · 30. julij 2026</p>
-    <div class="cta-row">
-      <a class="btn" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
-      <a class="btn btn-ghost" href="#resitve">Predlagane AI rešitve</a>
+  <div class="wrap hero-grid">
+    <div>
+      <span class="hero-kicker"><span class="accent">Predlog sodelovanja</span> · 4. SEPTEMBER 2026</span>
+      <h1>AI layer over your proposal process<br><span class="brand-line">ACTUAL I.T.</span></h1>
+      <p class="hero-lead">Every IT services proposal starts with scoping, pricing, and chasing approvals. When your team handles dozens of active opportunities, that overhead compounds. An AI layer pulls data from your CRM and past projects, drafts structured proposals, and tracks where each one stands - so your people focus on closing, not formatting.</p>
+      <div class="hero-cta-row">
+        <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary">Rezervirajte 15-minutni pogovor</a>
+        <a href="#resitve" class="hero-scroll">Preberite predlog ↓</a>
+      </div>
+      <div class="hero-trust">Team based in Slovenia<span class="sep">·</span>NDA available upfront<span class="sep">·</span>No long-term commitments</div>
+    </div>
+    <div>
+      <div class="example-card">
+    <div class="example-head">
+      <span class="t">Proposal pipeline overview</span>
+      <span>ilustrativni prikaz</span>
+    </div>
+    <div class="example-body">
+      <div class="example-stats">
+        <div class="example-stat">
+          <div class="lab">OPEN PROPOSALS</div>
+          <div class="num">34<small>+6</small></div>
+        </div><div class="example-stat">
+          <div class="lab">AWAITING REVIEW</div>
+          <div class="num">9<small>-2</small></div>
+        </div><div class="example-stat">
+          <div class="lab">AVG. CYCLE</div>
+          <div class="num">11d<small>-3d</small></div>
+        </div>
+      </div>
+      <div class="example-q">Which proposals are waiting for client feedback the longest?</div>
+      <div class="example-a"><strong>3 proposals</strong> have been awaiting client feedback for over 14 days: Client A (infrastructure), Client B (managed services), and Client C (cloud migration). Client A has the highest estimated value.</div>
+      <div class="example-src">Viri: CRM · Proposal docs · Email threads · Project history</div>
+    </div>
+  </div>
     </div>
   </div>
 </section>
-
-<div class="stack">
-  <div class="wrap">
-    <span class="label">AIERA AI STACK</span>
-    <span class="badge">Claude</span><span class="badge">OpenAI</span><span class="badge">Gemini</span><span class="badge">n8n</span><span class="badge">Lovable</span><span class="badge">Cursor</span><span class="badge">Clay</span>
-  </div>
-</div>
-
-<section class="block">
-  <div class="wrap">
-    <span class="eyebrow">ZAKAJ ZDAJ</span>
-    <h2>ACTUAL I.T. ima IT strokovno moč. AI doda hitrost prodaje in nove višine produktivnosti.</h2>
-    <p class="body">V IT servisih je hitrost ključna - kvote, ponudbe, kvalifikacija strank. AI avtomati obdelajo inbound povpraševanja, kreirajo prilagojene ponudbe v minutah, in vas osvobodijo ročnega dela. Hkrati lahko zgradite tudi nove AI-pogonske storitve, ki jih tržite kot lastno dodano vrednost.</p>
-    <div class="cards">
-      <div class="card">
-        <h4>B2B outreach avtomatika</h4>
-        <p>Sistematično generiranje novih IT strank preko email in LinkedIn - brez dodatnih ljudi.</p>
-      </div>
-      <div class="card">
-        <h4>Ponudbe v treh minutah</h4>
-        <p>AI generator prilagodi vašo ponudbo glede na prejeto povpraševanje in jo nemudoma pošlje.</p>
-      </div>
-      <div class="card">
-        <h4>Notranja avtomatizacija</h4>
-        <p>Od inbound maila do osnutka odgovora - AI proces zmanjša ročni dela najmanj 30 %.</p>
-      </div></div>
-  </div>
-</section>
-
-<div class="refs">
-  <div class="wrap">
-    <span class="label">REFERENCE</span>
-    <span class="name">MUNCHIES</span><span class="name">Megasplet</span><span class="name">Valtheron</span><span class="name">B2Booster</span><span class="name">NordLogistics</span><span class="name">RedEyeMonkey</span>
-    <span class="more">+ 30 podjetij v SI in EU</span>
-  </div>
-</div>
-
-<section class="block alt" id="resitve">
-  <div class="wrap">
-    <span class="eyebrow">PREDLAGANE AI REŠITVE</span>
-    <h2>Izbrano za ACTUAL I.T. - 5 rešitev, en izvajalec.</h2>
-    <div class="chips"><span class="chip">1 · pridobivanje novih b2b strank</span><span class="chip">2 · ai generator personaliziranih ponudb</span><span class="chip">3 · ai customer service za maile in sporočila</span><span class="chip">4 · vzpostavitev ai agentov</span><span class="chip">5 · ai chatbot na spletni strani</span></div>
-  </div>
-</section>
-
-
-  <section class="solution">
-    <div class="wrap">
-      <span class="eyebrow">REŠITEV 1: PRIDOBIVANJE NOVIH B2B STRANK</span>
-      <h2>B2Booster - sistematičen kanal novih poslovnih povpraševanj.</h2>
-      <p class="intro">Za IT agencije kot ACTUAL I.T. je sistematična B2B lead-generacija osnova rasti. Naš sistem avtomatizira iskanje, kvalifikacijo in prvi kontakt z novimi potencialnimi strankami - medtem ko Vaš tim vodi prodajne pogovore.</p>
-      <p class="body">Vzpostavimo voden outbound proces, ki sistematično odpira pogovore z odločevalci v podjetjih, ki ustrezajo vašemu idealnemu profilu stranke. Pristop je preverjen na 30+ podjetjih in se v celoti prilagodi vaši ponudbi. Kvalificirano povpraševanje predamo vaši prodajni ekipi, AIERA prevzame celoten operativni del.</p>
-      <div class="cards">
-      <div class="card">
-        <h4>Natančno definiran ICP</h4>
-        <p>Skupaj določimo panoge, velikosti podjetij in trge, kjer je vaša ponudba najmočnejša. Brez razpršenosti.</p>
-      </div>
-      <div class="card">
-        <h4>Nagovor pravih odločevalcev</h4>
-        <p>Osebe, ki dejansko sprožijo nakup in upravljajo budget. Ne info naslovi, ne asistenti brez besede.</p>
-      </div>
-      <div class="card">
-        <h4>Personalizacija s kontekstom</h4>
-        <p>Vsako sporočilo je vezano na konkreten povod pri prejemniku. Brez generičnih šablon.</p>
-      </div>
-      <div class="card">
-        <h4>Predaja vaši ekipi</h4>
-        <p>Vaša prodaja dobi ogret pogovor in termin. AIERA vodi vse do tja - sporočila, followupe, koledar.</p>
-      </div></div>
-      
-    <div class="pricing">
-      <p class="pricing-label">CENA B2B LEAD-GEN SISTEMA</p>
-      <div class="pricing-lines"><span>490 EUR setup</span><span>1.200 EUR / mesec / trg</span></div>
-      <p class="pricing-note">Vključeno: ICP raziskava, baza odločevalcev, sporočila, izvedba outbounda, tedensko poročanje in iteracija. Brez dolgoročnih zavez, 30-dnevna odpoved. Brez DDV.</p>
-    </div>
-    </div>
-  </section>
-
-  <section class="solution alt">
-    <div class="wrap">
-      <span class="eyebrow">REŠITEV 2: AI GENERATOR PERSONALIZIRANIH PONUDB</span>
-      <h2>Iz povpraševanja do polno oblikovane ponudbe v minutah.</h2>
-      <p class="intro">IT ponudbe so kompleksne in časovno intenzivne. AI generator vašo standardno ponudbo prilagodi vsakemu povpraševanju in jo samodzajno oddela - hitreje kot ročna ureja.</p>
-      <p class="body">Prodajna ekipa danes porabi ure za sestavljanje ponudbe, ujemanje z identiteto stranke in oblikovanje dokumenta. AI generator iz kratkega internega brifa pripravi popolnoma personalizirano, profesionalno ponudbo - z vsebino, cenami in pogoji. Ekipi ostane samo potrditev in izboljšava.</p>
-      <div class="cards">
-      <div class="card">
-        <h4>Personalizacija na stranko</h4>
-        <p>Vsaka ponudba vsebuje ime stranke, njeno identiteto in predloge, prilagojene njeni panogi in budgetu.</p>
-      </div>
-      <div class="card">
-        <h4>Konsistentna kvaliteta</h4>
-        <p>Vsaka ponudba na nivoju vaše najboljše. Brez razlik med prodajniki in brez tipkarskih napak ob 22h.</p>
-      </div>
-      <div class="card">
-        <h4>Hitrost kot prednost</h4>
-        <p>Ponudba pri stranki v minutah, ne dnevih. Prvi ponudnik z odgovorom je najpogosteje tudi izbrani.</p>
-      </div></div>
-      
-    </div>
-  </section>
-
-  <section class="solution">
-    <div class="wrap">
-      <span class="eyebrow">REŠITEV 3: AI CUSTOMER SERVICE ZA MAILE IN SPOROČILA</span>
-      <h2>AI pripravi vse odgovore, vaši zaposleni jih le potrjujejo.</h2>
-      <p class="intro">Inbound maili od strank prehitro nalagajo Vaš tim. AI osnutek odgovore, vaš specialist pregleda in odobri - rezultat je boljša odzivnost brez dodatne kadra.</p>
-      <p class="body">AI prebere vsak vhodni mail in sporočilo, razume kontekst v okviru zgodovine stranke in pripravi predlog odgovora. Zaposleni ga z enim klikom potrdi ali popravi. Ko sistem dokazano deluje, za standardne tipe sporočil postopno aktivirate avtopilota.</p>
-      <div class="cards">
-      <div class="card">
-        <h4>1. Predlogi, človek potrjuje</h4>
-        <p>AI pripravi predlog za vsak mail. Vse gre skozi človeka, brez tveganja.</p>
-      </div>
-      <div class="card">
-        <h4>2. Avtopilot za znane primere</h4>
-        <p>Statusi, FAQ in standardne potrditve gredo avtomatsko. Ostalo še vedno potrjuje človek.</p>
-      </div>
-      <div class="card">
-        <h4>3. Razširjen avtopilot z varovalkami</h4>
-        <p>Nabor avtomatskih tipov postopno širimo. Občutljivo in nestandardno vedno eskalira na ekipo.</p>
-      </div></div>
-      
-    </div>
-  </section>
-
-  <section class="solution alt">
-    <div class="wrap">
-      <span class="eyebrow">REŠITEV 4: VZPOSTAVITEV AI AGENTOV</span>
-      <h2>AI agenti, ki za ponovljive procese prevzamejo celoten cikel.</h2>
-      <p class="intro">Ponovljivi IT procesi (naročilo SW licence, vzpostavitev testnega okolja) se spremenijo v avtomatske agente, ki delajo 24/7 in zmanjšajo ročni napor.</p>
-      <p class="body">Za enostavnejša, ponovljiva naročila ali procese vzpostavimo AI agenta, ki celoten tok vodi sam: komunicira s stranko, pripravi ponudbo, sprejme potrditev in podatke strukturirano preda v vaše sisteme. Vaša ekipa se vključi samo pri kompleksnejših primerih ali izjemah.</p>
-      <div class="cards">
-      <div class="card">
-        <h4>Pogovor in ponudba</h4>
-        <p>Agent prevzame povpraševanje, razjasni podrobnosti in samodejno pripravi ponudbo.</p>
-      </div>
-      <div class="card">
-        <h4>Potrditev in predaja</h4>
-        <p>Sprejme potrditev, uredi dokumentacijo in naročilo vnese v vaš ERP ali CRM.</p>
-      </div>
-      <div class="card">
-        <h4>Pametne varovalke</h4>
-        <p>Vsak dvom ali odstopanje eskalira na vašo ekipo. Skupaj definiramo, kaj agent sme prevzeti v celoti.</p>
-      </div></div>
-      
-    </div>
-  </section>
-
-  <section class="solution">
-    <div class="wrap">
-      <span class="eyebrow">REŠITEV 5: AI CHATBOT NA SPLETNI STRANI</span>
-      <h2>Vedno dostopen prvi stik, ki obiskovalca pripelje do odgovora ali povpraševanja.</h2>
-      <p class="intro">Velik del vašega inbound vprašanj je FAQ - cene, tehnične zahteve, roki. AI chatbot 80 % samodzajno obdela in kvalificira, vaš tim pa dobi le vroče stike.</p>
-      <p class="body">AI chatbot v sekundah odgovori na pogosta vprašanja - roki, pogoji, cene, statusi - in obiskovalca, ki je pripravljen na nakup, brez prekinitve preusmeri v povpraševanje ali na pravo osebo v vaši prodaji. Deluje 24/7, v slovenščini in tujih jezikih.</p>
-      <div class="cards">
-      <div class="card">
-        <h4>Takojšnji odgovori</h4>
-        <p>Pogosta vprašanja rešena takoj in dosledno, kadarkoli.</p>
-      </div>
-      <div class="card">
-        <h4>Vodi do ponudbe</h4>
-        <p>Razume potrebo in predlaga konkretne izdelke, povezave in naslednje korake.</p>
-      </div>
-      <div class="card">
-        <h4>Predaja ob pravem trenutku</h4>
-        <p>Ob resnem interesu odpre povpraševanje ali poveže z živim prodajalcem, s celotnim kontekstom.</p>
-      </div></div>
-      
-    </div>
-  </section>
-
-<section class="block alt">
-  <div class="wrap">
-    <span class="eyebrow">PREDLAGAN ZAČETEK</span>
-    <h2>Discovery, izbira prvih dveh modulov, pilot v živi praksi.</h2>
-    <p class="body">Začnite z outbound sistemom za nove stranke in generatorjem ponudb za hitrejšo prodajo - to vam prineša rezultate že v prvih tednih.</p>
-    <div class="list">
-      <div class="item"><span class="dot">✓</span>Discovery delavnica z vašo ekipo</div>
-      <div class="item"><span class="dot">✓</span>Izbira prvih 1-2 modulov z največjim učinkom</div>
-      <div class="item"><span class="dot">✓</span>60-90-dnevni pilot v živi praksi</div>
-      <div class="item"><span class="dot">✓</span>Tedensko poročanje in iteracija</div>
-      <div class="item"><span class="dot">✓</span>Načrt širitve na ostale module</div>
+<section class="refs">
+  <div class="wrap refs-inner">
+    <div class="refs-label">Izbrane stranke AIERA</div>
+    <div class="refs-list">
+      <span class="ref-name">Munchies</span><span class="ref-name">Valtheron</span><span class="ref-name">B2Booster</span><span class="ref-name">RedEyeMonkey</span>
     </div>
   </div>
 </section>
-
-<section class="block">
+<section class="section">
   <div class="wrap">
-    <span class="eyebrow">PRIČAKOVANI REZULTATI</span>
-    <h2>Konkretno, merljivo, kumulativno.</h2>
-    <p class="body">Ne obljubljamo čudežev. Gradimo orodja in proces, ki podjetju ACTUAL I.T. odprejo nove kanale prodaje in razbremenijo ekipo ponavljajočega se dela.</p>
-    <div class="list">
-      <div class="item"><span class="dot">✓</span>Sistematičen, ponovljiv vir B2B povpraševanj</div><div class="item"><span class="dot">✓</span>Krajši čas od povpraševanja do ponudbe</div><div class="item"><span class="dot">✓</span>Avtomatizirana marketinška produkcija</div><div class="item"><span class="dot">✓</span>Višja konverzija spletne strani</div><div class="item"><span class="dot">✓</span>Manj ročnega dela, več strateškega fokusa</div>
+    <span class="kicker">Context</span>
+    <h2>An IT services group with 50+ people generates a lot of proposals - and loses a lot of hours to the mechanics of writing them</h2>
+    <p class="section-lead">ACTUAL I.T. competes on expertise and speed. But the proposal process - scoping technical requirements, pulling references from past projects, aligning pricing, getting internal sign-off - eats into the same hours your senior people need for delivery and client relationships. The bottleneck is rarely knowledge. It is finding and assembling that knowledge fast enough.</p>
+    <div class="cards-grid">
+      <div class="card">
+        <h3>Scattered project history</h3>
+        <p>Past deliverables sit in different systems, hard to search and reuse.</p>
+      </div><div class="card">
+        <h3>Manual proposal assembly</h3>
+        <p>Each proposal is built from scratch instead of leveraging existing templates and data.</p>
+      </div><div class="card">
+        <h3>Slow feedback loops</h3>
+        <p>Proposals wait in internal queues while competitors respond faster.</p>
+      </div><div class="card">
+        <h3>No pipeline visibility</h3>
+        <p>Leadership sees proposal status only when someone asks - not in real time.</p>
+      </div>
     </div>
   </div>
 </section>
-
-<section class="final">
+<section class="section" id="resitve">
   <div class="wrap">
-    <h2>Pogovorimo se, kje bi AI podjetju ACTUAL I.T. prinesel največ vrednosti.</h2>
-    <p>Bi Vas rad povabil na kratko pogovor, kjer skupaj presodimo, kateri AI sistem se najbolje ujema z Vašimi trenutnimi prioritetami. Potrebno je le 20 minut - in že vidite konkretne možnosti za rast ACTUAL I.T.</p>
-    <a class="btn" href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener">Rezervirajte klic</a>
+    <span class="kicker">Possible solutions</span>
+    <h2>What we could build for ACTUAL I.T.</h2>
+    <p class="section-lead">Each module connects to your existing tools - nothing gets replaced, everything gets a layer of intelligence on top.</p>
+    <div class="modules-list">
+      <div class="module">
+        <div class="module-num">01</div>
+        <div>
+          <h3>AI proposal drafting engine</h3>
+          <p>Pulls scope details, past project references, and pricing benchmarks from your CRM and document storage. Generates a structured proposal draft your team reviews and refines - not a blank page. Cuts the assembly phase down to minutes.</p>
+          <div class="module-example">
+            <div class="lab">Primer uporabe</div>
+            <div class="quote">&quot;Draft ready for Project D - cloud migration scope, 3 reference projects attached, pricing pre-filled from comparable deals.&quot;</div>
+          </div>
+        </div>
+      </div><div class="module">
+        <div class="module-num">02</div>
+        <div>
+          <h3>Proposal pipeline dashboard</h3>
+          <p>A single screen showing every open proposal, its stage, owner, and days since last activity. Flags stalled deals automatically. Gives you a real-time view without chasing account managers for updates.</p>
+          <div class="module-example">
+            <div class="lab">Primer uporabe</div>
+            <div class="quote">&quot;2 proposals idle for 10+ days. Client E has not opened the last follow-up email.&quot;</div>
+          </div>
+        </div>
+      </div><div class="module">
+        <div class="module-num">03</div>
+        <div>
+          <h3>Internal knowledge assistant</h3>
+          <p>Your team asks questions in plain language and gets answers sourced from internal documentation, past proposals, and project records. No more digging through folders or pinging colleagues for information that already exists somewhere.</p>
+          <div class="module-example">
+            <div class="lab">Primer uporabe</div>
+            <div class="quote">&quot;We delivered a similar AD migration for Client F in Q2 - here is the scope summary and lessons learned.&quot;</div>
+          </div>
+        </div>
+      </div><div class="module">
+        <div class="module-num">04</div>
+        <div>
+          <h3>AI-assisted client communication</h3>
+          <p>Generates follow-up emails, meeting summaries, and status updates based on CRM data and recent interactions. Keeps the tone consistent with your brand. Your people approve and send - the drafting happens in seconds.</p>
+          <div class="module-example">
+            <div class="lab">Primer uporabe</div>
+            <div class="quote">&quot;Follow-up drafted for Client G - references their last question about SLA terms and attaches the updated proposal.&quot;</div>
+          </div>
+        </div>
+      </div><div class="module">
+        <div class="module-num">05</div>
+        <div>
+          <h3>Management reporting layer</h3>
+          <p>Weekly and monthly reports generated automatically: win rates, average cycle times, revenue pipeline by service line. No manual spreadsheet work. Data comes straight from your live systems.</p>
+          <div class="module-example">
+            <div class="lab">Primer uporabe</div>
+            <div class="quote">&quot;May report: 28 proposals sent, 11 closed-won, average cycle 13 days. Managed services pipeline up 18% vs. April.&quot;</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
-
-<footer>
+<section class="section">
   <div class="wrap">
-    <span class="who"><strong>Žan Bagarič</strong> · AIERA</span>
-    <span class="for">Za Igor Hostnik, Group CEO - ACTUAL I.T. · 30. julij 2026</span>
+    <span class="kicker">Arhitektura</span>
+    <h2>This is not a single tool. It is a secure AI layer over the systems ACTUAL I.T. already uses.</h2>
+    <p class="section-lead">Nothing gets replaced. The AI reads from your existing sources, processes information, and delivers results where your team already works.</p>
+    <div class="arch-grid">
+      <div class="arch-text">
+        <p>Your CRM, document storage, email, and project management tools stay exactly as they are. The AI layer connects to them via APIs and reads what it needs - project records, proposal templates, client communication history.</p><p>Processing happens on secure infrastructure. Every query is logged, every output is traceable. Your data does not leave controlled environments and is never used to train third-party models.</p><p>Each module works independently. You can start with proposal drafting alone and add pipeline visibility or reporting later. Nothing depends on everything else being live first.</p>
+      </div>
+      <div class="arch-stack">
+        <div class="arch-row">
+          <span class="ic">01</span>
+          <div><span class="lab">SOURCES</span><div class="val">CRM · document storage · email · project management</div></div>
+        </div><div class="arch-row">
+          <span class="ic">02</span>
+          <div><span class="lab">INTEGRATION</span><div class="val">API connectors · n8n · Make · Airtable</div></div>
+        </div><div class="arch-row brand">
+          <span class="ic">03</span>
+          <div><span class="lab">AI LAYER</span><div class="val">Claude · OpenAI · custom logic · AIERA orchestration</div></div>
+        </div><div class="arch-row">
+          <span class="ic">04</span>
+          <div><span class="lab">OUTPUT</span><div class="val">Proposal drafts · dashboards · reports · follow-ups</div></div>
+        </div><div class="arch-row">
+          <span class="ic">05</span>
+          <div><span class="lab">CONTROL</span><div class="val">Audit logs · role-based access · human approval gates</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="spotlight">
+      <div class="spotlight-left">
+        <span class="kicker">ZA VODSTVO</span>
+        <h3>What this means for you as Group CEO</h3>
+        <p>You run a group with multiple business lines and 50+ people. Your competitive edge depends on how fast ACTUAL I.T. can respond to opportunities and how well you see the full pipeline. AI does not change your strategy - it removes the friction between a decision and its execution.</p>
+      </div>
+      <div class="spotlight-right">
+        <div class="bullet"><span class="ic">✓</span><span>Real-time pipeline visibility across all business lines</span></div><div class="bullet"><span class="ic">✓</span><span>Proposals go out faster without adding headcount</span></div><div class="bullet"><span class="ic">✓</span><span>Senior people spend time on clients, not on document assembly</span></div><div class="bullet"><span class="ic">✓</span><span>Consistent quality across every proposal your team sends</span></div><div class="bullet"><span class="ic">✓</span><span>Clear data on win rates, cycle times, and bottlenecks</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <span class="kicker">Vpliv</span>
+    <h2>Less searching, less admin, more time on work that wins deals</h2>
+    <div class="benefits-grid">
+      <div class="benefit-col">
+        <div class="lab">FOR YOUR TEAM</div>
+        <h4>Fewer repetitive tasks, faster output</h4>
+        <div class="benefit-list">
+          <div class="item"><span class="ic">✓</span><span>Proposal drafts ready in minutes, not hours</span></div><div class="item"><span class="ic">✓</span><span>Past project data found instantly via plain-language search</span></div><div class="item"><span class="ic">✓</span><span>Follow-up emails drafted automatically from CRM context</span></div><div class="item"><span class="ic">✓</span><span>No more switching between five tools to build one document</span></div>
+        </div>
+      </div>
+      <div class="benefit-col">
+        <div class="lab">FOR LEADERSHIP</div>
+        <h4>Full visibility without chasing updates</h4>
+        <div class="benefit-list">
+          <div class="item"><span class="ic">✓</span><span>Live pipeline dashboard across all service lines</span></div><div class="item"><span class="ic">✓</span><span>Automated weekly reports with real metrics</span></div><div class="item"><span class="ic">✓</span><span>Early warning on stalled proposals</span></div><div class="item"><span class="ic">✓</span><span>Data-backed decisions on where to focus sales effort</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <span class="kicker">Varnost in omejitve</span>
+    <h2>AI should assist, not decide on behalf of your people</h2>
+    <p class="section-lead">ACTUAL I.T. handles client infrastructure and sensitive business data. Any AI system we build respects that reality. Human approval stays in the loop at every step - the AI drafts, your team decides.</p>
+    <div class="safety-grid">
+      <div class="item"><span class="ic">✓</span><span>Your data never trains third-party models</span></div><div class="item"><span class="ic">✓</span><span>Every AI output is logged and traceable</span></div><div class="item"><span class="ic">✓</span><span>Role-based access controls on all modules</span></div><div class="item"><span class="ic">✓</span><span>Human approval required before any external output</span></div><div class="item"><span class="ic">✓</span><span>Full NDA before any data is shared</span></div><div class="item"><span class="ic">✓</span><span>You can turn off any module at any time</span></div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <span class="kicker">Vprašanja</span>
+    <h2>Common questions</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>How long before we see something working in practice?</summary>
+        <div class="answer">That depends on scope and which module we start with. We define timelines together on the intro call based on your priorities. First working versions are typically fast because we build on existing infrastructure.</div>
+      </details><details class="faq-item">
+        <summary>Does this require changes to our current tools or workflows?</summary>
+        <div class="answer">No. The AI layer connects to your existing systems via API. Your team keeps using the tools they know. The AI adds a layer on top - it does not replace anything underneath.</div>
+      </details><details class="faq-item">
+        <summary>What if the team resists using yet another tool?</summary>
+        <div class="answer">The output shows up where your people already work - in their inbox, CRM, or a simple dashboard. There is no new complex platform to learn. If a module does not get used, we adjust or remove it.</div>
+      </details><details class="faq-item">
+        <summary>How do we measure whether this actually delivers value?</summary>
+        <div class="answer">We look at concrete metrics together - proposal cycle time, hours spent on assembly, pipeline accuracy. The exact KPIs depend on what matters most to you. We define them on the intro call.</div>
+      </details><details class="faq-item">
+        <summary>What is the first step if we want to explore this?</summary>
+        <div class="answer">A 15-minute call where you walk us through your current process and priorities. No preparation needed on your side. From there, we outline what makes sense and what does not.</div>
+      </details>
+    </div>
+  </div>
+</section>
+<section class="cta-final">
+  <div class="cta-final-inner">
+    <span class="kicker">Naslednji korak</span>
+    <h2>Proposal: a 15-minute look at what makes sense for ACTUAL I.T.</h2>
+    <p>No pitch deck, no generic demo. You describe how proposals and pipeline tracking work today at ACTUAL I.T., and we outline where AI would make a measurable difference - and where it would not. Fifteen minutes, then you decide.</p>
+    <a href="https://calendly.com/aiera-koledar/aiera-ai" target="_blank" rel="noopener" class="btn btn-primary">Rezervirajte 15-minutni pogovor</a>
+    <div class="cta-final-contact">
+      <span>Žan Bagarič · CEO AIERA</span>
+      <a href="mailto:zan@aiera.si">zan@aiera.si</a>
+      <a href="tel:+38640708327">+386 40 708 327</a>
+    </div>
+  </div>
+</section>
+<footer class="footer">
+  <div class="footer-inner">
+    <span>© 2026 AIERA d.o.o. · Predlog je pripravljen izključno za naslovnika.</span>
+    <span><a href="https://aiera.si" target="_blank" rel="noopener">aiera.si</a></span>
   </div>
 </footer>
+<script>
+(function(){
+  var endpoint = "https://b2booster-reply-bot.onrender.com/pixel/actual-i-t";
+  var slug = "actual-i-t";
+  var started = Date.now();
+  var lastBeat = started;
+  var maxScroll = 0;
+  var scrollFired = {};
+  var visible = !document.hidden;
+  var totalActive = 0;
+  function send(event, value){
+    try {
+      var payload = JSON.stringify({ event: event, value: value, slug: slug, ts: Date.now() });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(endpoint, new Blob([payload], { type: 'application/json' }));
+      } else {
+        fetch(endpoint, { method: 'POST', headers: {'Content-Type':'application/json'}, body: payload, keepalive: true }).catch(function(){});
+      }
+    } catch(e){}
+  }
+  function pct(){
+    var h = document.documentElement;
+    var b = document.body;
+    var st = h.scrollTop || b.scrollTop || 0;
+    var sh = h.scrollHeight || b.scrollHeight || 1;
+    var ch = h.clientHeight || 1;
+    if (sh <= ch) return 100;
+    return Math.min(100, Math.round((st + ch) / sh * 100));
+  }
+  send('page_view', null);
+  document.addEventListener('scroll', function(){
+    var p = pct();
+    if (p > maxScroll) maxScroll = p;
+    [25,50,75,100].forEach(function(t){
+      if (p >= t && !scrollFired[t]) {
+        scrollFired[t] = true;
+        send('scroll_' + t, t);
+      }
+    });
+  }, { passive: true });
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest && e.target.closest('a');
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (/calendly\.com/i.test(href)) {
+      send('calendly_click', href);
+      send('cta_click', href);
+    } else if (a.className && (a.className.indexOf('btn-primary') > -1 || a.className.indexOf('header-link') > -1)) {
+      send('cta_click', href);
+    }
+  }, true);
+  function heartbeat(){
+    if (visible) {
+      var now = Date.now();
+      totalActive += (now - lastBeat);
+      lastBeat = now;
+      send('heartbeat', { secs: Math.round(totalActive / 1000), maxScroll: maxScroll });
+    } else {
+      lastBeat = Date.now();
+    }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      if (visible) { totalActive += (Date.now() - lastBeat); }
+      visible = false;
+    } else {
+      visible = true;
+      lastBeat = Date.now();
+    }
+  });
+  setInterval(heartbeat, 30000);
+  window.addEventListener('beforeunload', function(){
+    if (visible) totalActive += (Date.now() - lastBeat);
+    send('unload', { secs: Math.round(totalActive / 1000), maxScroll: maxScroll });
+  });
+
+  // Exit-intent: mouse leaves viewport via top edge. One-shot.
+  var exitFired = false;
+  document.addEventListener('mouseleave', function(e){
+    if (exitFired || e.clientY > 5) return;
+    exitFired = true;
+    send('exit_intent', { maxScroll: maxScroll, secs: Math.round(totalActive / 1000) });
+  });
+
+  // Pricing section dwell tracking (any element with .pricing, .price, [data-pricing])
+  var pricingEl = document.querySelector('[data-pricing], .pricing, .price-block, .pricing-section');
+  if (pricingEl && 'IntersectionObserver' in window) {
+    var pEnter = null, pTotal = 0, pShortFired = false, pLongFired = false;
+    var pio = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.intersectionRatio > 0.5) {
+          if (!pEnter) pEnter = Date.now();
+        } else if (pEnter) {
+          pTotal += Date.now() - pEnter;
+          pEnter = null;
+        }
+        var live = pTotal + (pEnter ? (Date.now() - pEnter) : 0);
+        if (!pShortFired && live > 15000) { pShortFired = true; send('pricing_dwell', { ms: live, bucket: 'short_15s' }); }
+        if (!pLongFired && live > 45000) { pLongFired = true; send('pricing_dwell', { ms: live, bucket: 'long_45s' }); }
+      });
+    }, { threshold: [0, 0.5, 1] });
+    pio.observe(pricingEl);
+  }
+})();
+</script>
 </body>
 </html>
