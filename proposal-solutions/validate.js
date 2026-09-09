@@ -270,7 +270,7 @@ Check every single sentence for:
 4. TONE. Consistent vikanje in lowercase. No hype. No implied criticism of the company. Hyphens, never dashes.
 5. CONSISTENCY. Same language throughout (Slovenian only). Brand spelled identically everywhere.
 
-Return ONE JSON object, no fences:
+Return ONE JSON object, no fences. Your ENTIRE response must be that object: the first character "{", the last "}", no preamble ("I'll work through..."), no commentary before or after.
 {
   "verdict": "pass" | "fail",
   "issues": ["<specific, actionable, one per problem, quoting the offending text>"],
@@ -281,6 +281,19 @@ Rules for the verdict:
 - Any nonsensical sentence, any invented person, any unsourced number: "fail".
 - Pure typos and declension slips you can fix yourself: "pass", with the fix applied in "corrected".
 - When in doubt, "fail". A missing offer page costs nothing. A bad one costs the deal.`;
+
+// The reviewer model sometimes prefixes its JSON with prose ("I'll work through
+// this copy..."). JSON.parse on the raw text then threw and EVERY page failed the
+// gate ("proofread step failed: Unexpected token 'I'" - 9.9.2026, three leads in a
+// row). Parse the outermost {...} object instead of the whole response.
+function extractJsonObject(text) {
+  const t = String(text || '').replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+  try { return JSON.parse(t); } catch { /* fall through to brace scan */ }
+  const start = t.indexOf('{');
+  const end = t.lastIndexOf('}');
+  if (start === -1 || end <= start) throw new Error('no JSON object in model response');
+  return JSON.parse(t.slice(start, end + 1));
+}
 
 async function llmProofread(slots, ctx) {
   if (!PROOFREAD_ENABLED) return { verdict: 'pass', issues: [], corrected: slots };
@@ -308,8 +321,7 @@ async function llmProofread(slots, ctx) {
       system: PROOFREAD_PROMPT,
       messages: [{ role: 'user', content: context }],
     });
-    let raw = res.content[0].text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-    const parsed = JSON.parse(raw);
+    const parsed = extractJsonObject(res.content[0].text);
     return {
       verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
       issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 12) : [],
@@ -351,4 +363,4 @@ async function validateSlots(rawSlots, ctx) {
   return { ok: true, slots, issues: [] };
 }
 
-module.exports = { validateSlots, autoFix, deterministicCheck, diacriticsIssue, SENSITIVE_BLOCKED_MODULES };
+module.exports = { validateSlots, autoFix, deterministicCheck, diacriticsIssue, extractJsonObject, SENSITIVE_BLOCKED_MODULES };

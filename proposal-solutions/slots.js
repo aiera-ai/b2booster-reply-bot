@@ -124,7 +124,16 @@ async function generateSolutionSlots(leadData, research, retryFeedback) {
 
   let slots;
   try {
-    slots = JSON.parse(raw);
+    // Tolerate prose around the object ("I'll write the slots..." + JSON): parse
+    // the outermost {...} instead of failing the whole page on a preamble.
+    try {
+      slots = JSON.parse(raw);
+    } catch (e0) {
+      const s = raw.indexOf('{');
+      const e = raw.lastIndexOf('}');
+      if (s === -1 || e <= s) throw e0;
+      slots = JSON.parse(raw.slice(s, e + 1));
+    }
   } catch (err) {
     console.error('[SOLUTIONS-SLOTS] JSON parse failed. Raw (500):', raw.slice(0, 500));
     throw new Error(`Solutions slot JSON parse failed: ${err.message}`);
