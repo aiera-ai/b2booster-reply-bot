@@ -181,7 +181,7 @@ const AB_TEST_ENABLED = (process.env.AB_TEST_ENABLED || 'true').toLowerCase() ==
 const AB_VARIANTS = {
   A: { tag: 'A-baseline', nudge: '' },
   B: { tag: 'B-curiosity', nudge: '\nOPENING MODE: Start the reply with a concrete observation or one-line question about their role/industry. Avoid generic "hvala za sporočilo" opener.' },
-  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with the concrete outcome (prevzamemo outreach do pravih odločevalcev, oni se ukvarjajo le z dogovorjenimi pogovori). NEVER promise a specific number of replies/meetings. Skip greeting. Value first, CTA last.' }
+  C: { tag: 'C-direct-value', nudge: '\nOPENING MODE: Lead with the concrete outcome for THEM as defined in the OFFER CONTEXT (what we take off their plate or deliver). NEVER promise a specific number of replies/meetings. Skip greeting. Value first, CTA last.' }
 };
 function pickABVariant() {
   if (!AB_TEST_ENABLED) return AB_VARIANTS.A;
@@ -344,7 +344,10 @@ async function airtableSaveLanguage(linkedinUrl, language) {
 async function airtableGetThreadContext(linkedinUrl, limit = 6) {
   if (!AIRTABLE_PAT || !linkedinUrl) return '';
   try {
-    const filter = encodeURIComponent(`AND({LinkedIn URL}="${linkedinUrl}", OR({Direction}="inbound", {Direction}="outbound"))`);
+    // Outbound rows count ONLY when they were actually sent. Unsent drafts used to
+    // show up here as "We: ...", so the model continued conversations that never
+    // happened (and treated a link in a dead draft as "already shared").
+    const filter = encodeURIComponent(`AND({LinkedIn URL}="${linkedinUrl}", OR({Direction}="inbound", AND({Direction}="outbound", {Sent}=1)))`);
     const url = `${AT_MESSAGES}?filterByFormula=${filter}&maxRecords=${limit}&sort%5B0%5D%5Bfield%5D=Timestamp&sort%5B0%5D%5Bdirection%5D=desc`;
     const r = await airtableRequest('GET', url);
     const recs = (r?.records || []).reverse(); // oldest first
@@ -1130,9 +1133,11 @@ FACTS to use when relevant (do NOT invent others):
 `;
 
 const STYLE_GUIDE = `
-You are drafting outreach replies on behalf of Žan Bagarič, founder of B2Booster (b2booster.eu).
+You are drafting outreach replies on behalf of Žan Bagarič, founder of AIERA (aiera.si) and B2Booster (b2booster.eu).
 
-B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
+WHICH PRODUCT you talk about is set by the OFFER CONTEXT block in the user prompt. It overrides everything below about B2Booster: when it says AIERA, the conversation is about concrete AI opportunities inside THEIR company and you never mention outreach, distributors or international clients.
+
+B2Booster (only when OFFER CONTEXT says so) automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
 Pricing (use EXACTLY this if asked): 900 EUR + DDV na mesec. There is NO setup fee and no one-off cost. NEVER quote ranges, NEVER invent a setup fee, NEVER mention 490/790/890/1200.
 Soft proof (use sparingly, NEVER as a numeric promise): "Za stranke prevzamemo celoten outreach do pravih odločevalcev, tako da se ukvarjajo le z dogovorjenimi pogovori."
 CRITICAL: NEVER promise a specific number of replies, meetings or results (no "50-100 odgovorov mesečno"). We do not guarantee counts and an unmet number burns trust. Talk about what we take off their plate, not a guaranteed outcome.
@@ -1205,10 +1210,11 @@ OUTPUT: Return only the message text. No subject lines, no labels, no formatting
 // always signed by Vesna. The handoff to Žan happens later via the offer EMAIL - Vesna
 // herself never signs as Žan (a message from her profile signed "Žan" makes no sense).
 const VESNA_STYLE_GUIDE = `
-You are drafting LinkedIn replies on behalf of Vesna Pevec, who handles initial outreach for B2Booster / AIERA (b2booster.eu, aiera.si).
+You are drafting LinkedIn replies on behalf of Vesna Pevec, "Vodja projektov pri AIERA", who handles initial outreach for AIERA (aiera.si) and B2Booster (b2booster.eu).
 
-B2Booster automates B2B outreach using AI: finding distributors, sales partners, retailers, and international clients.
-Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored offer that gets sent by email.
+WHICH PRODUCT the lead is talking about is set by the OFFER CONTEXT block in the user prompt - follow it. In AIERA campaigns Vesna offered "kratek, neobvezujoč predlog z nekaj konkretnimi možnostmi" for using AI in their company; never turn that into a pitch about outreach, distributors or international clients.
+Vesna's role: she does the first contact on LinkedIn. After she confirms interest, AIERA's team prepares a tailored proposal (a personalized page or an email).
+YOU ARE VESNA. The lead is the OTHER person. Never address the lead as "Vesna" and never open the reply with her name, even when their message starts with "Hvala Vesna" - reply to THEM by their first name or without a name.
 
 WRITING RULES:
 - Short, warm, professional Slovenian
@@ -1527,6 +1533,15 @@ async function createAndDeployOffer(leadData) {
   const offerCompany = resolveOfferCompany(leadData);
   if (!offerCompany) {
     console.log(`[OFFER] Skip - company unknown or is a person name ("${(leadData && leadData.company) || ''}") - no offer page generated`);
+    return null;
+  }
+  // GATE 2: Slovenian pages only. The solutions template is SL-only and the
+  // spirit fallback rendered an English body inside Slovenian chrome
+  // ("Rezervirajte pogovor", "Primer uporabe") - a mixed-language page hurts more
+  // than no page. Non-SL leads get a reply without a link until an EN template exists.
+  const pageLang = leadData && leadData.language;
+  if (pageLang && pageLang !== 'sl' && (process.env.OFFER_NON_SL_PAGES || 'false').toLowerCase() !== 'true') {
+    console.log(`[OFFER] Skip - lead language "${pageLang}" (templates are Slovenian only; set OFFER_NON_SL_PAGES=true to override)`);
     return null;
   }
   leadData.company = offerCompany;
@@ -1854,10 +1869,16 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
   // example slot pair from the style guide verbatim into nearly every reply.
   const dateRule = buildDateRule();
 
-  // Thread context: last few messages from Airtable so the reply continues the
-  // conversation instead of reacting to the last message in a vacuum.
-  let threadContext = '';
-  if (hasRealMessage && leadData.linkedinUrl) {
+  // Which product this lead is actually talking to (AIERA by default) - the style
+  // guide alone kept pitching outreach to leads who asked for an AI proposal.
+  const offerRule = buildOfferContextRule(leadData);
+
+  // Thread context: the REAL LinkedIn thread from Outflo when we have it (includes
+  // sequence messages and anything typed by hand); Airtable (sent rows only) as
+  // fallback, so the reply continues the conversation instead of reacting to the
+  // last message in a vacuum.
+  let threadContext = leadData.outfloThreadContext || '';
+  if (!threadContext && hasRealMessage && leadData.linkedinUrl) {
     try { threadContext = await airtableGetThreadContext(leadData.linkedinUrl); } catch { /* non-blocking */ }
   }
 
@@ -1871,12 +1892,15 @@ async function generateReply(channel, leadData, theirMessage, hasRealMessage = t
     // Lead asked to be called / left a number. A call is the hottest signal:
     // do NOT send any link. Just arrange the call.
     const phoneNote = leadData.messagePhone ? ` They left their number: ${leadData.messagePhone}.` : '';
+    const proposedNote = leadData.proposedTime
+      ? ` They PROPOSED a day/time themselves: "${leadData.proposedTime}". CONFIRM exactly that (repeat their day and time in your words); if they gave a range, pick ONE concrete slot inside it. NEVER say their time does not suit us and NEVER counter-propose other days.`
+      : '';
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote} Write a SHORT reply (1-2 sentences max) that warmly says YES to their exact ask (call stays a call, meeting stays a meeting - mirror their word) and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${addressingRule}${languageRule}${dateRule}`;
+The lead asked for a CALL or a MEETING (or left a phone number).${phoneNote}${proposedNote} Write a SHORT reply (1-2 sentences max) that warmly says YES to their exact ask (call stays a call, meeting stays a meeting - mirror their word) and picks up any time/day they suggested. If they did NOT suggest a time, propose a concrete window yourself (e.g. "Pokličem vas jutri dopoldne, med 9.00 in 11.00, če ustreza."). ABSOLUTELY NO links: do NOT include a Calendly link, an offer page, or the tokens [OFFER LINK] / [CALENDLY LINK]. Just arrange the call, nothing else.${offerRule}${addressingRule}${languageRule}${dateRule}`;
   } else if (hasRealMessage) {
     // Structure rotation (anti-template): the old fixed example ("Pripravil sem vam
     // kratek pregled...") leaked verbatim into ~60% of drafts. Pick one of 4 reply
@@ -1898,17 +1922,17 @@ Lead name: ${leadData.firstName} ${leadData.lastName}
 ${enrichmentContext}${threadContext}
 Their message: "${theirMessage}"
 
-Write a reply that naturally continues the conversation and references their specific context if relevant. ${ctaInstruction}
+Write a reply that naturally continues the conversation and references their specific context if relevant.${leadData.ackAsYes ? ' Their message is a short acknowledgement ("👍"/"ok") that answers YES to the question in our last message above - treat it as a yes and do not comment on its brevity.' : ''} ${ctaInstruction}
 HARD CLOSE RULE: end with exactly ONE concrete question or two proposed call times. NEVER promise a future action ("pošljemo v naslednjih dneh", "javimo se kmalu") - deliver everything in this message.
-HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${addressingRule}${languageRule}${dateRule}${variant.nudge}`;
+HARD LENGTH RULE: their message is ${theirMessage.length} characters; keep your reply under ${Math.max(220, Math.min(700, theirMessage.length * 2))} characters excluding the link and signature.${offerRule}${addressingRule}${languageRule}${dateRule}${variant.nudge}`;
   } else {
     prompt = `Channel: ${channelNote}
 Lead name: ${leadData.firstName} ${leadData.lastName}
 Context: ${theirMessage}
 
-Write a short, natural opening message. Lead with what we take off their plate (we run the outreach to the right decision-makers for them), not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". NEVER promise a specific number of replies or meetings. Then move toward a Calendly booking.
+Write a short, natural opening message. Lead with the concrete outcome for them as defined in the OFFER CONTEXT, not with "AI" or "avtomatizacija" as the headline, so they cannot reply "to že imamo". NEVER promise a specific number of replies or meetings. Then move toward a Calendly booking.
 Do NOT say anything went wrong or mention a technical issue.
-Be confident but humble, never cocky. Start the conversation naturally.${languageRule}${variant.nudge}`;
+Be confident but humble, never cocky. Start the conversation naturally.${offerRule}${languageRule}${variant.nudge}`;
   }
 
   let text = '';
@@ -1954,19 +1978,30 @@ async function generateVesnaReply(leadData, theirMessage, hasRealMessage = true)
     leadData.fitReason && `Why they may be a fit: ${leadData.fitReason}`
   ].filter(Boolean).join('\n');
 
-  let threadContext = '';
-  if (hasRealMessage && leadData.linkedinUrl) {
+  // Real LinkedIn thread from Outflo first; Airtable (sent rows only) as fallback.
+  let threadContext = leadData.outfloThreadContext || '';
+  if (!threadContext && hasRealMessage && leadData.linkedinUrl) {
     try { threadContext = await airtableGetThreadContext(leadData.linkedinUrl); } catch { /* non-blocking */ }
   }
 
   const offerUrl = leadData.offerUrl || null;
   const linkAlreadySent = !!(threadContext && /(ponudbe\.aiera\.si|ai\.aiera\.si|ponudbe\.b2booster\.eu|calendly\.com)/i.test(threadContext));
 
-  const ctaInstruction = linkAlreadySent
-    ? `A link was ALREADY shared earlier in this conversation (see it above). Do NOT paste any link again and do NOT repeat a question that was already asked. React to their latest message with substance and end with ONE new concrete question.`
-    : offerUrl
-      ? `A personalized offer page with the concrete details for their company is ready. Point them to it using the literal token [OFFER LINK] as the URL (this is our own offer page, NOT a Calendly link - including it is required and allowed). Do NOT ask for their email address - the page replaces the emailed proposal. End with ONE short concrete question, e.g. whether the direction on the page makes sense for their situation.`
-      : `End with ONE concrete question, by default asking which email address to send the tailored proposal to (if their email is already in the message, confirm sending to it instead).`;
+  let ctaInstruction;
+  if (hasRealMessage && leadData.wantsCall) {
+    // The lead wants a call/meeting (or proposed a time). Vesna confirms it and
+    // gets the e-mail for the invite - no links, no counter-proposals.
+    const proposedNote = leadData.proposedTime
+      ? ` They proposed: "${leadData.proposedTime}" - CONFIRM exactly that day/time (pick ONE concrete slot if they gave a range). NEVER say it does not suit us and NEVER counter-propose.`
+      : ' If they did not name a time, propose two concrete options from the DATE rule.';
+    ctaInstruction = `The lead wants a CALL or a MEETING.${proposedNote} Say yes warmly in 1-2 sentences (call stays a call, meeting stays a meeting) and, unless their e-mail is already known, ask which e-mail address the calendar invite should go to. NO links of any kind.`;
+  } else if (linkAlreadySent) {
+    ctaInstruction = `A link was ALREADY shared earlier in this conversation (see it above). Do NOT paste any link again and do NOT repeat a question that was already asked. React to their latest message with substance and end with ONE new concrete question.`;
+  } else if (offerUrl) {
+    ctaInstruction = `A personalized proposal page with concrete AI possibilities for their company is ready - this is exactly the "predlog" Vesna offered in her first message. Point them to it using the literal token [OFFER LINK] as the URL (our own page, NOT a Calendly link - including it is required). Do NOT ask for their email address - the page replaces the emailed proposal. End with ONE short concrete question, e.g. whether the direction on the page makes sense for their situation.`;
+  } else {
+    ctaInstruction = `End with ONE concrete question, by default asking which email address to send the tailored proposal to (if their email is already in the message, confirm sending to it instead).`;
+  }
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
@@ -1978,12 +2013,13 @@ async function generateVesnaReply(leadData, theirMessage, hasRealMessage = true)
 ${enrichmentContext}${threadContext}
 ${hasRealMessage ? `Their message: "${theirMessage}"` : `Context: ${theirMessage}`}
 
-Write a short LinkedIn reply in Vesna's name. FIRST address the substance of their message: if they asked something concrete, answer it in one sentence using the company context above - NEVER reply with a generic acknowledgement that ignores their question. ${ctaInstruction} NEVER promise "v naslednjih dneh" or any vague future action. NEVER name a month or a season (you have no calendar and have proposed months already in the past). Sign as Vesna Pevec.${buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null)}`
+Write a short LinkedIn reply in Vesna's name (you ARE Vesna - never address the lead as Vesna).${leadData.ackAsYes ? ' Their message is a short acknowledgement ("👍"/"ok") that answers YES to the question in our last message above - treat it as "yes, send me the proposal" and do not comment on its brevity.' : ''} FIRST address the substance of their message: if they asked something concrete, answer it in one sentence using the company context above - NEVER reply with a generic acknowledgement that ignores their question. ${ctaInstruction} NEVER promise "v naslednjih dneh" or any vague future action. NEVER name a month or a season (you have no calendar and have proposed months already in the past). Sign as Vesna Pevec.${buildOfferContextRule(leadData)}${addressingRuleFor({ theirMessage: hasRealMessage ? theirMessage : '' })}${buildLanguageRule(hasRealMessage ? theirMessage : '', hasRealMessage, leadData.language || null)}${hasRealMessage && leadData.wantsCall && !leadData.proposedTime ? buildDateRule() : ''}`
     }]
   });
 
   let text = response.content[0].text.trim();
   text = (await polishSlovenian(text, { signature: 'Vesna Pevec' })) || text;
+  text = stripSelfAddress(text, 'Vesna');
   if (offerUrl) text = text.replace(/\[OFFER LINK\]/g, offerUrl);
   return ensureSignature(cleanArtifacts(text), 'Vesna Pevec');
 }
@@ -2130,7 +2166,66 @@ function buildDateRule() {
     days.push(SL_WEEKDAY_ACC[dow]);
   }
   const [d1, d2] = days;
-  return `\nDATE (hard): Today is ${human} (${SL_WEEKDAYS[now.getDay()]}). NEVER name a month or a season - the model has repeatedly proposed months that were already in the past. If you propose call times, use ONLY these two, exactly as written: "${d1} ob 10.00" and "${d2} ob 13.00". Do NOT invent other weekdays, do NOT copy example times from the style guide, and never write "ta teden ali naslednji mesec" style vagueness.`;
+  return `\nDATE (hard): Today is ${human} (${SL_WEEKDAYS[now.getDay()]}). NEVER name a month or a season - the model has repeatedly proposed months that were already in the past. If the lead proposed a day or a time themselves, CONFIRM THEIR proposal (repeat it) - never say it does not suit us, we have no calendar to check. Only when they proposed nothing and you propose call times, use ONLY these two, exactly as written: "${d1} ob 10.00" and "${d2} ob 13.00". Do NOT invent other weekdays, do NOT copy example times from the style guide, and never write "ta teden ali naslednji mesec" style vagueness.`;
+}
+
+// ─── OFFER CONTEXT (which product this lead is actually talking to) ──────────
+// Both style guides describe B2Booster, but the live campaigns are AIERA
+// ("konkretne priložnosti za uporabo AI"). The classifier picks offerType per
+// lead; nothing ever put that choice in front of the reply model, so an AIERA
+// lead who said "pošljite predlog" got a pitch about distributors and
+// international clients he never asked about. This block overrides the guide.
+function buildOfferContextRule(leadData) {
+  const t = (leadData && leadData.offerType) || 'aiera';
+  const company = leadData && leadData.company && leadData.company !== 'LinkedIn' ? ` (${leadData.company})` : '';
+  if (t === 'b2booster') {
+    return `\nOFFER CONTEXT (hard, overrides the style guide): This lead fits B2BOOSTER - done-for-you B2B outreach. We run the whole outreach to the right decision-makers for them (LinkedIn + email + replies + booked meetings). Talk about what we take off their plate, never about "AI" as such. Price only if asked: 900 EUR + DDV na mesec, brez setup stroška.`;
+  }
+  if (t === 'generator') {
+    return `\nOFFER CONTEXT (hard, overrides the style guide): This lead fits AIERA GENERATOR PONUDB - a tool that turns a short internal brief into a fully personalized, branded web offer in minutes (replaces Word/PDF quotes, tracks opens). Speak about faster and more consistent offers for their sales team. Do NOT pitch outreach, lead generation, distributors or international clients.`;
+  }
+  return `\nOFFER CONTEXT (hard, overrides the style guide): This lead replied to an AIERA campaign${company}. AIERA helps companies find CONCRETE opportunities to use AI in their own operations (custom AI assistants, automation of repetitive work, document and offer generation, internal knowledge tools). The message they answered promised "kratek, neobvezujoč predlog z nekaj konkretnimi možnostmi" for their company - stay on exactly that. The personalized page (when one is given) IS that proposal; without a page, the next step is getting the proposal to them (their e-mail) or a short call. NEVER pitch outreach, lead generation, distributors, sales partners, international clients or B2Booster: they did not ask for any of it and it contradicts the message they replied to.`;
+}
+
+// ─── TIME PROPOSAL DETECTION ─────────────────────────────────────────────────
+// "Lahko v torek ali sredo med 10-12" is a lead booking the call himself. The
+// DATE rule used to force our two fixed slots into every reply, so the model
+// REFUSED the lead's proposal ("torek in sreda sta žal zunaj mojih terminov").
+// Detect a concrete day/time in their message so the reply confirms THEIR time.
+const TIME_PROPOSAL_RE = /\b(ponedeljek|ponedeljka|ponedeljkom|torek|torka|torkom|sredo|sreda|cetrtek|cetrtka|cetrtkom|petek|petka|petkom|monday|tuesday|wednesday|thursday|friday|jutri|pojutrisnjem|tomorrow)\b|\bob\s?\d{1,2}([.:]\d{2})?\b|\bmed\s?\d{1,2}([.:]\d{2})?\s?(in|-|do)\s?\d{1,2}\b|\b\d{1,2}\s?(am|pm)\b/gi;
+function detectTimeProposal(text) {
+  if (!text) return '';
+  const t = ` ${text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()} `;
+  let m;
+  TIME_PROPOSAL_RE.lastIndex = 0;
+  while ((m = TIME_PROPOSAL_RE.exec(t)) !== null) {
+    const before = t.slice(Math.max(0, m.index - 8), m.index);
+    // "do petka", "pred torkom", "od jutri" are deadlines/relative dates, not a slot.
+    if (/\b(do|pred|od)\s$/.test(before)) continue;
+    TIME_PROPOSAL_RE.lastIndex = 0;
+    return text.trim().substring(0, 200);
+  }
+  return '';
+}
+
+// Vesna writes as herself. When the lead opens with "Hvala Vesna, ..." the model
+// mirrored the salutation and produced "Vesna, super, veseli me ..." - a reply
+// addressed to the sender. Strip a leading self-address deterministically.
+function stripSelfAddress(text, firstName) {
+  if (!text || !firstName) return text;
+  const re = new RegExp(`^\\s*(?:(?:hvala|zdravo|pozdravljeni?|pozdravljena|dober dan|super|odli[čc]no|hvala lepa)[,!\\s]+)?${firstName}[,!.:\\s]+`, 'i');
+  const t = text.replace(re, '');
+  if (t === text || !t.trim()) return text;
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// Our own accounts as Outflo reports them (ASCII, no diacritics) -> proper names
+// for signatures, "Pripravil" lines and approval mails.
+function normalizeOwnAccountName(name) {
+  const n = (name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+  if (n === 'zan bagaric' || n === 'zan') return 'Žan Bagarič';
+  if (n === 'vesna pevec' || n === 'vesna') return 'Vesna Pevec';
+  return name || '';
 }
 
 // Hard addressing instruction string, derived from the lead's own message.
@@ -2244,7 +2339,11 @@ function buildNegativeCloseout(language, firstName, signoff) {
 const BARE_ACK_RE = /^(ok(ej|ay)?|v redu|velja|hvala(\s+(lepa|vam|ti))?|thanks?(\s+you)?|thank you|thx|super|odlicno|top|perfect|great|noted|dogovorjeno|may se|se vidimo|lp|lep pozdrav|danke)[\s.!,🙂👍🙏]*$/i;
 function isBareAck(text) {
   const t = (text || '').trim().normalize('NFD').replace(/\p{Diacritic}/gu, '');
-  return t.length > 0 && t.length <= 40 && !t.includes('?') && BARE_ACK_RE.test(t);
+  if (!t) return false;
+  // Emoji-only reactions ("👍", "🙏", "👌🙂") carry no letters, digits or a question
+  // mark - nothing to answer. They used to get a full "na kateri e-naslov?" draft.
+  if (t.length <= 12 && !/[\p{L}\p{N}?]/u.test(t)) return true;
+  return t.length <= 40 && !t.includes('?') && BARE_ACK_RE.test(t);
 }
 
 // Combined intent + language classification in ONE Haiku call. Language from the
@@ -2583,8 +2682,10 @@ function detectCallRequest(text) {
 
 async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, autoSendAt = null) {
   const base = process.env.SERVER_URL || `http://localhost:${PORT}`;
-  const channelLabel = channel === 'linkedin' ? 'LinkedIn' : 'Email';
-  const channelBadgeColor = channel === 'linkedin' ? '#0a66c2' : '#059669';
+  // Vesna's and Unipile replies are LinkedIn too - they were labelled "EMAIL".
+  const isLinkedInChannel = ['linkedin', 'vesna', 'unipile'].includes(channel);
+  const channelLabel = channel === 'vesna' ? 'LinkedIn · Vesna' : isLinkedInChannel ? 'LinkedIn' : 'Email';
+  const channelBadgeColor = isLinkedInChannel ? '#0a66c2' : '#059669';
   const isAutoSend = !!autoSendAt;
 
   let actionLabel = 'sporočil';
@@ -2688,8 +2789,10 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
 
   // Context info panel - all the metadata we have
   const infoRows = [];
-  const profileLink = leadData.linkedinUrl
-    ? `<a href="${leadData.linkedinUrl}" style="color:#0a66c2;text-decoration:none">${leadData.linkedinUrl.replace('https://www.','')}</a>`
+  // Prefer the readable public profile URL (Outflo webhooks carry urn-style /in/ACoA... links).
+  const profileHref = leadData.publicLinkedinUrl || leadData.linkedinUrl;
+  const profileLink = profileHref
+    ? `<a href="${profileHref}" style="color:#0a66c2;text-decoration:none">${profileHref.replace('https://www.','')}</a>`
     : '';
 
   if (leadData.email) infoRows.push(['Email', `<a href="mailto:${leadData.email}" style="color:#2563eb;text-decoration:none">${leadData.email}</a>`]);
@@ -2808,8 +2911,10 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
       </div>
       ` : (leadData.intent === 'positive' || leadData.intent === 'question') ? `
       <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 18px;margin-bottom:24px">
-        <p style="margin:0;font-weight:700;color:#92400e;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">Brez offer strani - podjetje neznano</p>
-        <p style="margin:6px 0 0;color:#92400e;font-size:13px">Enrichment ni na&scaron;el podjetja, zato ponudba ni bila generirana (generi&ccaron;na stran &scaron;kodi pozicioniranju). &Ccaron;e podjetje pozna&scaron;, uporabi UREDI in dodaj link ro&ccaron;no.</p>
+        <p style="margin:0;font-weight:700;color:#92400e;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">Brez offer strani${(leadData.company && leadData.company !== 'LinkedIn') ? '' : ' - podjetje neznano'}</p>
+        <p style="margin:6px 0 0;color:#92400e;font-size:13px">${(leadData.company && leadData.company !== 'LinkedIn')
+          ? ((leadData.language && leadData.language !== 'sl') ? 'Lead ne pi&scaron;e slovensko - predloge so samo v sloven&scaron;&ccaron;ini, zato stran ni bila generirana.' : 'Stran ni pre&scaron;la quality gate-a ali generiranje ni uspelo (glej Render log).')
+          : 'Enrichment (Outflo profil, lastna baza, Apollo) ni na&scaron;el podjetja, zato ponudba ni bila generirana (generi&ccaron;na stran &scaron;kodi pozicioniranju).'} &Ccaron;e stran &#382;eli&scaron;, uporabi UREDI in dodaj link ro&ccaron;no.</p>
       </div>
       ` : ''}
       ${actionButtons}
@@ -2821,7 +2926,7 @@ async function sendApprovalEmail(id, leadData, draft, channel, offerUrl = null, 
   // Subject: pack intent + account so it's scannable in inbox
   const subjectIntent = leadData.intent ? ` ${leadData.intent.toUpperCase()}` : '';
   const subjectAccount = leadData.accountFirstName ? ` →${leadData.accountFirstName}` : '';
-  const channelTag = channel === 'linkedin' ? 'LI' : 'EMAIL';
+  const channelTag = isLinkedInChannel ? 'LI' : 'EMAIL';
   const autoTag = isAutoSend ? ' AUTO' : '';
 
   const res = await fetch('https://api.resend.com/emails', {
@@ -5539,8 +5644,9 @@ app.post('/generate-proposal', async (req, res) => {
 
 // ─── HEALTHCHECK (all-in-one server-side test) ────────────────────────────────
 
+const BOT_BUILD = '2026-09-09-audit';
 app.get('/healthcheck', async (req, res) => {
-  const report = { timestamp: new Date().toISOString(), checks: {} };
+  const report = { timestamp: new Date().toISOString(), build: BOT_BUILD, checks: {} };
 
   // 1. Claude API
   try {
@@ -6640,6 +6746,75 @@ async function enrichFromOwnDB(linkedinUrl) {
   }
 }
 
+// ─── OUTFLO CONVERSATION CONTEXT (primary enrichment + REAL thread) ──────────
+// Outflo's public API exposes the attendee's LinkedIn profile (company, job
+// title, headline, location, public URL) and the real message history of the
+// conversation - the messages Outflo's sequence sent AND anything Žan/Vesna
+// typed by hand on LinkedIn. Two things this fixes at once:
+//   1. Apollo is dead and the own-DB lookup no longer matches (Outflo now sends
+//      urn-style /in/ACoA... URLs), so ~85% of leads came through as "Podjetje
+//      neznano" -> no offer page -> generic "na kateri e-naslov?" drafts.
+//   2. Thread context used to come from Airtable, where every UNSENT draft was
+//      logged as "We: ..." - the model believed replies had gone out that never
+//      did, skipped links "already shared" and continued phantom conversations.
+// Fail-open: any error returns null and the old sources still run.
+const OUTFLO_API_BASE = (process.env.OUTFLO_API_BASE || 'https://live.outflo.in/api/public').replace(/\/$/, '');
+
+async function fetchOutfloConversationContext(conversationId) {
+  const key = process.env.OUTFLO_API_KEY;
+  if (!key || !conversationId) return null;
+  try {
+    const r = await fetch(`${OUTFLO_API_BASE}/conversations/${encodeURIComponent(conversationId)}/context?include_messages=true&message_limit=12`, {
+      headers: { 'x-api-key': key, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!r.ok) { console.log(`[OUTFLO-CTX] ${r.status} for conversation ${conversationId}`); return null; }
+    const body = await r.json();
+    const d = body && (body.data || body);
+    if (!d || typeof d !== 'object') return null;
+    const p = d.leadProfile || {};
+    const att = d.attendee || {};
+    const assoc = Array.isArray(d.campaignAssociations) ? d.campaignAssociations[0] : null;
+    const clean = v => (typeof v === 'string' && v !== 'null') ? v.trim() : '';
+    const publicId = clean(p.publicIdentifier);
+    const profile = {
+      company: clean(p.company || p.currentCompany),
+      title: clean(p.jobTitle),
+      headline: clean(p.headline || att.headline),
+      location: clean(p.location),
+      publicUrl: clean(assoc && assoc.linkedinUrl) || (publicId ? `https://www.linkedin.com/in/${publicId}` : ''),
+      firstName: clean(p.firstName || att.firstName),
+      lastName: clean(p.lastName || att.lastName)
+    };
+    // "Title at Company" headline fallback when the structured company is empty.
+    if (!profile.company && profile.headline) {
+      const m = profile.headline.match(/(?:\bat\b|@|\bpri\b|\bv\b)\s*([^|@–—\-]{2,60})$/i);
+      if (m) profile.company = m[1].trim();
+    }
+    const ourUrn = d.sender && d.sender.urn;
+    const messages = (Array.isArray(d.messages) ? d.messages : [])
+      .filter(m => m && !m.isSystem && (m.text || '').trim())
+      .map(m => ({ fromUs: !!ourUrn && m.senderUrn === ourUrn, text: String(m.text).trim(), sentAt: m.sentAt || '' }));
+    return { profile, messages, replyTag: d.replyTag || null };
+  } catch (e) {
+    console.log('[OUTFLO-CTX] error:', e.message);
+    return null;
+  }
+}
+
+// Real thread from Outflo -> the same prompt block airtableGetThreadContext builds,
+// but only with messages that actually exist on LinkedIn. The newest inbound
+// message is dropped from the history because the prompt shows it separately.
+function buildOutfloThreadContext(messages, latestInbound) {
+  if (!Array.isArray(messages) || !messages.length) return '';
+  const rows = messages.slice();
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  if (rows.length && !rows[rows.length - 1].fromUs && latestInbound && norm(rows[rows.length - 1].text) === norm(latestInbound)) rows.pop();
+  const lines = rows.map(m => `${m.fromUs ? 'We' : 'Lead'}: ${norm(m.text).substring(0, 400)}`).filter(l => l.length > 6);
+  if (!lines.length) return '';
+  return `\nConversation so far on LinkedIn (oldest first, these messages were REALLY sent). Use it for context, do NOT repeat points already made and do NOT re-introduce yourself:\n${lines.join('\n')}\n`;
+}
+
 // ─── APOLLO ENRICHMENT ───────────────────────────────────────────────────────
 
 async function enrichLeadWithApollo(linkedinUrl) {
@@ -6757,7 +6932,46 @@ app.get('/debug/outflo', async (req, res) => {
   res.json(out);
 });
 
+// Debug: what the new Outflo enrichment returns for one conversation (profile +
+// real thread). Read-only, no secrets. Use it after a deploy to confirm the API
+// key has conversation-read scope: /debug/outflo-ctx/<conversation_id>
+app.get('/debug/outflo-ctx/:conv', async (req, res) => {
+  if (!process.env.OUTFLO_API_KEY) return res.json({ error: 'OUTFLO_API_KEY not set' });
+  const ctx = await fetchOutfloConversationContext(req.params.conv);
+  if (!ctx) return res.json({ ok: false, note: 'null - see [OUTFLO-CTX] log line (401/403 = key lacks scope, 404 = unknown conversation)' });
+  res.json({ ok: true, profile: ctx.profile, replyTag: ctx.replyTag, messages: ctx.messages.map(m => ({ fromUs: m.fromUs, sentAt: m.sentAt, text: m.text.slice(0, 160) })) });
+});
+
 // ─── OUTFLO WEBHOOK ───────────────────────────────────────────────────────────
+
+// Per-conversation debounce. Leads write in bursts ("👍" / "Seveda 👍" / "Lahko v
+// torek ali sredo med 10-12" within one minute) and every burst produced 2-3
+// separate, mutually contradicting drafts + approval mails. Messages from the
+// same conversation are now collected for OUTFLO_DEBOUNCE_MS and processed ONCE
+// as one combined message.
+const OUTFLO_DEBOUNCE_MS = parseInt(process.env.OUTFLO_DEBOUNCE_MS || '90000', 10);
+const OUTFLO_BURST = new Map(); // convKey -> { timer, texts: [], ev }
+
+// Supersede: one live draft per lead. When a newer message arrives while an
+// older draft for the same lead is still waiting for approval, the old pending
+// item is deleted (its POŠLJI link goes dead) so only the current draft stands.
+const LAST_PENDING_BY_LEAD = new Map(); // leadProfileUrl -> { id, ts }
+const SUPERSEDE_WINDOW_MS = 48 * 60 * 60 * 1000;
+async function supersedeOlderPending(leadProfileUrl, newId) {
+  if (!leadProfileUrl) return;
+  const prev = LAST_PENDING_BY_LEAD.get(leadProfileUrl);
+  LAST_PENDING_BY_LEAD.set(leadProfileUrl, { id: newId, ts: Date.now() });
+  if (!prev || prev.id === newId || Date.now() - prev.ts > SUPERSEDE_WINDOW_MS) return;
+  try {
+    const old = await getPending(prev.id);
+    if (old && old.status !== 'scheduled') {
+      await deletePending(prev.id);
+      console.log(`[OUTFLO] Superseded older draft ${prev.id} for ${leadProfileUrl} with ${newId}`);
+    }
+  } catch (e) {
+    console.warn('[OUTFLO] supersede error:', e.message);
+  }
+}
 
 app.post('/webhook/outflo', async (req, res) => {
   res.json({ ok: true }); // Acknowledge immediately
@@ -6788,7 +7002,8 @@ app.post('/webhook/outflo', async (req, res) => {
     // (we want to know if company/headline/title arrive here, to avoid depending on Apollo).
     console.log('[OUTFLO RAW]', JSON.stringify(payload).slice(0, 2500));
 
-    const messageText = msg.text || msg.body || msg.content || payload.text || '';
+    const rawMessageText = msg.text || msg.body || msg.content || payload.text || '';
+    const messageText = rawMessageText;
     const leadProfileUrl = msg.sender_profile_url || msg.sender_url || payload.lead?.profile_url || payload.lead?.linkedin_url || '';
     const leadFirstNameFromPayload = msg.sender_first_name || payload.lead?.first_name || '';
     const leadLastNameFromPayload = msg.sender_last_name || payload.lead?.last_name || '';
@@ -6813,8 +7028,13 @@ app.post('/webhook/outflo', async (req, res) => {
       console.log(`[OUTFLO] Lead meta from payload: company="${leadCompanyFromOutflo}" title="${outfloTitle}" headline="${outfloHeadline}"`);
     }
 
-    // Safety: skip if "sender" is actually one of our own accounts (e.g. echo of an outbound message)
-    if (leadProfileUrl && acct.profile_url && leadProfileUrl === acct.profile_url) {
+    // Safety: skip if "sender" is actually one of our own accounts (e.g. echo of an outbound message).
+    // URL match alone missed echoes since Outflo switched to urn-style URLs, so
+    // also compare the sender NAME against our own accounts ("Zan Bagaric" got
+    // processed as a lead on 18.8.).
+    const senderNameNorm = leadFullName.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim();
+    const OWN_ACCOUNT_NAMES = ['zan bagaric', 'vesna pevec', 'mojca bagaric'];
+    if ((leadProfileUrl && acct.profile_url && leadProfileUrl === acct.profile_url) || OWN_ACCOUNT_NAMES.includes(senderNameNorm)) {
       console.log('[OUTFLO] Skipping - sender is our own account (echo)');
       return;
     }
@@ -6849,14 +7069,74 @@ app.post('/webhook/outflo', async (req, res) => {
 
     console.log(`[${senderLabel}] ${eventType} | Campaign: "${campaignName}" | From: ${leadFullName}: "${messageText.substring(0, 80)}"`);
 
+    // Everything the processor needs, captured now; the burst timer processes the
+    // combined text of every message that arrives within OUTFLO_DEBOUNCE_MS.
+    const ev = {
+      payload, eventType, msg, acct, leadProfileUrl, leadFullName,
+      leadCompanyFromOutflo, outfloTitle, outfloHeadline, campaignName,
+      isVesna, isZan, senderLabel
+    };
+    const convKey = payload.conversation_id || leadProfileUrl;
+    const burst = OUTFLO_BURST.get(convKey) || { texts: [], timer: null, ev };
+    if (burst.timer) clearTimeout(burst.timer);
+    burst.texts.push(messageText);
+    burst.ev = ev;
+    burst.timer = setTimeout(() => {
+      OUTFLO_BURST.delete(convKey);
+      const combined = burst.texts.join('\n').trim();
+      if (burst.texts.length > 1) console.log(`[${senderLabel}] Burst of ${burst.texts.length} messages from ${leadFullName} processed as one`);
+      processOutfloInbound(burst.ev, combined).catch(err => console.error('[WEBHOOK] Error:', err.message));
+    }, OUTFLO_DEBOUNCE_MS);
+    OUTFLO_BURST.set(convKey, burst);
+  } catch (err) {
+    console.error('[WEBHOOK] Error:', err.message);
+  }
+});
+
+// Processes ONE inbound LinkedIn message (or a burst combined into one) for Žan
+// or Vesna: suppression -> intent -> enrichment (Outflo profile first) -> offer
+// page -> draft -> approval mail -> Airtable log.
+async function processOutfloInbound(ev, messageText) {
+  const {
+    payload, eventType, msg, acct, leadProfileUrl, leadFullName,
+    leadCompanyFromOutflo, outfloTitle, outfloHeadline, campaignName,
+    isVesna, senderLabel
+  } = ev;
+  try {
     // Hard suppression: never process a lead who opted out.
     if (await isDoNotContactLead(leadProfileUrl)) {
       console.log(`[${senderLabel}] Do Not Contact - skipping ${leadFullName}`);
       return;
     }
 
-    // Classify intent + language in one call
-    const { intent, language } = await classifyMessage(messageText);
+    // Outflo conversation context FIRST: the lead's LinkedIn profile (company,
+    // job title, headline, location, public URL) + the REAL thread. Needed before
+    // intent because a bare "👍"/"ok"/"lahko" only means something in context.
+    const outfloCtx = await fetchOutfloConversationContext(payload.conversation_id);
+    const ofp = (outfloCtx && outfloCtx.profile) || {};
+    if (outfloCtx) {
+      console.log(`[OUTFLO-CTX] ${ofp.company || '(no company)'} | ${ofp.title || ofp.headline || '(no title)'} | ${ofp.location || ''} | thread ${outfloCtx.messages.length} msg`);
+    }
+
+    let intent, language, ackAsYes = false;
+    if (isBareAck(messageText)) {
+      // Bare "👍" / "ok" / "hvala". If OUR last message asked a question (the
+      // opener ends with "Bi vas zanimalo, da vam ga pošljem?"), this IS the
+      // answer: yes, send it. Otherwise there is nothing to answer - no Haiku
+      // call, no draft ("👍" used to get a full "na kateri e-naslov?" draft).
+      const lastOurs = outfloCtx ? [...outfloCtx.messages].reverse().find(m => m.fromUs) : null;
+      if (lastOurs && /\?/.test(lastOurs.text)) {
+        intent = 'positive'; language = 'sl'; ackAsYes = true;
+        console.log(`[${senderLabel}] Bare ack ("${messageText.substring(0, 30)}") answers our question - treating as YES`);
+      } else {
+        airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'neutral', messageText, null, false).catch(() => {});
+        console.log(`[${senderLabel}] Bare ack ("${messageText.substring(0, 30)}") - no reply needed`);
+        return;
+      }
+    } else {
+      // Classify intent + language in one call
+      ({ intent, language } = await classifyMessage(messageText));
+    }
     console.log(`[${senderLabel}] Intent: ${intent} | lang: ${language || '?'}`);
 
     // Parse name (titles stripped: "mag. Marjana Skubic" was getting addressed as "mag.")
@@ -6887,19 +7167,14 @@ app.post('/webhook/outflo', async (req, res) => {
       return;
     }
 
-    if (intent === 'neutral' && isBareAck(messageText)) {
-      // Bare "ok"/"hvala" - a pitch reply here reads pushy. Log and stay quiet.
-      airtableLogMessage(leadFullName, leadProfileUrl, 'inbound', 'neutral', messageText, null, false).catch(() => {});
-      console.log(`[${senderLabel}] Bare ack ("${messageText.substring(0, 30)}") - no reply needed`);
-      return;
-    }
-
-    // Enrichment - only for interested leads. PRIMARY: our own DB (B2Booster
-    // Campaigns app) - first-party company/title/industry, matches Outflo's URL
-    // format. FALLBACK: Apollo (mainly for email/phone, which own DB lacks).
-    const ownData = (intent !== 'negative') ? await enrichFromOwnDB(leadProfileUrl) : null;
+    // Enrichment - only for interested leads.
+    //   PRIMARY: Outflo profile (fetched above).
+    //   THEN:    our own DB (B2Booster Campaigns app), tried with the public URL first.
+    //   LAST:    Apollo (mainly email/phone; the people-match has been returning
+    //            nothing for months).
+    const ownData = (intent !== 'negative') ? await enrichFromOwnDB(ofp.publicUrl || leadProfileUrl) : null;
     const apolloData = (intent !== 'negative')
-      ? await enrichLeadWithApollo(leadProfileUrl)
+      ? await enrichLeadWithApollo(ofp.publicUrl || leadProfileUrl)
       : null;
     if (apolloData) {
       console.log(`[APOLLO] ${apolloData.companyName} | ${apolloData.employees} emp | ${apolloData.industry}`);
@@ -6907,19 +7182,31 @@ app.post('/webhook/outflo', async (req, res) => {
       console.log(`[APOLLO] Skipped - negative intent`);
     }
 
+    // A Slovenian CEO answering "Thanks Vesna" is not an English-speaking lead.
+    // Very short replies from a profile located in Slovenia stay Slovenian, so the
+    // reply and the offer page do not flip to English on two words of politeness.
+    const wordCount = messageText.trim().split(/\s+/).filter(Boolean).length;
+    if (language && language !== 'sl' && wordCount < 5 && /sloven/i.test(ofp.location || '')) {
+      console.log(`[${senderLabel}] Language ${language} on a ${wordCount}-word reply from Slovenia - keeping Slovenian`);
+      language = 'sl';
+    }
+
     const leadData = {
       firstName,
       lastName,
-      // Priority: own DB (first-party) -> Apollo -> Outflo payload. NEVER campaignName
-      // (campaigns are named after the SENDER, which leaked into slugs/message text).
-      company: ownData?.company || apolloData?.companyName || leadCompanyFromOutflo || '',
+      // Priority: own DB (first-party) -> Outflo profile -> Apollo -> Outflo payload.
+      // NEVER campaignName (campaigns are named after the SENDER, which leaked into
+      // slugs/message text).
+      company: ownData?.company || ofp.company || apolloData?.companyName || leadCompanyFromOutflo || '',
       linkedinUrl: leadProfileUrl,
-      title: ownData?.title || apolloData?.title || outfloTitle || outfloHeadline || '',
+      publicLinkedinUrl: ofp.publicUrl || '',
+      title: ownData?.title || ofp.title || apolloData?.title || outfloTitle || ofp.headline || outfloHeadline || '',
+      headline: ofp.headline || outfloHeadline || '',
       industry: ownData?.industry || apolloData?.industry || '',
       employees: ownData?.employees || apolloData?.employees || '',
       seniority: apolloData?.seniority || '',
       city: apolloData?.city || '',
-      country: apolloData?.country || ownData?.location || '',
+      country: apolloData?.country || ownData?.location || ofp.location || '',
       email: apolloData?.email || ownData?.email || '',
       phone: apolloData?.phone || '',
       companyPhone: apolloData?.companyPhone || '',
@@ -6929,13 +7216,19 @@ app.post('/webhook/outflo', async (req, res) => {
       intent,
       language: language || null,
       campaignName,
-      accountName: acct.full_name || (isVesna ? 'Vesna Pevec' : 'Žan Bagarič'),
-      accountFirstName: acct.first_name || (isVesna ? 'Vesna' : 'Žan'),
+      accountName: normalizeOwnAccountName(acct.full_name) || (isVesna ? 'Vesna Pevec' : 'Žan Bagarič'),
+      accountFirstName: isVesna ? 'Vesna' : 'Žan',
       eventType,
       conversationId: payload.conversation_id || '',
       messageSentAt: msg.sent_at || '',
-      source: isVesna ? 'outflo-vesna' : 'outflo-zan'
+      source: isVesna ? 'outflo-vesna' : 'outflo-zan',
+      outfloReplyTag: (outfloCtx && outfloCtx.replyTag) || '',
+      ackAsYes
     };
+    // Real thread for the reply prompt (sequence messages + hand-typed ones). Kept
+    // OUT of leadData except while drafting: leadData travels base64-encoded in
+    // the approval-mail links and Airtable, and a 12-message thread would bloat them.
+    const outfloThread = outfloCtx ? buildOutfloThreadContext(outfloCtx.messages, messageText) : '';
 
     // Flag call requests (phone in message or "pokliči me") so the approval email
     // alarms instead of quietly auto-drafting a Calendly reply to a hot lead.
@@ -6944,6 +7237,16 @@ app.post('/webhook/outflo', async (req, res) => {
       leadData.wantsCall = true;
       if (callReq.phone) leadData.messagePhone = callReq.phone;
       console.log(`[${senderLabel}] CALL REQUEST detected${callReq.phone ? ` (${callReq.phone})` : ''} - approval email will alarm`);
+    }
+    // A concrete day/time in their message ("lahko v torek ali sredo med 10-12")
+    // is the lead booking the call himself: confirm THEIR slot, never counter-propose.
+    if (intent !== 'negative' && intent !== 'soft_negative') {
+      const proposed = detectTimeProposal(messageText);
+      if (proposed) {
+        leadData.wantsCall = true;
+        leadData.proposedTime = proposed;
+        console.log(`[${senderLabel}] TIME PROPOSAL detected ("${proposed.substring(0, 60)}") - reply will confirm their slot`);
+      }
     }
 
     // Offer classification (aiera vs b2booster). Skip for negative intent (saves API call).
@@ -7001,12 +7304,17 @@ app.post('/webhook/outflo', async (req, res) => {
         }
       }
 
-      if (isVesna) {
-        // Vesna replies from her own profile, always signed Vesna. Shared generator:
-        // enrichment + thread context + offer link straight in the LinkedIn reply.
-        draft = await generateVesnaReply(leadData, messageText, true);
-      } else {
-        draft = await generateReply('linkedin', leadData, messageText, true);
+      leadData.outfloThreadContext = outfloThread;
+      try {
+        if (isVesna) {
+          // Vesna replies from her own profile, always signed Vesna. Shared generator:
+          // enrichment + thread context + offer link straight in the LinkedIn reply.
+          draft = await generateVesnaReply(leadData, messageText, true);
+        } else {
+          draft = await generateReply('linkedin', leadData, messageText, true);
+        }
+      } finally {
+        delete leadData.outfloThreadContext;
       }
     }
 
@@ -7014,13 +7322,14 @@ app.post('/webhook/outflo', async (req, res) => {
 
     // Route through enqueueReply: positive Žan replies may auto-send (15-min hold),
     // everything else (Vesna, negative, neutral) still goes to manual approval.
+    let pendingId;
     if (intent === 'negative') {
       // Negative closeouts always go to manual approval (no auto-send, no scheduling)
-      const id = uuidv4();
-      await storePending(id, { channel, leadData, draft, source: 'outflo-negative' });
-      await sendApprovalEmail(id, leadData, draft, 'linkedin');
+      pendingId = uuidv4();
+      await storePending(pendingId, { channel, leadData, draft, source: 'outflo-negative' });
+      await sendApprovalEmail(pendingId, leadData, draft, 'linkedin');
     } else {
-      await enqueueReply({
+      pendingId = await enqueueReply({
         channel,
         leadData,
         draft,
@@ -7030,6 +7339,8 @@ app.post('/webhook/outflo', async (req, res) => {
         source: 'outflo-webhook'
       });
     }
+    // One live draft per lead: an older unapproved draft for this lead is dropped.
+    await supersedeOlderPending(leadProfileUrl, pendingId);
 
     console.log(`[${senderLabel}] Approval email sent for ${leadFullName}`);
 
@@ -7046,7 +7357,7 @@ app.post('/webhook/outflo', async (req, res) => {
   } catch (err) {
     console.error('[WEBHOOK] Error:', err.message);
   }
-});
+}
 
 // ─── REPLY-TO-OFFER-EMAIL WEBHOOK (#14) ───────────────────────────────────────
 // Fed by Make.com / Zapier scenario that watches Žan's Gmail for replies on
