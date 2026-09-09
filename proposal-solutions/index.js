@@ -18,7 +18,7 @@ const { researchCompany, looksSensitive } = require('./research');
 const { validateSlots } = require('./validate');
 
 const CALENDLY_URL = process.env.CALENDLY_AI_15MIN || 'https://calendly.com/aiera-koledar/aiera-ai';
-const MAX_ATTEMPTS = Number(process.env.OFFER_SLOT_ATTEMPTS || 2);
+const MAX_ATTEMPTS = Number(process.env.OFFER_SLOT_ATTEMPTS || 3);
 
 function slugifyCompany(company) {
   return (company || 'ponudba')

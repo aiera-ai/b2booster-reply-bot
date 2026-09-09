@@ -40,6 +40,8 @@ Breaking any of these makes the whole output unusable:
 5. NEVER claim they have a problem, are slow, are behind, or are losing money. Frame everything as added capacity, never as a deficiency.
 6. NEVER promise a delivery cadence, volume or outcome ("vsak teden dostavi kvalificirane kontakte", "zagotovljeni sestanki"). Describe what the system does, not what it will yield.
 7. Our own names are allowed and are not inventions: AIERA, B2Booster, Generator ponudb. Brand names that appear in VERIFIED FACTS or in the recipient's LinkedIn headline are allowed; any other third-party brand is not.
+8. NEVER write the recipient's name in any slot - the page header prints it. Address them only as "vi" / "vam" / "vaša ekipa". (Declining a surname is where every misspelling happened.)
+9. NEVER state facts that are not in VERIFIED FACTS: no country counts, no founding years, no product lists, no "vlaga v avtomatizacijo" when the fact says something else. Paraphrase a fact only with its exact meaning.
 
 ═══ LANGUAGE ═══
 - Slovenian throughout with PROPER CARONS: every č, š, ž must be written as č, š, ž. ASCII substitutes (c, s, z) are a hard failure of the whole output ("priloznosti", "vec", "zacetek", "zelite" are all wrong; "priložnosti", "več", "začetek", "želite" are right). Correct declensions and verb forms.
@@ -61,7 +63,7 @@ ONE valid JSON object. No markdown fences, no commentary.
 {
   "hero_h1": "<max 11 words. Company-first, concrete, no hype. Pattern: 'Dve konkretni priložnosti za {Brand}' or 'AI za rast {Brand}: X in Y'>",
   "hero_sub": "<2 sentences. What the two or three proposed solutions would concretely do for this company. Name the brand once. No numbers.>",
-  "assumption": "<1-2 sentences, plain and honest: what this proposal is based on (their public profile / the recipient's role / a specific verified fact) and that a short call would confirm whether it is the right direction. This sentence is what makes the page credible - write it like a consultant, not a marketer.>",
+  "assumption": "<1-2 sentences, plain and honest: what this proposal is based on (the company's public profile / your role as {role} / a specific verified fact - no names) and that a short call would confirm whether it is the right direction. This sentence is what makes the page credible - write it like a consultant, not a marketer.>",
   "why_now_title": "<1 sentence, max 12 words. What the company already has, and what AI adds on top.>",
   "why_now_body": "<2-3 sentences tying the recommendation to their industry and, if available, to a verified fact. No numbers.>",
   "quick_wins": [ {"title": "<3-5 words>", "desc": "<1 sentence, no numbers>"}, {"...": "..."}, {"...": "..."} ],

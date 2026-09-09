@@ -53,7 +53,7 @@ function allowedToken(tok, allowedStems) {
 // Proper nouns that are legitimately allowed to appear in offer copy.
 const ALLOWED_PROPER = [
   // ours
-  'AIERA', 'Zan', 'Bagaric', 'B2Booster', 'Booster',
+  'AIERA', 'Zan', 'Bagaric', 'B2Booster', 'Booster', 'Vesna', 'Pevec', 'Generator', 'Ponudb',
   // references
   'Munchies', 'Valtheron', 'RedEyeMonkey',
   // tech
@@ -322,9 +322,12 @@ Return ONE JSON object, no fences. Your ENTIRE response must be that object: the
 }
 
 Rules for the verdict:
-- Any nonsensical sentence, any invented person, any unsourced number: "fail".
-- Pure typos and declension slips you can fix yourself: "pass", with the fix applied in "corrected".
-- When in doubt, "fail". A missing offer page costs nothing. A bad one costs the deal.`;
+- "fail" ONLY for: a sentence a native speaker cannot make sense of, an invented person, an invented brand or product, an unsourced number, a fact that contradicts or exceeds the verified context, or the wrong language.
+- Everything mechanical you can fix yourself ("ta sporočilo" -> "to sporočilo", a wrong case ending, a typo, brand casing, a missing caron, an awkward but understandable phrase you can smooth): "pass", with the fix applied in "corrected". A fixable slip is never a reason to fail the whole page.
+- Spaced hyphens " - " are the intended house style. Never flag them.
+- "Generator ponudb" and "AI generator ponudb" both refer to our own product. Never flag either.
+- Do not comment on things that are correct ("ni napake") - list only real problems.
+- When a sentence is truly nonsense or invented, "fail". A missing offer page costs nothing. A bad one costs the deal.`;
 
 // The reviewer model sometimes prefixes its JSON with prose ("I'll work through
 // this copy..."). JSON.parse on the raw text then threw and EVERY page failed the
