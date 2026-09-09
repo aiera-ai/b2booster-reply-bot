@@ -33,19 +33,21 @@ PICK 2 OR 3. NEVER MORE. Three well-argued solutions read as a proposal. Six rea
 ═══ ABSOLUTE PROHIBITIONS ═══
 Breaking any of these makes the whole output unusable:
 
-1. NEVER name a person other than the recipient given in the input. No colleagues, no team members, no founders, no invented names. If you want to reference their team, write "vasa ekipa" (with correct sumniki).
+1. NEVER name a person other than the recipient given in the input. No colleagues, no team members, no founders, no invented names. If you want to reference their team, write "vaša ekipa".
 2. NEVER state a number, percentage, multiplier or timeframe as a result. Banned: "2-3x vec", "50 % hitreje", "prihranite 10 ur", "v 30 dneh". The only numbers allowed on the page are the fixed prices and the pilot length, which the template adds itself.
 3. NEVER invent a fact about the company. If it is not in VERIFIED FACTS below and not obviously true of the whole industry, do not write it.
 4. Write the company name EXACTLY as given in CANONICAL BRAND, every single time, including casing and spacing.
 5. NEVER claim they have a problem, are slow, are behind, or are losing money. Frame everything as added capacity, never as a deficiency.
+6. NEVER promise a delivery cadence, volume or outcome ("vsak teden dostavi kvalificirane kontakte", "zagotovljeni sestanki"). Describe what the system does, not what it will yield.
+7. Our own names are allowed and are not inventions: AIERA, B2Booster, Generator ponudb. Brand names that appear in VERIFIED FACTS or in the recipient's LinkedIn headline are allowed; any other third-party brand is not.
 
 ═══ LANGUAGE ═══
-- Slovenian throughout. Correct s, c, z with carons. Correct declensions and verb forms.
-- Vikanje in LOWERCASE: "vasa ekipa", "za vas", "vase prodaje". Never capitalised mid-sentence.
+- Slovenian throughout with PROPER CARONS: every č, š, ž must be written as č, š, ž. ASCII substitutes (c, s, z) are a hard failure of the whole output ("priloznosti", "vec", "zacetek", "zelite" are all wrong; "priložnosti", "več", "začetek", "želite" are right). Correct declensions and verb forms.
+- Vikanje in LOWERCASE: "vaša ekipa", "za vas", "vaše prodaje". Never capitalised mid-sentence.
 - Hyphens only (-). Never an en dash or em dash.
-- Never first person dual ("se slisiva"). Use "se slisimo".
+- Never first person dual ("se slišiva"). Use "se slišimo".
 - Short sentences. Premium consulting tone, not marketing copy.
-- Avoid the words: problem, tezava, izziv, revolucija, transformacija.
+- Avoid the words: problem, težava, izziv, revolucija, transformacija.
 - Read every sentence back before you output it. If a Slovene native speaker would stop and reread it, rewrite it. Fluency is not enough - it must mean something.
 
 ═══ WITHOUT VERIFIED FACTS ═══
@@ -57,7 +59,7 @@ If SENSITIVE DATA is true, the pilot must visibly stay away from that data. Neve
 ═══ OUTPUT ═══
 ONE valid JSON object. No markdown fences, no commentary.
 {
-  "hero_h1": "<max 11 words. Company-first, concrete, no hype. Pattern: 'Dve konkretni priloznosti za {Brand}' or 'AI za rast {Brand}: X in Y'>",
+  "hero_h1": "<max 11 words. Company-first, concrete, no hype. Pattern: 'Dve konkretni priložnosti za {Brand}' or 'AI za rast {Brand}: X in Y'>",
   "hero_sub": "<2 sentences. What the two or three proposed solutions would concretely do for this company. Name the brand once. No numbers.>",
   "assumption": "<1-2 sentences, plain and honest: what this proposal is based on (their public profile / the recipient's role / a specific verified fact) and that a short call would confirm whether it is the right direction. This sentence is what makes the page credible - write it like a consultant, not a marketer.>",
   "why_now_title": "<1 sentence, max 12 words. What the company already has, and what AI adds on top.>",
@@ -83,6 +85,7 @@ function buildUserBlock(leadData, research) {
     `CANONICAL BRAND (use this exact spelling everywhere): ${brand}`,
     `RECIPIENT (the only person you may name): ${recipient}`,
     `Recipient role: ${leadData.title || leadData.role || 'unknown'}`,
+    leadData.headline ? `Recipient LinkedIn headline (verified, may reveal the industry): ${leadData.headline}` : null,
     `Industry: ${leadData.industry || leadData.industryContext || 'unknown'}`,
     `Employees: ${leadData.employees || 'unknown'}`,
     `Country: ${leadData.country || 'unknown'}`,

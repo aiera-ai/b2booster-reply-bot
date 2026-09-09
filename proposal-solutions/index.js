@@ -64,6 +64,7 @@ async function buildSolutionsHTML(leadData) {
     firstName: leadData.firstName,
     lastName: leadData.lastName,
     title: leadData.title || leadData.role,
+    headline: leadData.headline || '',
     industry: leadData.industry || leadData.industryContext,
     sensitive,
     facts: (research && research.facts) || [],

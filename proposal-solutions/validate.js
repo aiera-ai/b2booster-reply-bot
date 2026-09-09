@@ -156,6 +156,44 @@ function mapStrings(slots, fn) {
   return s;
 }
 
+// Deterministic caron restoration for the stripped forms STRIPPED_WORDS rejects.
+// The writer model kept producing "priloznosti" / "vec" / "zelite" (9.9.2026: three
+// leads in a row failed attempt 1 on nothing else). Every entry here has exactly
+// one correct Slovenian form, so restoring it cannot damage good copy. Case of
+// the first letter is preserved ("Uspesna" -> "Uspešna").
+const CARON_FIXES = [
+  [/\bvec\b/gi, 'več'], [/\bvecj(i|a|e|o|ih|im|ega)\b/gi, 'večj$1'], [/\bvecin(a|e|o|i)\b/gi, 'večin$1'],
+  [/\bnajvecj(i|a|e|o|ih|im|ega)\b/gi, 'največj$1'], [/\bstiri(h)?\b/gi, 'štiri$1'], [/\bsest(ih)?\b/gi, 'šest$1'],
+  [/\bsirit(ev|ve|vi|vijo)\b/gi, 'širit$1'], [/\bsirjenj(e|a|u)\b/gi, 'širjenj$1'], [/\bsirimo\b/gi, 'širimo'], [/\brazsirit(\w*)/gi, 'razširit$1'],
+  [/\bpospesen(\w*)/gi, 'pospešen$1'], [/\bstratesk(\w*)/gi, 'stratešk$1'],
+  [/\bresit(ev|ve|vi|vijo|vah|vam|vami)\b/gi, 'rešit$1'], [/\bresujemo\b/gi, 'rešujemo'],
+  [/\bnas(a|e|i|ih|em|ega|emu|imi|o)\b/gi, 'naš$1'], [/\bvas(a|e|i|ih|em|ega|emu|imi|o)\b/gi, 'vaš$1'],
+  [/\bzel(i|im|ite|imo|ijo|ja|je|jo)\b/gi, 'žel$1'], [/\bzdruzit(\w*)/gi, 'združit$1'], [/\bzdruzen(\w*)/gi, 'združen$1'],
+  [/\bpovprasevanj(\w*)/gi, 'povpraševanj$1'], [/\bnarocil(\w*)/gi, 'naročil$1'], [/\bobcutljiv(\w*)/gi, 'občutljiv$1'],
+  [/\bdolocit(\w*)/gi, 'določit$1'], [/\bdolocimo\b/gi, 'določimo'],
+  [/\bkrajs(i|a|e|o|ih|im)\b/gi, 'krajš$1'], [/\bhitrejs(i|a|e|o|ih|im)\b/gi, 'hitrejš$1'], [/\bkljucn(\w*)/gi, 'ključn$1'],
+  [/\bdrzav(\w*)/gi, 'držav$1'], [/\btezav(\w*)/gi, 'težav$1'], [/\bucin(ek|k\w*)\b/gi, 'učin$1'], [/\bmesecn(\w*)/gi, 'mesečn$1'],
+  [/\bpriloznost(\w*)/gi, 'priložnost$1'], [/\bmoznost(\w*)/gi, 'možnost$1'], [/\bzacet(ek|k\w*)\b/gi, 'začet$1'], [/\bzacnemo\b/gi, 'začnemo'],
+  [/\bcas(u|a)\b/gi, 'čas$1'], [/\bstevil(\w*)/gi, 'števil$1'], [/\bdruzb(\w*)/gi, 'družb$1'], [/\buspesn(\w*)/gi, 'uspešn$1'], [/\bceprav\b/gi, 'čeprav'],
+  [/\bze\b/gi, 'že'], [/\bce\b/gi, 'če'], [/\bpriporoc(amo|a|ate|am|ila|ilo|ljivo)\b/gi, 'priporoč$1'], [/\bdosec(i|ete|emo)\b/gi, 'doseč$1'],
+  [/\bpomoc(\w*)/gi, 'pomoč$1'], [/\bpodrocj(\w*)/gi, 'področj$1'], [/\bizkusnj(\w*)/gi, 'izkušnj$1'], [/\bposiljanj(\w*)/gi, 'pošiljanj$1'],
+  [/\bposlj(ite|emo|em|e)\b/gi, 'pošlj$1'], [/\bsporocil(\w*)/gi, 'sporočil$1'], [/\bvkljucn(\w*)/gi, 'vključn$1'], [/\bvkljucuje(\w*)/gi, 'vključuje$1'],
+  [/\bracun(\w*)/gi, 'račun$1'], [/\bnacin(\w*)/gi, 'način$1'], [/\bhitrostjo\b/gi, 'hitrostjo'],
+];
+function restoreCarons(text) {
+  let t = String(text || '');
+  for (const [re, rep] of CARON_FIXES) {
+    t = t.replace(re, (m, ...rest) => {
+      if (m.length > 2 && m === m.toUpperCase()) return m; // acronyms (NASA) are not Slovene words
+      const groups = rest.slice(0, -2);
+      let out = rep.replace(/\$(\d)/g, (_, i) => groups[Number(i) - 1] || '');
+      if (m.charAt(0) === m.charAt(0).toUpperCase()) out = out.charAt(0).toUpperCase() + out.slice(1);
+      return out;
+    });
+  }
+  return t;
+}
+
 // ── Layer 1a: mechanical auto-fixes ─────────────────────────────────────────
 function autoFix(slots, canonicalBrand) {
   const brandVariants = [];
@@ -171,6 +209,8 @@ function autoFix(slots, canonicalBrand) {
 
   return mapStrings(slots, txt => {
     let t = txt;
+    // stripped carons -> proper Slovenian (only unambiguous forms, see CARON_FIXES)
+    t = restoreCarons(t);
     // dashes -> hyphen
     t = t.replace(/\s*[–—]\s*/g, ' - ');
     // capitalised vikanje mid-sentence -> lowercase (consistency; also stops the
@@ -207,6 +247,10 @@ function deterministicCheck(slots, ctx) {
   addTokens(ctx.lastName);
   addTokens(ctx.title);
   addTokens(ctx.industry);
+  // The recipient's LinkedIn headline is verified profile data ("CEO @ Prima IP
+  // d.o.o. | Entrepreneurship, Printing") - brands and sectors named there are
+  // not inventions.
+  addTokens(ctx.headline);
   // Proper nouns that appear inside a CITED fact are allowed - they came with a
   // URL, so they are not inventions. This is the whole point of the research step.
   (ctx.facts || []).forEach(f => addTokens(f && f.claim));
@@ -266,7 +310,7 @@ You will receive a JSON object of copy slots plus the verified context they were
 Check every single sentence for:
 1. MEANING. Does the sentence actually say something coherent? AI-generated Slovenian often reads fluently but is nonsense ("AI kvalificira nevroze povprasevanja", "brez da bi se zamenjali v papirjih"). This is the most important check. A sentence that a native speaker has to reread is a FAIL.
 2. GRAMMAR. Declensions, verb agreement, word order, carons (s, c, z with diacritics), typos in the brand name.
-3. INVENTED CONTENT. Any person, place, product, number, date or claim that is not in the verified context. Any name other than the recipient is an automatic FAIL.
+3. INVENTED CONTENT. Any person, place, product, number, date or claim that is not in the verified context. Any PERSON other than the recipient is an automatic FAIL. Our own names are never inventions: AIERA, B2Booster, Generator ponudb, Žan Bagarič, Vesna Pevec. Brands, products and sectors that appear in the verified facts or in the recipient's LinkedIn headline are allowed (the headline is verified profile data, so "printing" for a CEO whose headline says "Printing" is fine).
 4. TONE. Consistent vikanje in lowercase. No hype. No implied criticism of the company. Hyphens, never dashes.
 5. CONSISTENCY. Same language throughout (Slovenian only). Brand spelled identically everywhere.
 
@@ -305,7 +349,9 @@ async function llmProofread(slots, ctx) {
     `Canonical brand: ${ctx.canonicalBrand}`,
     `Recipient (the only person who may be named): ${[ctx.firstName, ctx.lastName].filter(Boolean).join(' ') || 'unknown'}`,
     `Recipient role: ${ctx.title || 'unknown'}`,
+    `Recipient LinkedIn headline (verified): ${ctx.headline || 'unknown'}`,
     `Industry: ${ctx.industry || 'unknown'}`,
+    'Our own names (allowed): AIERA, B2Booster, Generator ponudb, Žan Bagarič, Vesna Pevec',
     `Regulated personal data: ${ctx.sensitive ? 'yes' : 'no'}`,
     'Verified facts available to the writer:',
     (ctx.facts || []).length ? ctx.facts.map(f => `- ${f.claim}`).join('\n') : '(none)',
